@@ -1,0 +1,63 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Downloaded/cached market reference and historical data (real, large,
+# regenerable via scripts/fetch_upstox_historical.py and
+# app/data/providers/upstox_instrument_master.py's cache) -- never committed.
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary
+tmp/
+temp/
+
+# Claude / AI local files
+.claude/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Local UAT and debug artifacts
+.scratch_uat/
+_tmp_debug_daily/

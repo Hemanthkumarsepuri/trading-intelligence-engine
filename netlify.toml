@@ -1,0 +1,18 @@
+[build]
+  # No build step -- app/api/static/index.html is a single plain
+  # HTML+CSS+JS file with no bundler/framework (no package.json in this
+  # repo). This just publishes it as-is.
+  command = "echo 'static site, no build step required'"
+  publish = "app/api/static"
+
+# The FastAPI backend (Upstox integration, live analysis, live checkpoint
+# capture, JSONL persistence) is NOT deployed here and is not affected by
+# this file in any way -- it keeps running wherever it already runs.
+# Netlify only serves the static dashboard file.
+#
+# To point this deployed frontend at that backend, edit the single
+# `<meta name="api-base" content="...">` tag in index.html to the
+# backend's real HTTPS origin (e.g. "https://your-backend.example.com")
+# and republish -- no rebuild tooling, no secrets, nothing else changes.
+# Never put UPSTOX_ACCESS_TOKEN or any credential in this repo's frontend
+# files or in Netlify's site configuration for this site.

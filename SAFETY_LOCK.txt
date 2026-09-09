@@ -1,0 +1,14 @@
+﻿PHASE 1 SAFETY LOCK
+
+Broker order execution is intentionally disabled.
+
+DO NOT add order placement code until:
+- deterministic engines are validated
+- historical replay works
+- paper trading works
+- risk controls are independently tested
+- signal accuracy is evaluated
+- failure modes are documented
+- explicit human confirmation exists
+
+LLM MUST NEVER have order execution authority.

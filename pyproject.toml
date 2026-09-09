@@ -1,0 +1,78 @@
+[project]
+name = "trading-intelligence-engine"
+version = "0.1.0"
+description = "NSE equity and F&O research and risk decision-support engine"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "httpx",
+    "pandas",
+    "numpy",
+    "sqlalchemy",
+    "asyncpg",
+    "redis",
+    "apscheduler",
+    "python-dotenv",
+    "protobuf>=7.35.1",
+    "websockets>=13.0",
+    # Sprint 8, Objective P0 -- pure-Python PDF text extraction for the
+    # RHP/DRHP intelligence pipeline (free, open-source, MIT licensed, no
+    # billing of any kind). See app/data/providers/rhp_fetcher.py.
+    "pypdf>=5.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+    # Only needed to regenerate app/data/providers/upstox_market_data_feed_pb2.py
+    # from upstox_market_data_feed.proto if Upstox revises the schema -- not
+    # imported by any runtime code.
+    "grpcio-tools"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+# `*_pb2.py`/`*_pb2.pyi` files are protoc-generated (from
+# app/data/providers/upstox_market_data_feed.proto) — "DO NOT EDIT" per their
+# own header, so they are never hand-fixed to satisfy lint rules.
+extend-exclude = ["*_pb2.py", "*_pb2.pyi"]
+
+[tool.ruff.lint]
+ignore = [
+    # Deliberately not adopted: this codebase always constructs Decimal from
+    # a string literal (`Decimal("100")`, not `Decimal(100)`), even for
+    # integer-valued amounts, as a consistent, defensive convention for a
+    # financial system — it keeps every money/price/quantity literal in one
+    # form regardless of whether a later edit changes it from "100" to
+    # "100.05", rather than mixing bare-int and string constructors depending
+    # on the current value. See docs/architecture/ARCHITECTURE.md.
+    "FURB157",
+]
+
+[[tool.mypy.overrides]]
+# Generated protobuf code (see the ruff `extend-exclude` note above) — typed
+# via its own `.pyi` stub where protoc emits one; not held to this project's
+# strict application code standard.
+module = "app.data.providers.upstox_market_data_feed_pb2"
+ignore_errors = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# Required for mypy to correctly understand pydantic v2 models: without it,
+# mypy synthesizes each BaseModel's __init__ using only the `alias=` name for
+# any aliased field, ignoring `populate_by_name=True` (a runtime-only config
+# it can't see otherwise) and rejecting valid by-field-name construction as
+# an "Unexpected keyword argument". Found while adding the safety-lock test
+# in tests/safety/test_broker_execution_lock.py (architecture gate review).
+plugins = ["pydantic.mypy"]
