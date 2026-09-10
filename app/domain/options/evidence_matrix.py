@@ -383,7 +383,7 @@ def row_pcr_change(
     if previous_pcr is None or current_pcr is None:
         return EvidenceRow(
             "PCR change", EvidenceGroup.OPTIONS_OI, EvidenceDirection.UNKNOWN,
-            "no real prior option-chain snapshot available yet to compare PCR against",
+            "INSUFFICIENT_HISTORY -- no real prior option-chain snapshot available yet to compare PCR against",
         )
     pcr_change = current_pcr - previous_pcr
     if abs(pcr_change) < meaningful_pcr_change:

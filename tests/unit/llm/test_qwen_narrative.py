@@ -14,6 +14,7 @@ from app.llm.qwen_narrative import (
 
 def test_validate_rejects_prohibited_fields() -> None:
     assert validate_qwen_payload({"summary": "ok", "buy": "yes"}) == "prohibited field(s): buy"
+    assert validate_qwen_payload({"summary": "ok", "hold": "yes"}) == "prohibited field(s): hold"
     assert validate_qwen_payload({"summary": "ok", "probability": 0.8}) == "prohibited field(s): probability"
     assert validate_qwen_payload({"key_observations": []}) == "missing summary"
 
@@ -30,6 +31,23 @@ def test_parse_accepts_fenced_json() -> None:
     assert parsed.summary == "hello"
     assert parsed.key_observations == ("a",)
     assert parsed.source_evidence_ids == ("e1",)
+
+
+def test_validate_rejects_stop_loss_and_unsupported_claim() -> None:
+    assert validate_qwen_payload({"summary": "ok", "stop_loss": "100"}) == "prohibited field(s): stop_loss"
+    assert validate_qwen_payload({"summary": "Buy now this CE"}) == "unsupported claim"
+
+
+def test_parse_accepts_green_schema_keys() -> None:
+    content = '{"summary": "ok", "developing_observation": "compression", "supporting_evidence": ["E1"], "conflicting_evidence": [], "missing_evidence": ["chain"], "confirmation_condition": "hold", "invalidation_condition": "fail", "data_quality_note": "chain is HTTP receipt time"}'
+    t = datetime(2026, 9, 9, tzinfo=UTC)
+    parsed = parse_qwen_explanation(
+        content=content, model="qwen2.5-coder-7b-instruct", endpoint="http://127.0.0.1:1234/v1/chat/completions",
+        requested_at=t, responded_at=t, latency_ms=12, source_evidence_ids=("E1",),
+    )
+    assert parsed.developing_observation == "compression"
+    assert parsed.supporting_evidence == ("E1",)
+    assert parsed.confirmation_condition == "hold"
 
 
 @pytest.mark.asyncio

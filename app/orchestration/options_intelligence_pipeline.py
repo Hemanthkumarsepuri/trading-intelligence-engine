@@ -120,6 +120,11 @@ from app.domain.options.freshness_label import (
     stream_freshness,
 )
 from app.domain.options.global_context import assess_global_context
+from app.domain.options.historical_structure import (
+    HistoricalStructureStatus,
+    assess_historical_structure,
+    spot_near_levels,
+)
 from app.domain.options.iv_context import atm_iv_summary, classify_iv_trend, compute_iv_rank
 from app.domain.options.liquidity import LiquidityGrade, assess_liquidity
 from app.domain.options.market_regime import classify_market_regime
@@ -447,6 +452,9 @@ async def analyze_symbol(
         symbol=symbol, underlying_instrument_key=ref.instrument_key, generated_at=as_of, data_state=data_state,
         data_age_seconds=data_age.total_seconds(), spot=quote.last_price, candles=candles,
         candles_are_current=candles_are_current,
+        historical_structure=assess_historical_structure(
+            candles, instrument_id=ref.instrument_key, timeframe=Timeframe.M15, as_of=as_of, spot=quote.last_price,
+        ),
     )
     if quote.previous_close is not None:
         report.day_change = quote.last_price - quote.previous_close
@@ -1106,6 +1114,16 @@ async def analyze_symbol(
             if r.name == name:
                 return r.direction
         return EvidenceDirection.UNKNOWN
+    hist = report.historical_structure
+    pre_breakout = False
+    if hist is not None and hist.status == HistoricalStructureStatus.OK and hist.multi_day_compression:
+        near_structure = hist.near_lookback_extreme or spot_near_levels(
+            quote.last_price,
+            supports=[lv.strike for lv in report.support_levels],
+            resistances=[lv.strike for lv in report.resistance_levels],
+            max_pct=config.near_level_pct_threshold,
+        )
+        pre_breakout = near_structure
     report.development = classify_development(
         convergence=matrix.overall_convergence(),
         chain_is_current=chain_is_current,
@@ -1117,6 +1135,7 @@ async def analyze_symbol(
         rs_direction=_row_dir("Relative strength"),
         m15_direction=_row_dir("M15 trend"),
         basis_change=report.futures_basis_change,
+        pre_breakout_compression=pre_breakout,
         sector_rs_tier=(
             report.sector_relative_strength.tier.value if report.sector_relative_strength is not None else None
         ),
@@ -1232,6 +1251,10 @@ async def analyze_symbol(
     report.blockers = determine_blockers(
         decision=report.decision, candles_are_current=candles_are_current, chain_is_current=chain_is_current,
         quote_is_current=quote_is_current, day_change_pct=report.day_change_pct, development=report.development,
+        historical_insufficient=(
+            report.historical_structure is not None
+            and report.historical_structure.status == HistoricalStructureStatus.INSUFFICIENT_HISTORY
+        ),
     )
     _measure("decision", t)
 

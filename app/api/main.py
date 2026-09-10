@@ -15,6 +15,7 @@ which is itself read-only. See SAFETY_LOCK.txt.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -29,6 +30,7 @@ from fastapi.responses import FileResponse
 
 from app.api.schemas import (
     AnalyzeRequest,
+    ExplainRequest,
     FollowupRequest,
     IPOAnalyzeRequest,
     IPOCompareRequest,
@@ -94,6 +96,7 @@ from app.orchestration.query_context import (
     resolve_ipo_followup,
     resolve_options_followup,
 )
+from app.orchestration.research_jobs import ResearchJob, ResearchJobRegistry
 from app.orchestration.research_outcome import (
     ResearchHistoryView,
     ResearchOutcomeDetailView,
@@ -148,6 +151,7 @@ async def real_lifespan(app: FastAPI) -> AsyncIterator[None]:
         base_url=settings.qwen_base_url,
         model=settings.qwen_model,
         timeout_seconds=settings.qwen_timeout_seconds,
+        health_timeout_seconds=settings.qwen_health_timeout_seconds,
         enabled=settings.qwen_enabled,
     )
     app.state.strategy = EMAVWAPAlignmentStrategy()
@@ -224,6 +228,57 @@ LifespanFactory = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
     app = FastAPI(title="Options Intelligence Terminal", lifespan=lifespan)
+    app.state.research_jobs = ResearchJobRegistry()
+
+    async def _discover_job_runner(job: ResearchJob) -> dict[str, object]:
+        provider: UpstoxProvider | None = getattr(app.state, "provider", None)
+        instrument_master: Sequence[dict[str, object]] | None = getattr(app.state, "instrument_master", None)
+        if provider is None or instrument_master is None:
+            raise RuntimeError("UPSTOX_ACCESS_TOKEN is not configured")
+
+        async def on_progress(payload: dict[str, object]) -> None:
+            job.stage = str(payload.get("stage") or job.stage)
+            processed = payload.get("processed")
+            if isinstance(processed, int):
+                job.processed = processed
+            total = payload.get("total")
+            if isinstance(total, int):
+                job.total = total
+            message = payload.get("message")
+            if isinstance(message, str) and message:
+                job.message = message
+            hits = payload.get("cache_hits")
+            if isinstance(hits, int):
+                job.cache_hits = hits
+            misses = payload.get("cache_misses")
+            if isinstance(misses, int):
+                job.cache_misses = misses
+
+        async def _run_on_worker_loop() -> dict[str, object]:
+            requested = list(job.symbols) if job.symbols is not None else None
+            async with httpx.AsyncClient() as client:
+                worker_provider = UpstoxProvider(client=client, access_token=settings.upstox_access_token or "")
+                result = await run_daily_research(
+                    requested, provider=worker_provider, instrument_master=instrument_master,
+                    mcx_instrument_master=getattr(app.state, "mcx_instrument_master", None),
+                    sector_map=getattr(app.state, "sector_map", None),
+                    strategy=app.state.strategy, repositories=app.state.repositories, config=app.state.config,
+                    as_of=utc_now(), journal=getattr(app.state, "journal", None),
+                    research_journal=getattr(app.state, "research_journal", None),
+                    outcome_repository=getattr(app.state, "outcome_repository", None),
+                    nifty50_symbols=getattr(app.state, "nifty50_symbols", None),
+                    http_client=client,
+                    delivery_cache_dir=getattr(app.state, "delivery_cache_dir", None),
+                    on_progress=on_progress,
+                )
+            return dict(build_daily_research_view(result).model_dump(mode="json"))
+
+        def _blocking() -> dict[str, object]:
+            return asyncio.run(_run_on_worker_loop())
+
+        loop = asyncio.get_running_loop()
+        registry: ResearchJobRegistry = app.state.research_jobs
+        return await loop.run_in_executor(registry.executor, _blocking)
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -257,6 +312,7 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
                 base_url=settings.qwen_base_url,
                 model=settings.qwen_model,
                 timeout_seconds=settings.qwen_timeout_seconds,
+                health_timeout_seconds=settings.qwen_health_timeout_seconds,
                 enabled=settings.qwen_enabled,
             )
         client: httpx.AsyncClient | None = getattr(app.state, "http_client", None)
@@ -280,6 +336,58 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
             "summary": explanation.summary if explanation is not None else None,
             "source_evidence_ids": list(explanation.source_evidence_ids) if explanation is not None else [],
         }
+
+    @app.post("/api/research/explain")
+    async def research_explain(body: ExplainRequest) -> dict[str, object]:
+        """Optional Qwen paraphrase of already-retrieved TIRE facts.
+
+        Fail-open. Never mutates research state. Never returns BUY/SELL,
+        confidence, probability, or target prices.
+        """
+        adapter: QwenNarrativeAdapter | None = getattr(app.state, "qwen", None)
+        if adapter is None:
+            adapter = QwenNarrativeAdapter(
+                base_url=settings.qwen_base_url,
+                model=settings.qwen_model,
+                timeout_seconds=settings.qwen_timeout_seconds,
+                health_timeout_seconds=settings.qwen_health_timeout_seconds,
+                enabled=settings.qwen_enabled,
+            )
+        client: httpx.AsyncClient | None = getattr(app.state, "http_client", None)
+        owns_client = client is None
+        if client is None:
+            client = httpx.AsyncClient()
+        try:
+            result = await adapter.explain(
+                client,
+                facts=body.facts,
+                source_evidence_ids=tuple(body.source_evidence_ids),
+            )
+        finally:
+            if owns_client:
+                await client.aclose()
+        explanation = result.explanation
+        payload: dict[str, object] = {
+            "ok": result.ok,
+            "status": result.status,
+            "detail": result.detail,
+            "fallback": "deterministic" if not result.ok else None,
+            "latency_ms": result.latency_ms,
+            "model": result.model,
+        }
+        if explanation is not None:
+            payload["explanation"] = {
+                "summary": explanation.summary,
+                "developing_observation": explanation.developing_observation,
+                "supporting_evidence": list(explanation.supporting_evidence),
+                "conflicting_evidence": list(explanation.conflicting_evidence),
+                "missing_evidence": list(explanation.missing_evidence),
+                "confirmation_condition": explanation.confirmation_condition,
+                "invalidation_condition": explanation.invalidation_condition,
+                "data_quality_note": explanation.data_quality_note,
+                "source_evidence_ids": list(explanation.source_evidence_ids),
+            }
+        return payload
 
     @app.post("/api/analyze", response_model=AnalyzeResponse)
     async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
@@ -694,6 +802,46 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
             delivery_cache_dir=getattr(app.state, "delivery_cache_dir", None),
         )
         return build_daily_research_view(result)
+
+    @app.get("/api/research/discover", response_model=DailyResearchView)
+    async def research_discover(symbols: str | None = None) -> DailyResearchView:
+        """Whole-market discovery alias of GET /api/research/daily.
+
+        Same two-stage researcher, same gates, same response shape -- added
+        so the product contract can say /discover without a second engine.
+        """
+        return await research_daily(symbols)
+
+    @app.post("/api/research/jobs/discover")
+    async def start_discover_job(symbols: str | None = None) -> dict[str, object]:
+        """Start discovery as a background job. Does not occupy the HTTP request."""
+        provider: UpstoxProvider | None = getattr(app.state, "provider", None)
+        instrument_master: Sequence[dict[str, object]] | None = getattr(app.state, "instrument_master", None)
+        if provider is None or instrument_master is None:
+            raise HTTPException(
+                status_code=503,
+                detail="UPSTOX_ACCESS_TOKEN is not configured -- see docs/data-sources/PROVIDER_DECISION.md",
+            )
+        requested = tuple(s.strip().upper() for s in symbols.split(",") if s.strip()) if symbols else None
+        registry: ResearchJobRegistry = app.state.research_jobs
+        job = await registry.start(symbols=requested, runner=_discover_job_runner)
+        return job.as_dict()
+
+    @app.get("/api/research/jobs/latest")
+    async def latest_discover_job() -> dict[str, object]:
+        registry: ResearchJobRegistry = app.state.research_jobs
+        job = registry.latest()
+        if job is None:
+            return {"status": "NONE", "message": "Ready to scan the market", "result": None}
+        return job.as_dict()
+
+    @app.get("/api/research/jobs/{job_id}")
+    async def get_discover_job(job_id: str) -> dict[str, object]:
+        registry: ResearchJobRegistry = app.state.research_jobs
+        job = registry.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown research job")
+        return job.as_dict()
 
     @app.get("/api/research/history", response_model=ResearchHistoryView)
     async def research_history(

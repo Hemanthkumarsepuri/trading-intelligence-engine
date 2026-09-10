@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     qwen_enabled: bool = Field(default=True, alias="QWEN_ENABLED")
     qwen_base_url: str = Field(default="http://127.0.0.1:1234/v1", alias="QWEN_BASE_URL")
     qwen_model: str = Field(default="qwen2.5-coder-7b-instruct", alias="QWEN_MODEL")
-    qwen_timeout_seconds: float = Field(default=45.0, alias="QWEN_TIMEOUT_SECONDS")
+    qwen_timeout_seconds: float = Field(default=8.0, alias="QWEN_TIMEOUT_SECONDS")
+    qwen_health_timeout_seconds: float = Field(default=2.0, alias="QWEN_HEALTH_TIMEOUT_SECONDS")
 
     # Market data — provider-agnostic abstraction (ARCHITECTURE.md Addendum
     # A1); Upstox is the selected primary for the read-only analysis engine

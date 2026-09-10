@@ -88,6 +88,11 @@ _NAMED_DEVELOPING_PATTERNS = frozenset({
     "FUTURES_STRUCTURE",
 })
 
+# No authoritative F&O-ban feed is wired. Never guess banned/not-banned.
+FNO_BAN_STATUS_UNKNOWN = "FNO_BAN_STATUS_UNKNOWN"
+
+UNIVERSE_SOURCE_UPSTOX_NSE_FO_EQUITY = "upstox_instrument_master.NSE_FO_equity_underlyings"
+
 
 @dataclass(frozen=True)
 class EarlyOpportunityAssessment:
@@ -104,6 +109,7 @@ def classify_move_context(
     day_change_pct: Decimal | None,
     structural_context: str | None = None,
     session_range_pct: Decimal | None = None,
+    atr_pct: Decimal | None = None,
 ) -> MoveContext:
     """Deterministic displacement context -- not a score.
 
@@ -113,6 +119,9 @@ def classify_move_context(
       `derive_research_state()` / Stage-1 exclusion. Kept, not deleted;
       it is necessary but not sufficient on its own, so later rules can
       still call a smaller expansion MATURE.
+    - When a real ATR% exists and |day-change| >= 2%: >= 2.5× ATR →
+      EXTENDED; >= 1.5× ATR without compression → MATURE. ATR is never
+      invented; missing ATR skips these rules.
     - Intraday range >= 5% without compression → MATURE. A stock can
       already be extended *inside* the day even if close-to-prior-close
       is still under 6%.
@@ -135,6 +144,11 @@ def classify_move_context(
     if magnitude >= Decimal("6"):
         return MoveContext.EXTENDED
     compressing = structural_context == "RANGE_COMPRESSION"
+    if atr_pct is not None and atr_pct > 0 and magnitude >= Decimal("2"):
+        if magnitude >= atr_pct * Decimal("2.5"):
+            return MoveContext.EXTENDED
+        if magnitude >= atr_pct * Decimal("1.5") and not compressing:
+            return MoveContext.MATURE
     if session_range_pct is not None and abs(session_range_pct) >= Decimal("5") and not compressing:
         return MoveContext.MATURE
     if magnitude >= Decimal("4") and not compressing:
@@ -214,6 +228,8 @@ def classify_research_bucket(
     fo_eligible: bool = True,
     day_change_pct: Decimal | None = None,
     structural_context: str | None = None,
+    session_range_pct: Decimal | None = None,
+    atr_pct: Decimal | None = None,
 ) -> EarlyOpportunityAssessment:
     """Deterministic precedence -- first match wins. Never a count of
     evidence groups, never a numeric threshold.
@@ -223,7 +239,10 @@ def classify_research_bucket(
     """
     state = research_state or "UNKNOWN"
     move_context = classify_move_context(
-        day_change_pct=day_change_pct, structural_context=structural_context,
+        day_change_pct=day_change_pct,
+        structural_context=structural_context,
+        session_range_pct=session_range_pct,
+        atr_pct=atr_pct,
     )
     timing = classify_timing_stage(
         research_state=state,

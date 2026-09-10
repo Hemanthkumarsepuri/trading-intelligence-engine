@@ -26,39 +26,38 @@ from app.utils.time import utc_now
 _PROHIBITED_KEYS = frozenset({
     "recommendation", "buy", "sell", "probability", "confidence",
     "expected_return", "target_price", "opportunity_score", "prediction",
-    "smart_money",
+    "smart_money", "smart_money_score", "stop_loss", "target", "position_size",
+    "direction", "hold",
 })
 
-_ALLOWED_KEYS = (
-    "summary",
-    "key_observations",
-    "supporting_facts",
-    "conflicting_facts",
-    "missing_information",
-    "questions_to_recheck",
+_CLAIM_RE = re.compile(
+    r"\b(buy now|sell now|go long|go short|target price|stop[\s-]?loss|"
+    r"\d{1,3}\s*%\s*(confidence|probability)|institutional buyers? are accumulating)\b",
+    re.IGNORECASE,
 )
 
-
 _SYSTEM_PROMPT = (
-    "You explain already-validated market-research facts. "
-    "Return JSON only with keys: summary, key_observations, supporting_facts, "
-    "conflicting_facts, missing_information, questions_to_recheck. "
-    "Each list value is an array of short strings copied or paraphrased from "
-    "the supplied facts. Do not invent prices, news, sectors, or evidence. "
-    "Do not include recommendation, buy, sell, probability, confidence, "
-    "expected_return, target_price, opportunity_score, prediction, or smart_money. "
-    "Do not say BUY or SELL."
+    "You explain already-validated market-research facts supplied as E1, E2, ... "
+    "Return JSON only with keys: summary, developing_observation, supporting_evidence, "
+    "conflicting_evidence, missing_evidence, confirmation_condition, invalidation_condition, "
+    "data_quality_note. Arrays are short strings that paraphrase supplied facts. "
+    "Cite evidence IDs when possible. Do not invent prices, news, sectors, or evidence. "
+    "Do not include recommendation, buy, sell, probability, confidence, expected_return, "
+    "target_price, stop_loss, opportunity_score, prediction, or smart_money. "
+    "Do not say BUY or SELL. Do not assign direction or position size."
 )
 
 
 @dataclass(frozen=True)
 class QwenExplanation:
     summary: str
-    key_observations: tuple[str, ...]
-    supporting_facts: tuple[str, ...]
-    conflicting_facts: tuple[str, ...]
-    missing_information: tuple[str, ...]
-    questions_to_recheck: tuple[str, ...]
+    developing_observation: str
+    supporting_evidence: tuple[str, ...]
+    conflicting_evidence: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    confirmation_condition: str
+    invalidation_condition: str
+    data_quality_note: str
     model: str
     endpoint: str
     requested_at: datetime
@@ -66,6 +65,31 @@ class QwenExplanation:
     latency_ms: int
     source_evidence_ids: tuple[str, ...]
     raw_response: str
+
+    @property
+    def key_observations(self) -> tuple[str, ...]:
+        return (self.developing_observation,) if self.developing_observation else ()
+
+    @property
+    def supporting_facts(self) -> tuple[str, ...]:
+        return self.supporting_evidence
+
+    @property
+    def conflicting_facts(self) -> tuple[str, ...]:
+        return self.conflicting_evidence
+
+    @property
+    def missing_information(self) -> tuple[str, ...]:
+        return self.missing_evidence
+
+    @property
+    def questions_to_recheck(self) -> tuple[str, ...]:
+        out: list[str] = []
+        if self.confirmation_condition:
+            out.append(self.confirmation_condition)
+        if self.invalidation_condition:
+            out.append(self.invalidation_condition)
+        return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -122,6 +146,16 @@ def _as_str_tuple(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _payload_text_blob(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for value in payload.values():
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, list):
+            parts.extend(str(item) for item in value if isinstance(item, str))
+    return " ".join(parts)
+
+
 def validate_qwen_payload(payload: dict[str, Any]) -> str | None:
     """Return a rejection reason, or None if the payload is displayable."""
     lowered = {str(k).strip().casefold() for k in payload}
@@ -130,6 +164,9 @@ def validate_qwen_payload(payload: dict[str, Any]) -> str | None:
         return f"prohibited field(s): {', '.join(sorted(banned))}"
     if "summary" not in payload or not str(payload.get("summary") or "").strip():
         return "missing summary"
+    blob = _payload_text_blob(payload)
+    if _CLAIM_RE.search(blob):
+        return "unsupported claim"
     return None
 
 
@@ -149,13 +186,30 @@ def parse_qwen_explanation(
     reason = validate_qwen_payload(payload)
     if reason is not None:
         raise ValueError(reason)
+    developing = str(payload.get("developing_observation") or "").strip()
+    if not developing:
+        observations = _as_str_tuple(payload.get("key_observations"))
+        developing = observations[0] if observations else ""
+    supporting = _as_str_tuple(payload.get("supporting_evidence") or payload.get("supporting_facts"))
+    conflicting = _as_str_tuple(payload.get("conflicting_evidence") or payload.get("conflicting_facts"))
+    missing = _as_str_tuple(payload.get("missing_evidence") or payload.get("missing_information"))
+    confirm = str(payload.get("confirmation_condition") or "").strip()
+    invalidate = str(payload.get("invalidation_condition") or "").strip()
+    if not confirm or not invalidate:
+        recheck = _as_str_tuple(payload.get("questions_to_recheck"))
+        if not confirm and recheck:
+            confirm = recheck[0]
+        if not invalidate and len(recheck) > 1:
+            invalidate = recheck[1]
     return QwenExplanation(
         summary=str(payload["summary"]).strip(),
-        key_observations=_as_str_tuple(payload.get("key_observations")),
-        supporting_facts=_as_str_tuple(payload.get("supporting_facts")),
-        conflicting_facts=_as_str_tuple(payload.get("conflicting_facts")),
-        missing_information=_as_str_tuple(payload.get("missing_information")),
-        questions_to_recheck=_as_str_tuple(payload.get("questions_to_recheck")),
+        developing_observation=developing,
+        supporting_evidence=supporting,
+        conflicting_evidence=conflicting,
+        missing_evidence=missing,
+        confirmation_condition=confirm,
+        invalidation_condition=invalidate,
+        data_quality_note=str(payload.get("data_quality_note") or "").strip(),
         model=model,
         endpoint=endpoint,
         requested_at=requested_at,
@@ -174,21 +228,50 @@ class QwenNarrativeAdapter:
         *,
         base_url: str = "http://127.0.0.1:1234/v1",
         model: str = "qwen2.5-coder-7b-instruct",
-        timeout_seconds: float = 45.0,
+        timeout_seconds: float = 8.0,
+        health_timeout_seconds: float = 2.0,
         enabled: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.health_timeout_seconds = health_timeout_seconds
         self.enabled = enabled
         self.endpoint = f"{self.base_url}/chat/completions"
+        self.models_endpoint = f"{self.base_url}/models"
 
     async def connectivity_probe(self, client: httpx.AsyncClient) -> QwenResult:
-        return await self.explain(
-            client,
-            facts={"instruction": "Return JSON with summary exactly QWEN_TIRE_CONNECTIVITY_OK and empty arrays for the other keys."},
-            source_evidence_ids=("connectivity_probe",),
-            user_prompt="Return JSON. summary must be exactly QWEN_TIRE_CONNECTIVITY_OK.",
+        """Cheap reachability check -- never a generation request."""
+        if not self.enabled:
+            return QwenResult(
+                ok=False, status="QWEN_NOT_CONFIGURED", explanation=None, detail="QWEN_ENABLED is false",
+                latency_ms=0, model=self.model, endpoint=self.models_endpoint,
+            )
+        started = time.perf_counter()
+        try:
+            response = await client.get(self.models_endpoint, timeout=self.health_timeout_seconds)
+        except httpx.TimeoutException:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            return QwenResult(
+                ok=False, status="QWEN_TIMEOUT", explanation=None, detail="Qwen health timed out",
+                latency_ms=latency_ms, model=self.model, endpoint=self.models_endpoint,
+            )
+        except httpx.HTTPError as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            return QwenResult(
+                ok=False, status="QWEN_UNAVAILABLE", explanation=None, detail=str(exc),
+                latency_ms=latency_ms, model=self.model, endpoint=self.models_endpoint,
+            )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if response.status_code < 200 or response.status_code >= 300:
+            return QwenResult(
+                ok=False, status="QWEN_UNAVAILABLE", explanation=None,
+                detail=f"HTTP {response.status_code}",
+                latency_ms=latency_ms, model=self.model, endpoint=self.models_endpoint,
+            )
+        return QwenResult(
+            ok=True, status="QWEN_READY", explanation=None, detail="models endpoint reachable",
+            latency_ms=latency_ms, model=self.model, endpoint=self.models_endpoint,
         )
 
     async def explain(

@@ -478,15 +478,16 @@ def test_dashboard_html_daily_research_section_is_wired() -> None:
     assert 'id="research-symbols"' in html
     assert 'id="research-btn"' in html
     assert "function runDailyResearch(" in html
-    assert "/api/research/daily" in html
-    assert "DEVELOPING SETUPS" in html
+    assert "/api/research/jobs/discover" in html
+    assert "Ready to scan the market" in html
+    assert "Explain simply" in html
     assert "DEVELOPING NOW" in html
-    assert "EVENTS TO MONITOR" in html
+    assert "EVENTS" in html
     assert "YOUR OPEN DECISIONS" in html
     assert "View Evidence" in html
     assert "function researchCardHeadlineState(" in html
     assert "Sector classification unavailable" in html or "o.sector_note" in html
-    assert "ZERO VALID DEVELOPING SETUPS" in html
+    assert "Nothing compelling is developing" in html
     assert "NO HIGH-CONVICTION STRUCTURAL SHORTLIST TODAY" in html
     assert "TOP OPPORTUNITIES" not in html
     assert "RESEARCH SUMMARY" in html
@@ -516,8 +517,11 @@ def test_dashboard_html_daily_research_section_is_wired() -> None:
     assert "NEAREST IMPORTANT LEVEL:" in html
     assert "EVENT RISK" in html
     assert "o.sector_note" in html  # the literal unavailable text is real backend data, not hardcoded in this file
-    assert "Rejected as already extended" in html
-    assert "Rejected -- insufficient early-stage evidence" in html
+    assert "Why interesting" in html
+    assert "Main blocker" in html
+    assert "Confirm when" in html
+    assert "Invalidated if" in html
+    assert "F&O ban list: unknown" in html
 
 
 def test_dashboard_html_input_and_followup_example_chips_are_wired() -> None:
@@ -552,7 +556,7 @@ def test_dashboard_html_netlify_readiness_api_base() -> None:
     # Sprint 5 -- +1 for RESEARCH HISTORY. Early-opportunity pass -- +1
     # for POST /api/journal/personal (LOAD builds apiUrl() into a local
     # `url` then fetch(url), so it does not increment this exact count).
-    assert html.count('fetch(apiUrl(') == 12
+    assert html.count('fetch(apiUrl(') == 15
 
 
 def test_dashboard_html_includes_the_sprint6_ce_pe_and_chart_sections() -> None:
@@ -612,3 +616,31 @@ def test_dashboard_html_followup_shows_an_explicit_resolved_query_label() -> Non
     followup_fn = html.split("async function runFollowup() {", 1)[1].split("\nfunction ", 1)[0]
     assert 'if (r.resolved_query) {' in followup_fn
     assert '"Resolved query"' in followup_fn
+
+
+def test_explain_simply_is_disabled_until_research_then_falls_back() -> None:
+    """GREEN-gate regression: Explain simply stays disabled on load, is
+    enabled after a successful renderDashboard, and Qwen unavailability
+    shows the deterministic TIRE summary instead of hanging."""
+    import app.api.main as main_module
+
+    html = (Path(main_module.__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="explain-simply-btn"' in html
+    assert 'data-explain-ready="0"' in html
+    assert "function enableExplainSimply(" in html
+    assert 'btn.setAttribute("data-explain-ready", "1")' in html
+    render = html.split("function renderDashboard(data) {", 1)[1].split("\nfunction ", 1)[0]
+    assert render.index("enableExplainSimply()") < render.index("renderUnderlyingSummary")
+    assert "requestAiExplain(data)" not in render
+    explain = html.split("async function requestAiExplain(data) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "AI explanation unavailable — showing TIRE's evidence summary." in explain
+    assert "In simple terms" in explain
+    assert "Why it matters" in explain
+    assert "What's missing" in explain
+    assert "What confirms it" in explain
+    assert "What invalidates it" in explain
+    markup, _, _script = html.partition("<script>")
+    assert markup.index('id="panel-ai-explain"') < markup.index('id="report"')
+    assert "futures.no_futures_reason" in html
+    assert "Futures: " in html
+    assert "Futures unavailable." not in html

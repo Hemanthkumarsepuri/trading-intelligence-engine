@@ -100,6 +100,13 @@ class IPOCompareRequest(BaseModel):
     queries: list[str] = Field(default_factory=list, max_length=20)
 
 
+class ExplainRequest(BaseModel):
+    """Structured TIRE facts only. Never used to decide BUY/SELL."""
+
+    facts: dict[str, object]
+    source_evidence_ids: list[str] = Field(default_factory=list)
+
+
 class PersonalJournalEntryRequest(BaseModel):
     """Operator-authored research note. Never an order. Emotion is never
     inferred -- `user_reasoning` must be supplied by the operator."""

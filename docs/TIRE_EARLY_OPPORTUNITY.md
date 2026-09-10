@@ -103,8 +103,9 @@ Universe remains **F&O-eligible equities**.
 | TIER_5 F&O restricted | Only if a real restriction flag is passed (none from Upstox today) |
 
 Stage 1 still cannot see OI/chain/news (honest). Stage 2 is the expensive
-path. Scan coverage fields unchanged (`symbols_requested` / successful /
-failed / duration).
+path. Scan coverage fields include universe source, F&O-ban unknown,
+survivor-cap truncation, and per-stage timings (`docs/TIRE_SPRINT2.md`).
+`GET /api/research/discover` is an alias of `/api/research/daily`.
 
 ---
 

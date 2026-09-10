@@ -255,3 +255,15 @@ def test_six_percent_day_change_still_extended() -> None:
     ctx = classify_move_context(day_change_pct=Decimal("6.0"))
     assert ctx == MoveContext.EXTENDED
 
+
+def test_atr_multiple_marks_extended_below_six_percent() -> None:
+    from decimal import Decimal
+    ctx = classify_move_context(day_change_pct=Decimal("3.0"), atr_pct=Decimal("1.0"))
+    assert ctx == MoveContext.EXTENDED
+
+
+def test_missing_atr_does_not_invent_extension() -> None:
+    from decimal import Decimal
+    ctx = classify_move_context(day_change_pct=Decimal("3.0"))
+    assert ctx == MoveContext.BUILDING
+

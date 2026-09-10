@@ -41,6 +41,7 @@ class BlockerClass(str, Enum):
     nothing more decisive can be said yet")."""
 
     DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
+    INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
     CONFLICT = "CONFLICT"
     CONTRACT_UNUSABLE = "CONTRACT_UNUSABLE"
     CORE_STREAM_STALE = "CORE_STREAM_STALE"
@@ -93,6 +94,7 @@ def determine_blockers(
     quote_is_current: bool,
     day_change_pct: Decimal | None,
     development: DevelopmentNarrative | None,
+    historical_insufficient: bool = False,
 ) -> BlockerAssessment:
     """Precedence (most fundamental / most specific first -- a case can be
     simultaneously true for several of these; only one is ever PRIMARY):
@@ -137,6 +139,11 @@ def determine_blockers(
 
     if decision.decision == FinalDecision.DATA_INSUFFICIENT:
         candidates.append(ResearchBlocker(BlockerClass.DATA_INSUFFICIENT, decision.reasoning))
+    if historical_insufficient:
+        candidates.append(ResearchBlocker(
+            BlockerClass.INSUFFICIENT_HISTORY,
+            "Insufficient historical data to validate the developing pattern.",
+        ))
     if assessment.convergence == OverallConvergence.CONFLICT:
         candidates.append(ResearchBlocker(BlockerClass.CONFLICT, decision.reasoning))
     if assessment.option_quality == QualityLevel.INSUFFICIENT or assessment.liquidity_quality == QualityLevel.INSUFFICIENT:
@@ -183,8 +190,8 @@ def determine_blockers(
     else:
         order = [
             BlockerClass.DATA_INSUFFICIENT, BlockerClass.CONFLICT, BlockerClass.CONTRACT_UNUSABLE,
-            BlockerClass.CORE_STREAM_STALE, BlockerClass.NO_DIRECTIONAL_BIAS, BlockerClass.EXTENDED,
-            BlockerClass.REQUIRED_CONFIRMATION_MISSING,
+            BlockerClass.INSUFFICIENT_HISTORY, BlockerClass.CORE_STREAM_STALE, BlockerClass.NO_DIRECTIONAL_BIAS,
+            BlockerClass.EXTENDED, BlockerClass.REQUIRED_CONFIRMATION_MISSING,
         ]
         candidates.sort(key=lambda b: order.index(b.blocker_class))
         primary = candidates[0]

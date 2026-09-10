@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -45,8 +45,9 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.data.normalization.base import _MAX_CLOCK_SKEW_TOLERANCE
-from app.data.providers.base import RawQuote
+from app.data.providers.base import BatchedQuoteProvider, RawQuote
 from app.data.providers.exceptions import ProviderError
+from app.data.providers.scan_snapshot_cache import ScanSnapshotCache
 from app.data.providers.upstox_fo_master import nearest_expiry
 from app.data.providers.upstox_instrument_master import resolve_symbol
 from app.data.providers.upstox_provider import ExchangeStatus
@@ -63,10 +64,28 @@ from app.domain.audit.research_models import (
 )
 from app.domain.market.trading_calendar import most_recent_trading_day_at_or_before
 from app.domain.options.early_opportunity import (
+    FNO_BAN_STATUS_UNKNOWN,
+    UNIVERSE_SOURCE_UPSTOX_NSE_FO_EQUITY,
     ResearchBucket,
     classify_research_bucket,
     is_early_opportunity_bucket,
     is_event_to_monitor_bucket,
+)
+from app.domain.options.plain_language import (
+    contract_usability_plain_english,
+    happening_plain_english,
+)
+from app.domain.options.stage1_discovery import (
+    DEVELOPING_MOMENTUM,
+    EARLY_REVERSAL,
+    FAILED_BREAKDOWN_RECLAIM_CANDIDATE,
+    INTRADAY_COMPRESSION,
+    NEAR_SESSION_BOUNDARY,
+    ORDER_FLOW_PARTICIPATION,
+    PRE_BREAKOUT_COMPRESSION_CANDIDATE,
+    RELATIVE_STRENGTH_VS_INDEX,
+    assert_no_stage1_option_claims,
+    promotion_reason,
 )
 from app.orchestration.dashboard_service import AnalyzeResponse, run_analysis
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories, _retry
@@ -75,6 +94,7 @@ from app.orchestration.visual_data import (
     ContractAssessmentView,
     DirectionComparisonVisual,
     LevelView,
+    VisualData,
 )
 from app.utils.time import ensure_utc, utc_now
 
@@ -231,6 +251,15 @@ class ScreeningConfig:
     # Unpinned large session move -- already late even if not at the extreme.
     large_unpinned_move_pct: Decimal = Decimal("8.0")
 
+    # Cheap compression proxy from TODAY'S quote OHLC only -- not multi-day
+    # range compression and not a Stage-2 PRE_BREAKOUT_COMPRESSION claim.
+    compression_max_session_range_pct: Decimal = Decimal("1.5")
+    near_boundary_min_position: Decimal = Decimal("0.75")
+    near_boundary_max_position: Decimal = Decimal("0.25")
+    # Stock vs Nifty day-change gap (percentage points). Missing index
+    # quote means this observation is simply not emitted.
+    relative_strength_min_gap_pct: Decimal = Decimal("0.75")
+
 
 _DEFAULT_SCREENING_CONFIG = ScreeningConfig()
 
@@ -256,6 +285,10 @@ class StageOneResult:
     # without a second fetch and without calling it "accumulation" (a
     # stronger structural claim than this data supports).
     survivor_buy_sell_ratio: dict[str, Decimal] = field(default_factory=dict)
+    survivor_observations: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    truncated_count: int = 0
+    survivor_cap_applied: bool = False
+    index_relative_strength_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -268,6 +301,7 @@ class _QuoteMetrics:
     vwap_distance_pct: Decimal | None
     position_in_day_range: Decimal | None  # 0.0 = at today's low, 1.0 = at today's high
     buy_sell_ratio: Decimal | None
+    session_range_pct: Decimal | None  # (today high-low) / previous_close * 100
 
 
 def _quote_metrics(raw: RawQuote) -> _QuoteMetrics:
@@ -287,9 +321,14 @@ def _quote_metrics(raw: RawQuote) -> _QuoteMetrics:
     if raw.total_buy_quantity is not None and raw.total_sell_quantity is not None and raw.total_sell_quantity > 0:
         buy_sell_ratio = Decimal(raw.total_buy_quantity) / Decimal(raw.total_sell_quantity)
 
+    session_range_pct: Decimal | None = None
+    if raw.ohlc is not None and raw.previous_close is not None and raw.previous_close != 0:
+        session_range_pct = Decimal(str((raw.ohlc.high - raw.ohlc.low) / raw.previous_close * 100))
+
     return _QuoteMetrics(
         day_change_pct=day_change_pct, vwap_distance_pct=vwap_distance_pct,
         position_in_day_range=position_in_day_range, buy_sell_ratio=buy_sell_ratio,
+        session_range_pct=session_range_pct,
     )
 
 
@@ -306,34 +345,62 @@ def _already_extended_intraday(m: _QuoteMetrics, cfg: ScreeningConfig) -> bool:
     return bool(m.day_change_pct <= -cfg.extended_min_day_change_pct and m.position_in_day_range <= cfg.extended_max_position_when_down)
 
 
-def _discovery_buckets(m: _QuoteMetrics, cfg: ScreeningConfig) -> list[str]:
+def _discovery_buckets(
+    m: _QuoteMetrics, cfg: ScreeningConfig, *, index_day_change_pct: Decimal | None = None,
+) -> list[str]:
     """Which of the genuinely-cheap real discovery buckets this
     candidate matches -- never a score, a real membership list. Missing
     data simply cannot match a bucket that needs it (never fabricated
-    into a match)."""
+    into a match). Never claims option-chain or futures evidence."""
     matches: list[str] = []
     if (
         m.day_change_pct is not None and m.vwap_distance_pct is not None
         and cfg.momentum_min_day_change_pct <= abs(m.day_change_pct) <= cfg.momentum_max_day_change_pct
         and abs(m.vwap_distance_pct) <= cfg.momentum_max_vwap_distance_pct
     ):
-        matches.append("DEVELOPING_MOMENTUM")
+        matches.append(DEVELOPING_MOMENTUM)
     if m.buy_sell_ratio is not None and (
         m.buy_sell_ratio >= cfg.participation_min_imbalance_ratio
         or m.buy_sell_ratio <= Decimal(1) / cfg.participation_min_imbalance_ratio
     ):
-        matches.append("ORDER_FLOW_PARTICIPATION")
+        matches.append(ORDER_FLOW_PARTICIPATION)
     if m.day_change_pct is not None and m.position_in_day_range is not None:
         recovering_from_low = m.day_change_pct < 0 and m.position_in_day_range >= cfg.reversal_min_position_when_red
         fading_from_high = m.day_change_pct > 0 and m.position_in_day_range <= cfg.reversal_max_position_when_green
         if recovering_from_low or fading_from_high:
-            matches.append("EARLY_REVERSAL")
+            matches.append(EARLY_REVERSAL)
+            matches.append(FAILED_BREAKDOWN_RECLAIM_CANDIDATE)
+    compressing = (
+        m.session_range_pct is not None
+        and m.session_range_pct <= cfg.compression_max_session_range_pct
+        and (m.day_change_pct is None or abs(m.day_change_pct) <= cfg.momentum_max_day_change_pct)
+    )
+    near_boundary = False
+    if m.position_in_day_range is not None:
+        near_boundary = (
+            m.position_in_day_range >= cfg.near_boundary_min_position
+            or m.position_in_day_range <= cfg.near_boundary_max_position
+        )
+    # Compression alone is not a promotion reason -- a quiet mid-range
+    # tape is not an early setup. Compression near a session extreme is.
+    if compressing and near_boundary:
+        matches.append(INTRADAY_COMPRESSION)
+        matches.append(NEAR_SESSION_BOUNDARY)
+        matches.append(PRE_BREAKOUT_COMPRESSION_CANDIDATE)
+    if (
+        index_day_change_pct is not None
+        and m.day_change_pct is not None
+        and abs(m.day_change_pct - index_day_change_pct) >= cfg.relative_strength_min_gap_pct
+    ):
+        matches.append(RELATIVE_STRENGTH_VS_INDEX)
+    assert_no_stage1_option_claims(matches)
     return matches
 
 
 async def screen_universe(
-    symbols: Sequence[str], *, provider: UpstoxProvider, instrument_master: Sequence[dict[str, object]],
+    symbols: Sequence[str], *, provider: BatchedQuoteProvider, instrument_master: Sequence[dict[str, object]],
     as_of: datetime, exchange_status: ExchangeStatus = ExchangeStatus.UNKNOWN, config: ScreeningConfig | None = None,
+    on_progress: Callable[[dict[str, object]], Awaitable[None]] | None = None,
 ) -> StageOneResult:
     """Real, cheap, batched EARLY-STAGE discovery -- see the module-level
     HONESTY NOTE above for exactly which dimensions this can and cannot
@@ -371,6 +438,8 @@ async def screen_universe(
     key_to_symbol = {key: symbol for symbol, key in symbol_to_key.items()}
     keys = list(key_to_symbol.keys())
     quotes: dict[str, RawQuote] = {}
+    index_ref = resolve_symbol(instrument_master, "NIFTY", segment="NSE_INDEX")
+    index_key = index_ref.instrument_key if index_ref is not None else None
     # Sprint 3 -- tracks keys already rejected by a real batch-level
     # failure below, so the per-symbol "no quote data returned" check
     # further down never produces a SECOND, redundant `RejectionRecord`
@@ -380,6 +449,8 @@ async def screen_universe(
     batch_failed_keys: set[str] = set()
     for i in range(0, len(keys), cfg.quote_batch_size):
         chunk = keys[i : i + cfg.quote_batch_size]
+        if i == 0 and index_key is not None and index_key not in chunk:
+            chunk = [*chunk, index_key]
         try:
             # Sprint 1 -- bounded retry on real transient failures only
             # (see `ScreeningConfig.quote_batch_attempts`'s docstring);
@@ -393,10 +464,29 @@ async def screen_universe(
             # One bad batch must never take down the whole screen -- every
             # symbol in that chunk gets a real, specific rejection reason.
             for key in chunk:
-                rejected.append(RejectionRecord(symbol=key_to_symbol[key], reason=f"quote batch fetch failed: {exc}"))
+                rejected_symbol = key_to_symbol.get(key)
+                if rejected_symbol is None:
+                    continue
+                rejected.append(RejectionRecord(symbol=rejected_symbol, reason=f"quote batch fetch failed: {exc}"))
                 batch_failed_keys.add(key)
             continue
         quotes.update(chunk_quotes)
+        if on_progress is not None:
+            await on_progress({
+                "stage": "stage1",
+                "processed": min(i + cfg.quote_batch_size, len(keys)),
+                "total": len(keys),
+                "message": "Fast discovery — quotes",
+            })
+        await asyncio.sleep(0)
+
+    index_day_change_pct: Decimal | None = None
+    if index_key is not None:
+        index_raw = quotes.get(index_key)
+        if index_raw is not None and index_raw.previous_close is not None and index_raw.previous_close != 0:
+            index_day_change_pct = Decimal(
+                str((index_raw.last_price - index_raw.previous_close) / index_raw.previous_close * 100)
+            )
 
     candidates_evaluated = 0
     matched: list[tuple[str, list[str]]] = []
@@ -474,7 +564,7 @@ async def screen_universe(
             ))
             continue
 
-        buckets = _discovery_buckets(m, cfg)
+        buckets = _discovery_buckets(m, cfg, index_day_change_pct=index_day_change_pct)
         if not buckets:
             change_text = f"{m.day_change_pct:+.2f}%" if m.day_change_pct is not None else "n/a"
             vwap_text = f"{m.vwap_distance_pct:+.2f}%" if m.vwap_distance_pct is not None else "n/a"
@@ -494,21 +584,34 @@ async def screen_universe(
     ordered = sorted(matched, key=lambda item: (-len(item[1]), item[0]))
     survivors = [symbol for symbol, _ in ordered[: cfg.survivor_cap]]
     survivor_set = set(survivors)
+    truncated_count = 0
     for symbol, buckets in ordered:
         if symbol not in survivor_set:
+            truncated_count += 1
             rejected.append(RejectionRecord(
                 symbol=symbol,
-                reason=f"screened out at stage 1 (matched {', '.join(buckets)}, but not among the top {cfg.survivor_cap} by bucket corroboration)",
+                reason=(
+                    f"screened out at stage 1 (matched {', '.join(buckets)}, but not among the top "
+                    f"{cfg.survivor_cap} by bucket corroboration -- survivor_cap is a provider-safety "
+                    f"limit, not a claim that the remaining names were uninteresting)"
+                ),
             ))
 
     survivor_buy_sell_ratio: dict[str, Decimal] = {}
-    for symbol in survivors:
-        ratio = metrics_by_symbol[symbol].buy_sell_ratio
-        if ratio is not None:
-            survivor_buy_sell_ratio[symbol] = ratio
+    survivor_observations: dict[str, tuple[str, ...]] = {}
+    for symbol, buckets in ordered:
+        if symbol in survivor_set:
+            survivor_observations[symbol] = tuple(buckets)
+            ratio = metrics_by_symbol[symbol].buy_sell_ratio
+            if ratio is not None:
+                survivor_buy_sell_ratio[symbol] = ratio
     return StageOneResult(
         universe_size=len(symbols), candidates_evaluated=candidates_evaluated, survivors=survivors, rejected=rejected,
         survivor_buy_sell_ratio=survivor_buy_sell_ratio,
+        survivor_observations=survivor_observations,
+        truncated_count=truncated_count,
+        survivor_cap_applied=truncated_count > 0,
+        index_relative_strength_available=index_day_change_pct is not None,
     )
 
 
@@ -527,6 +630,7 @@ class _GatedCandidate:
     # `?symbols=` override) or no real buy/sell quantity data was present
     # on the batched quote. Never re-derived here.
     stage_one_buy_sell_ratio: Decimal | None = None
+    stage_one_observations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -539,6 +643,7 @@ class RankedCandidate:
     direction: str
     rationale: RankingRationale
     stage_one_buy_sell_ratio: Decimal | None = None
+    stage_one_observations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -568,6 +673,11 @@ class DailyResearchResult:
     # DEVELOPING NOW / ALREADY MOVED buckets. Empty default for tests
     # that construct this dataclass without running a scan.
     stage_two_gated: list[RankedCandidate] = field(default_factory=list)
+    universe_source: str = UNIVERSE_SOURCE_UPSTOX_NSE_FO_EQUITY
+    fno_ban_status: str = FNO_BAN_STATUS_UNKNOWN
+    stage1_truncated_count: int = 0
+    stage1_cap_applied: bool = False
+    index_relative_strength_available: bool = False
 
     @property
     def rejected_as_extended_count(self) -> int:
@@ -721,7 +831,11 @@ def compute_research_coverage(
     )
 
 
-def _gate(symbol: str, response: AnalyzeResponse, *, stage_one_buy_sell_ratio: Decimal | None = None) -> _GatedCandidate | RejectionRecord:
+def _gate(
+    symbol: str, response: AnalyzeResponse, *,
+    stage_one_buy_sell_ratio: Decimal | None = None,
+    stage_one_observations: tuple[str, ...] = (),
+) -> _GatedCandidate | RejectionRecord:
     """Disqualifying checks only -- never a scored axis. Every rejection
     carries the real, specific reason (Section 16 -- rejection
     transparency): this is what proves the researcher actually looked at
@@ -745,6 +859,7 @@ def _gate(symbol: str, response: AnalyzeResponse, *, stage_one_buy_sell_ratio: D
     return _GatedCandidate(
         symbol=symbol, response=response, dc=dc, contract=contract, direction=dc.preferred_direction,
         stage_one_buy_sell_ratio=stage_one_buy_sell_ratio,
+        stage_one_observations=stage_one_observations,
     )
 
 
@@ -883,7 +998,9 @@ def classify_research_confidence(candidate: _GatedCandidate) -> str:
 
 
 def rank_candidates(
-    responses: dict[str, AnalyzeResponse], *, top_n: int = 3, stage_one_buy_sell_ratio: dict[str, Decimal] | None = None,
+    responses: dict[str, AnalyzeResponse], *, top_n: int = 3,
+    stage_one_buy_sell_ratio: dict[str, Decimal] | None = None,
+    stage_one_observations: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[list[RankedCandidate], list[RejectionRecord]]:
     """Pure, deterministic (stable sort, fully explicit tie-break tuple --
     no dict/set-ordering dependence) ranking over already-computed
@@ -894,10 +1011,15 @@ def rank_candidates(
     never read by `_sort_key`/`_rationale`, so it cannot become a second,
     undocumented ranking input."""
     ratios = stage_one_buy_sell_ratio or {}
+    observations = stage_one_observations or {}
     gated: list[_GatedCandidate] = []
     rejected: list[RejectionRecord] = []
     for symbol, response in responses.items():
-        result = _gate(symbol, response, stage_one_buy_sell_ratio=ratios.get(symbol))
+        result = _gate(
+            symbol, response,
+            stage_one_buy_sell_ratio=ratios.get(symbol),
+            stage_one_observations=observations.get(symbol, ()),
+        )
         if isinstance(result, RejectionRecord):
             rejected.append(result)
         else:
@@ -908,6 +1030,7 @@ def rank_candidates(
         RankedCandidate(
             rank=i + 1, symbol=c.symbol, response=c.response, dc=c.dc, contract=c.contract,
             direction=c.direction, rationale=_rationale(c), stage_one_buy_sell_ratio=c.stage_one_buy_sell_ratio,
+            stage_one_observations=c.stage_one_observations,
         )
         for i, c in enumerate(ordered[:top_n])
     ]
@@ -915,21 +1038,29 @@ def rank_candidates(
 
 
 def collect_gated_candidates(
-    responses: dict[str, AnalyzeResponse], *, stage_one_buy_sell_ratio: dict[str, Decimal] | None = None,
+    responses: dict[str, AnalyzeResponse], *,
+    stage_one_buy_sell_ratio: dict[str, Decimal] | None = None,
+    stage_one_observations: dict[str, tuple[str, ...]] | None = None,
 ) -> list[RankedCandidate]:
     """Every Stage-2 symbol that cleared `_gate()`, not just the top-N
     shortlist. `rank` is 0 -- this is a bucket source, not a ranking.
     Deterministic: original `responses` insertion order is preserved
     (dict insertion order of `stage_two_universe`)."""
     ratios = stage_one_buy_sell_ratio or {}
+    observations = stage_one_observations or {}
     gated: list[RankedCandidate] = []
     for symbol, response in responses.items():
-        result = _gate(symbol, response, stage_one_buy_sell_ratio=ratios.get(symbol))
+        result = _gate(
+            symbol, response,
+            stage_one_buy_sell_ratio=ratios.get(symbol),
+            stage_one_observations=observations.get(symbol, ()),
+        )
         if isinstance(result, _GatedCandidate):
             gated.append(RankedCandidate(
                 rank=0, symbol=result.symbol, response=result.response, dc=result.dc,
                 contract=result.contract, direction=result.direction, rationale=_rationale(result),
                 stage_one_buy_sell_ratio=result.stage_one_buy_sell_ratio,
+                stage_one_observations=result.stage_one_observations,
             ))
     return gated
 
@@ -954,6 +1085,7 @@ async def run_daily_research(
     http_client: httpx.AsyncClient | None = None,
     delivery_cache_dir: Path | None = None,
     stage_two_concurrency: int = 6,
+    on_progress: Callable[[dict[str, object]], Awaitable[None]] | None = None,
 ) -> DailyResearchResult:
     """When `symbols` is explicit (a caller's own list, or the old
     `DEFAULT_RESEARCH_UNIVERSE` fast/manual override), Stage 1 is skipped
@@ -982,12 +1114,20 @@ async def run_daily_research(
     stage_one_attempted: int | None = None
     stage_one_rejected: list[RejectionRecord] = []
     stage_one_buy_sell_ratio: dict[str, Decimal] = {}
+    stage_one_observations: dict[str, tuple[str, ...]] = {}
+    stage1_truncated_count = 0
+    stage1_cap_applied = False
+    index_rs_available = False
+    universe_source = UNIVERSE_SOURCE_UPSTOX_NSE_FO_EQUITY
+    universe_discovery_seconds = 0.0
+    stage1_seconds = 0.0
     if symbols is not None:
         # Explicit override -- Stage 1 correctly skipped; `full_universe`
         # and the Stage-2 input are the same list, exactly as before this
         # phase (zero regression for every existing `?symbols=` caller).
         full_universe = list(symbols)
         stage_two_universe = full_universe
+        universe_source = "explicit_symbols_override"
     else:
         full_universe = list_fo_eligible_equity_underlyings(instrument_master)
         # Sprint 2 -- fetched ONCE for the whole screen (not per chunk/
@@ -996,19 +1136,25 @@ async def run_daily_research(
         # when this call itself fails, so Stage 1 and Stage 2 agree on
         # what "market open" means from the identical authoritative source
         # (Objective 7 -- no second, duplicate market-state implementation).
+        stage1_started = utc_now()
         try:
             exchange_status = await provider.get_market_status(exchange="NSE")
         except ProviderError:
             exchange_status = ExchangeStatus.UNKNOWN
         stage_one = await screen_universe(
             full_universe, provider=provider, instrument_master=instrument_master, as_of=as_of,
-            exchange_status=exchange_status, config=screening_config,
+            exchange_status=exchange_status, config=screening_config, on_progress=on_progress,
         )
+        stage1_seconds = (utc_now() - stage1_started).total_seconds()
         stage_two_universe = stage_one.survivors
         stage_one_survivor_count = len(stage_one.survivors)
         stage_one_attempted = len(full_universe)
         stage_one_rejected = stage_one.rejected
         stage_one_buy_sell_ratio = stage_one.survivor_buy_sell_ratio
+        stage_one_observations = stage_one.survivor_observations
+        stage1_truncated_count = stage_one.truncated_count
+        stage1_cap_applied = stage_one.survivor_cap_applied
+        index_rs_available = stage_one.index_relative_strength_available
 
     # Sprint 1 -- root-cause fix for a real live defect found 2026-08-31:
     # `normalize_quote()` (app/data/normalization/base.py) already floors a
@@ -1041,16 +1187,35 @@ async def run_daily_research(
     # other run-level use of `as_of` (Stage 1, rejection timestamps,
     # ShortlistRecord) are untouched, still anchored to the original,
     # caller-supplied `as_of`.
-    scan_started_wallclock_dt = utc_now()
-    stage_two_started_wallclock = scan_started_wallclock_dt
+    scan_provider: UpstoxProvider = ScanSnapshotCache(provider)  # type: ignore[assignment]
+    stage_two_started_wallclock = utc_now()
+    scan_started_wallclock_dt = stage_two_started_wallclock
     semaphore = asyncio.Semaphore(max(1, stage_two_concurrency))
+    stage2_done = 0
+    stage2_lock = asyncio.Lock()
+
+    async def _emit(payload: dict[str, object]) -> None:
+        if on_progress is not None:
+            await on_progress(payload)
+        await asyncio.sleep(0)
+
+    if on_progress is not None:
+        await _emit({
+            "stage": "stage2" if symbols is None else "explicit",
+            "processed": 0,
+            "total": len(stage_two_universe),
+            "message": "Deep research on promoted names" if symbols is None else "Researching requested names",
+            "cache_hits": getattr(scan_provider, "hits", 0),
+            "cache_misses": getattr(scan_provider, "misses", 0),
+        })
 
     async def _analyze_one(symbol: str) -> tuple[str, AnalyzeResponse]:
+        nonlocal stage2_done
         async with semaphore:
             symbol_as_of = as_of + (utc_now() - stage_two_started_wallclock)
             try:
                 response = await run_analysis(
-                    symbol, provider=provider, instrument_master=instrument_master, strategy=strategy,
+                    symbol, provider=scan_provider, instrument_master=instrument_master, strategy=strategy,
                     repositories=repositories, config=config, as_of=symbol_as_of, mcx_instrument_master=mcx_instrument_master,
                     sector_map=sector_map, journal=journal,
                     nifty50_symbols=nifty50_symbols, http_client=http_client, delivery_cache_dir=delivery_cache_dir,
@@ -1060,6 +1225,21 @@ async def run_daily_research(
                     query=symbol, parsed_symbol=None, parsed_strike=None, parsed_right=None, parsed_expiry_hint=None,
                     has_specific_contract=False, parse_warnings=[], error=f"unexpected failure: {exc}", latency_seconds=0.0,
                 )
+            async with stage2_lock:
+                stage2_done += 1
+                done = stage2_done
+            await _emit({
+                "stage": "stage2",
+                "processed": done,
+                "total": len(stage_two_universe),
+                "symbol": symbol,
+                "total_ms": int(response.latency_seconds * 1000),
+                "cache_hit": "hit" if getattr(scan_provider, "hits", 0) else "miss",
+                "provider": str(getattr(scan_provider, "name", getattr(getattr(scan_provider, "_inner", None), "name", "unknown"))),
+                "message": f"Deep research {done}/{len(stage_two_universe)}",
+                "cache_hits": getattr(scan_provider, "hits", 0),
+                "cache_misses": getattr(scan_provider, "misses", 0),
+            })
             return symbol, response
 
     # Order of completion is not guaranteed under concurrency, but the
@@ -1085,9 +1265,16 @@ async def run_daily_research(
             market_state = response.market_state
 
     scan_completed_wallclock_dt = utc_now()
+    stage2_elapsed = (scan_completed_wallclock_dt - stage_two_started_wallclock).total_seconds()
 
-    shortlist, stage_two_rejected = rank_candidates(responses, top_n=top_n, stage_one_buy_sell_ratio=stage_one_buy_sell_ratio)
-    stage_two_gated = collect_gated_candidates(responses, stage_one_buy_sell_ratio=stage_one_buy_sell_ratio)
+    shortlist, stage_two_rejected = rank_candidates(
+        responses, top_n=top_n, stage_one_buy_sell_ratio=stage_one_buy_sell_ratio,
+        stage_one_observations=stage_one_observations,
+    )
+    stage_two_gated = collect_gated_candidates(
+        responses, stage_one_buy_sell_ratio=stage_one_buy_sell_ratio,
+        stage_one_observations=stage_one_observations,
+    )
     all_rejected = stage_one_rejected + stage_two_rejected
     rejection_summary = summarize_rejections(all_rejected)
     coverage = compute_research_coverage(
@@ -1096,6 +1283,8 @@ async def run_daily_research(
     )
 
     stage2_failed_symbols = _reliability_failed_symbols(stage_two_rejected)
+    stage2_latencies = [r.latency_seconds for r in responses.values()]
+    avg_stage2_latency = (sum(stage2_latencies) / len(stage2_latencies)) if stage2_latencies else 0.0
     scan_snapshot = ResearchScanSnapshot(
         started_at=scan_started_wallclock_dt, completed_at=scan_completed_wallclock_dt,
         duration_seconds=(scan_completed_wallclock_dt - scan_started_wallclock_dt).total_seconds(),
@@ -1110,6 +1299,16 @@ async def run_daily_research(
             for symbol, response in responses.items()
         ],
         generated_at=as_of,
+        universe_source=universe_source,
+        fno_ban_status=FNO_BAN_STATUS_UNKNOWN,
+        universe_discovery_seconds=universe_discovery_seconds,
+        stage1_seconds=stage1_seconds,
+        stage2_seconds=stage2_elapsed,
+        assembly_seconds=0.0,
+        avg_stage2_latency_seconds=avg_stage2_latency,
+        survivor_cap_applied=stage1_cap_applied,
+        truncated_at_stage1=stage1_truncated_count,
+        index_relative_strength_available=index_rs_available,
     )
 
     result = DailyResearchResult(
@@ -1118,9 +1317,24 @@ async def run_daily_research(
         no_high_conviction=not shortlist, stage_one_survivor_count=stage_one_survivor_count,
         rejection_summary=rejection_summary, coverage=coverage, scan_snapshot=scan_snapshot,
         stage_two_gated=stage_two_gated,
+        universe_source=universe_source,
+        fno_ban_status=FNO_BAN_STATUS_UNKNOWN,
+        stage1_truncated_count=stage1_truncated_count,
+        stage1_cap_applied=stage1_cap_applied,
+        index_relative_strength_available=index_rs_available,
     )
 
     run_id = new_run_id()
+
+    if on_progress is not None:
+        await on_progress({
+            "stage": "complete",
+            "processed": len(stage_two_universe),
+            "total": len(stage_two_universe),
+            "message": "Scan complete.",
+            "cache_hits": getattr(scan_provider, "hits", 0),
+            "cache_misses": getattr(scan_provider, "misses", 0),
+        })
 
     if research_journal is not None:
         record = ResearchRunRecord(
@@ -1960,6 +2174,57 @@ class ResearchThesisView(BaseModel):
     why_investigate_now: str
     already_moved: bool
     move_context: str = "UNKNOWN"
+    research_state: str | None = None
+    what_is_happening: str = ""
+    why_watching: str = ""
+    what_is_missing: str = ""
+    contract_usability: str = ""
+    promoted_because: str = ""
+    stage_one_observations: list[str] = Field(default_factory=list)
+    options_data_quality: str = ""
+    news_data_quality: str = ""
+    observed_at: datetime | None = None
+
+
+def _atr_pct_from_visual(visual: VisualData | None) -> Decimal | None:
+    if visual is None or visual.historical_structure is None:
+        return None
+    return visual.historical_structure.atr_pct
+
+
+def _session_range_pct_from_visual(visual: VisualData | None) -> Decimal | None:
+    """Intraday high-low of the last completed session in the already-fetched
+    M15 chart -- never a new fetch, never future candles (chart series is
+    already bounded at as_of)."""
+    if visual is None:
+        return None
+    candles = visual.price_chart.candles
+    if not candles:
+        return None
+    last_day = candles[-1].timestamp.date()
+    session = [c for c in candles if c.timestamp.date() == last_day]
+    if not session:
+        return None
+    high = max(c.high for c in session)
+    low = min(c.low for c in session)
+    close = session[-1].close
+    if close == 0:
+        return None
+    return (high - low) / close * Decimal("100")
+
+
+def _stream_quality_line(visual: object | None, stream_name: str) -> str:
+    freshness = getattr(visual, "freshness", None) if visual is not None else None
+    streams = getattr(freshness, "streams", None) if freshness is not None else None
+    if not streams:
+        return f"{stream_name}: unavailable"
+    for stream in streams:
+        if getattr(stream, "stream", None) == stream_name:
+            available = "Available" if getattr(stream, "usable_for_display", False) else "Unavailable"
+            label = getattr(stream, "label", None) or "UNKNOWN"
+            withheld = "" if getattr(stream, "usable_for_vote", True) else "; confirmation withheld"
+            return f"{available}; {label}{withheld}"
+    return f"{stream_name}: unavailable"
 
 
 def _developing_pattern_for_thesis(*, visual: object | None, pre_breakout_signal: bool) -> str:
@@ -2000,6 +2265,7 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
     gated = _GatedCandidate(
         symbol=candidate.symbol, response=candidate.response, dc=candidate.dc, contract=c, direction=candidate.direction,
         stage_one_buy_sell_ratio=candidate.stage_one_buy_sell_ratio,
+        stage_one_observations=candidate.stage_one_observations,
     )
     early_stage_state, extension_pct = classify_early_stage_state(gated)
     trend_dir = _evidence_direction(candidate.response, "M15 trend")
@@ -2029,7 +2295,25 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
         fo_eligible=True,
         day_change_pct=(v.extension_distance.day_change_pct if v is not None and v.extension_distance is not None else None),
         structural_context=structural_context,
+        session_range_pct=_session_range_pct_from_visual(v),
+        atr_pct=_atr_pct_from_visual(v),
     )
+    development = getattr(v, "development", None) if v is not None else None
+    happening = happening_plain_english(
+        pattern=developing_pattern, bucket=assessment.bucket.value, event_risk=event_risk,
+    )
+    if development is not None and assessment.bucket.value not in ("EVENT_DRIVEN", "DATA_INSUFFICIENT", "CONFLICT"):
+        happening = development.what_is_developing or happening
+    missing = what_has_not_happened_yet
+    if development is not None and development.what_is_missing:
+        missing = development.what_is_missing
+    confirm_if = _relevant_watch_condition(candidate.response, candidate.direction)
+    if development is not None and development.confirm_if:
+        confirm_if = development.confirm_if
+    invalidate = candidate.response.invalidation_condition
+    if development is not None and development.invalidate_if:
+        invalidate = development.invalidate_if
+    observations = list(candidate.stage_one_observations)
 
     return ResearchThesisView(
         rank=candidate.rank, symbol=candidate.symbol, current_spot=str(spot) if spot is not None else None,
@@ -2049,8 +2333,8 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
         contractual_expiry_breakeven=str(c.contractual_expiry_breakeven) if c.contractual_expiry_breakeven is not None else None,
         breakeven_distance_pct=str(breakeven_pct) if breakeven_pct is not None else None,
         why_this_contract=_why_this_contract(candidate.dc, candidate.direction, c),
-        what_would_confirm=_relevant_watch_condition(candidate.response, candidate.direction),
-        what_invalidates=candidate.response.invalidation_condition,
+        what_would_confirm=confirm_if,
+        what_invalidates=invalidate,
         risk=risk, actionability=candidate.response.decision or "DATA_INSUFFICIENT",
         bullish_case=bullish_case, bearish_case=bearish_case,
         structural_context=structural_context, structural_context_detail=structural_context_detail,
@@ -2061,6 +2345,16 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
         universe_tier=assessment.universe_tier.value, developing_pattern=developing_pattern,
         why_investigate_now=assessment.why_investigate_now, already_moved=assessment.already_moved,
         move_context=assessment.move_context.value,
+        research_state=candidate.response.research_state,
+        what_is_happening=happening,
+        why_watching=assessment.why_investigate_now,
+        what_is_missing=missing,
+        contract_usability=contract_usability_plain_english(c.liquidity_grade),
+        promoted_because=promotion_reason(observations),
+        stage_one_observations=observations,
+        options_data_quality=_stream_quality_line(v, "option_chain"),
+        news_data_quality=_stream_quality_line(v, "news"),
+        observed_at=candidate.response.generated_at,
     )
 
 
@@ -2179,7 +2473,14 @@ class DailyResearchView(BaseModel):
     already_moved_rejections: list[str] = Field(default_factory=list)
     zero_valid_early_opportunities: bool = True
     events_to_monitor: list[ResearchThesisView] = Field(default_factory=list)
+    confirmation_pending: list[ResearchThesisView] = Field(default_factory=list)
+    data_issues: list[ResearchThesisView] = Field(default_factory=list)
     scan_mode: str = "DEFAULT_WHOLE_FO_SCAN"
+    universe_source: str = UNIVERSE_SOURCE_UPSTOX_NSE_FO_EQUITY
+    fno_ban_status: str = FNO_BAN_STATUS_UNKNOWN
+    stage1_truncated_count: int = 0
+    stage1_cap_applied: bool = False
+    index_relative_strength_available: bool = False
 
 
 _DEVELOPING_BUCKET_ORDER = {
@@ -2211,6 +2512,14 @@ def build_daily_research_view(result: DailyResearchResult) -> DailyResearchView:
     extended = [t for t in gated_theses if t.research_bucket == "EXTENDED"]
     conflict = [t for t in gated_theses if t.research_bucket == "CONFLICT"]
     data_insufficient = [t for t in gated_theses if t.research_bucket == "DATA_INSUFFICIENT"]
+    confirmation_pending = sorted(
+        [
+            t for t in gated_theses
+            if t.research_state == "CONFIRMATION_PENDING" or t.timing_stage == "CONFIRMING"
+        ],
+        key=lambda t: t.symbol,
+    )
+    data_issues = sorted(data_insufficient + conflict, key=lambda t: t.symbol)
     already_moved_rejections = sorted({
         r.symbol for r in result.rejected if categorize_rejection(r.reason) == "ALREADY_EXTENDED"
     })
@@ -2229,9 +2538,16 @@ def build_daily_research_view(result: DailyResearchResult) -> DailyResearchView:
         already_moved_rejections=already_moved_rejections,
         zero_valid_early_opportunities=len(developing_now) == 0,
         events_to_monitor=events_to_monitor,
+        confirmation_pending=confirmation_pending,
+        data_issues=data_issues,
         scan_mode=(
             "EXPLICIT_SYMBOL_QUERY"
             if result.coverage is not None and result.coverage.stage1_attempted is None
             else "DEFAULT_WHOLE_FO_SCAN"
         ),
+        universe_source=result.universe_source,
+        fno_ban_status=result.fno_ban_status,
+        stage1_truncated_count=result.stage1_truncated_count,
+        stage1_cap_applied=result.stage1_cap_applied,
+        index_relative_strength_available=result.index_relative_strength_available,
     )

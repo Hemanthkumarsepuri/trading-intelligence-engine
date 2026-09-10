@@ -46,6 +46,10 @@ def test_research_daily_explicit_symbols_override_via_http(tmp_path: Path) -> No
     assert body["universe"] == ["RELIANCE"]
     assert body["screened_count"] == 1
     assert body["stage_one_survivor_count"] is None  # override -- Stage 1 skipped
+    assert body["fno_ban_status"] == "FNO_BAN_STATUS_UNKNOWN"
+    assert body["universe_source"] == "explicit_symbols_override"
+    assert isinstance(body["confirmation_pending"], list)
+    assert isinstance(body["data_issues"], list)
     assert body["deep_analyzed_count"] == 1
     assert "generated_at" in body and "market_state" in body
     assert isinstance(body["opportunities"], list)
@@ -235,3 +239,19 @@ def test_research_daily_early_move_discovery_fields_appear_in_the_real_json_resp
     text = resp.text.upper()
     for forbidden in ["BUY NOW", "SELL NOW", "GUARANTEED", "100% ACCURACY", "WIN RATE", "TARGET PROFIT"]:
         assert forbidden not in text
+
+
+def test_research_discover_is_an_alias_of_daily(tmp_path: Path) -> None:
+    app = _configured_app(tmp_path, provider=_provider(_router()), instrument_master=_MASTER)
+    client = TestClient(app)
+    daily = client.get("/api/research/daily", params={"symbols": "RELIANCE"})
+    discover = client.get("/api/research/discover", params={"symbols": "RELIANCE"})
+    assert daily.status_code == 200
+    assert discover.status_code == 200
+    assert discover.json()["universe"] == daily.json()["universe"]
+    assert discover.json()["scan_mode"] == "EXPLICIT_SYMBOL_QUERY"
+    snap = discover.json()["scan_snapshot"]
+    assert snap is not None
+    assert "stage1_seconds" in snap
+    assert "stage2_seconds" in snap
+    assert snap["fno_ban_status"] == "FNO_BAN_STATUS_UNKNOWN"

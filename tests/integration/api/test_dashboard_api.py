@@ -155,7 +155,7 @@ def test_index_serves_the_dashboard_html(tmp_path: Path) -> None:
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "OPTIONS INTELLIGENCE TERMINAL" in resp.text
+    assert "Indian Market Intelligence" in resp.text
     assert "<script>" in resp.text  # real page, not a stub
 
 

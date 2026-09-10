@@ -217,6 +217,7 @@ def test_row_pcr_change_unknown_when_prior_oi_missing() -> None:
         meaningful_oi_change_fraction=Decimal("0.1"),
     )
     assert row.direction == EvidenceDirection.UNKNOWN
+    assert "INSUFFICIENT_HISTORY" in row.detail
 
 
 def test_row_pcr_change_neutral_when_change_is_not_meaningful() -> None:

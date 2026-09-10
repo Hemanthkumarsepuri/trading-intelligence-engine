@@ -204,6 +204,25 @@ count), `requested_symbols`, `successful_symbols`, `failed_symbols`,
 `market_state`, `succeeded`) — reusing fields `AnalyzeResponse` already
 computed, never a new fetch. The dashboard now shows: *"Scan completed
 Xs ago, took Ys — N/M symbols successfully analyzed"* instead of
-implying the whole scan happened at one single instant. See
-`app.orchestration.daily_research.run_daily_research()` and
-`build_daily_research_view()`.
+implying the whole scan happened at one single instant. ## 8. Sprint 2 instrumentation (additive)
+
+`ResearchScanSnapshot` now also records, when a scan runs:
+
+- `universe_source`, `fno_ban_status` (`FNO_BAN_STATUS_UNKNOWN`)
+- `universe_discovery_seconds`, `stage1_seconds`, `stage2_seconds`,
+  `assembly_seconds`, `avg_stage2_latency_seconds` (mean of each Stage-2
+  `AnalyzeResponse.latency_seconds`)
+- `survivor_cap_applied`, `truncated_at_stage1`
+- `news_timing_note` (news remains inside per-symbol Stage 2)
+
+Whole-market wall-clock remains provider-throttling dominated. Do not
+claim a new speed-up from this instrumentation alone. Measured totals
+from prior sessions (218.9s / 310.5s for 30 Stage-2 names) still stand
+until a new live run is recorded.
+
+GREEN-pass live run on restarted `:8010` (after hours, 2026-09-10 IST):
+Stage 1 **104.0s** (210/210), Stage 2 **513.6s** (27/30), wall **618.3s**,
+cap truncated 179 names. Snapshot reuse did not beat in-session Sprint 2
+totals. See `docs/TIRE_GREEN_TRANSFORMATION.md`.
+
+See `docs/TIRE_SPRINT2.md`.

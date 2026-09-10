@@ -52,6 +52,7 @@ from app.domain.options.evidence_matrix import (
 )
 from app.domain.options.freshness_label import FreshnessLabel, StreamFreshness
 from app.domain.options.global_context import GlobalContextAssessment
+from app.domain.options.historical_structure import HistoricalStructure
 from app.domain.options.iv_context import AtmIvSummary, IvRankResult, IvTrend
 from app.domain.options.market_regime import MarketRegimeResult
 from app.domain.options.market_regime_context import MacroRegimeResult
@@ -217,6 +218,7 @@ class OptionsIntelligenceReport:
     # for compatibility, including the historical TRADEABLE label).
     research_state: ResearchState | None = None
     development: DevelopmentNarrative | None = None
+    historical_structure: HistoricalStructure | None = None
     # UAT finding (docs/TIRE_OPERATOR_UAT.md, Defect 2 -- generalized, not
     # KAYNES-specific): the single, deterministically-prioritized reason
     # nothing more decisive can be said yet, reconciled across the

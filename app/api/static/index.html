@@ -10,7 +10,7 @@
      -- no rebuild needed, this file is served as-is. Never put a secret/
      token here; this is a public URL only. -->
 <meta name="api-base" content="">
-<title>Options Intelligence Terminal</title>
+<title>TIRE — Indian Market Intelligence</title>
 <style>
   :root {
     color-scheme: dark;
@@ -150,6 +150,10 @@
   .status-chip.GREEN { color: var(--good); border-color: var(--good); }
   .status-chip.YELLOW { color: var(--warn); border-color: var(--warn); }
   .status-chip.RED { color: var(--bad); border-color: var(--bad); }
+  .primary-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .primary-nav button { padding: 6px 12px; }
+  .market-strip { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .discover-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
   footer.meta { color: var(--muted); font-size: 10px; margin-top: 8px; }
 </style>
 </head>
@@ -157,10 +161,22 @@
 <header>
   <div class="title-row">
     <div>
-      <h1>TIRE — Personal Market Intelligence</h1>
-      <p class="sub">simple outside, evidence underneath — read-only, no order execution — OPTIONS INTELLIGENCE TERMINAL</p>
+      <h1>TIRE</h1>
+      <p class="sub">Indian Market Intelligence — read-only research terminal — no order execution</p>
     </div>
   </div>
+  <div class="market-strip" id="market-strip">
+    <span>MARKET 09:15–15:30 IST</span>
+    <span>NIFTY — after Discover</span>
+    <span>Sector / Volatility / Breadth — on a researched card</span>
+  </div>
+  <nav class="primary-nav" aria-label="Primary">
+    <button type="button" data-jump="daily-research">DISCOVER</button>
+    <button type="button" class="secondary" data-jump="watchlist-details">WATCHLIST</button>
+    <button type="button" class="secondary" data-jump="system-status">MARKET</button>
+    <button type="button" class="secondary" data-jump="symbol-research">RESEARCH</button>
+    <button type="button" class="secondary" data-jump="research-history">HISTORY</button>
+  </nav>
   <div id="header-badges"></div>
   <div id="system-status" class="status-row"></div>
 </header>
@@ -174,10 +190,21 @@
   <section id="daily-research">
     <h2 class="section-label">HOME <span class="note">Market status, Developing Now, Events to Monitor, Already Moved, Data Quality, Your Open Decisions</span></h2>
     <p class="hint" id="market-status-line">Market Status: loading…</p>
-    <h2 class="section-label">DAILY MARKET RESEARCH <span class="note">DEVELOPING SETUPS are evidence-backed structural pre-move situations -- not news-only events, not a prediction, not BUY/SELL, not a top-gainer list; already-moved names are separated</span></h2>
+    <p class="hint" id="last-scan-line">Last scan: none yet</p>
+    <p class="hint" id="scan-progress-line">Ready to scan the market</p>
+    <h2 class="section-label">TODAY'S DEVELOPING OPPORTUNITIES <span class="note">blank symbols = whole F&amp;O universe — not a prediction, not BUY/SELL</span></h2>
     <div class="search-row">
-      <input id="research-symbols" type="text" placeholder="leave blank for the default universe, or comma-separated symbols (e.g. GAIL,RELIANCE,UNOMINDA)" autocomplete="off">
-      <button id="research-btn">RUN RESEARCH</button>
+      <input id="research-symbols" type="text" placeholder="leave blank to scan the supported F&amp;O universe, or type symbols (e.g. RELIANCE,KAYNES)" autocomplete="off">
+      <button id="research-btn">SCAN MARKET</button>
+    </div>
+    <div class="discover-filters" id="discover-filters">
+      <button type="button" class="chip" data-filter="all">All</button>
+      <button type="button" class="chip" data-filter="developing">Developing</button>
+      <button type="button" class="chip" data-filter="event">Event Driven</button>
+      <button type="button" class="chip" data-filter="confirmed">Confirmed</button>
+      <button type="button" class="chip" data-filter="extended">Extended</button>
+      <button type="button" class="chip" data-filter="conflict">Conflicts</button>
+      <button type="button" class="chip" data-filter="data">Needs Data</button>
     </div>
     <div id="research-results"></div>
   </section>
@@ -218,7 +245,7 @@
     <div id="history-results"></div>
   </section>
 
-  <div class="search-row">
+  <div class="search-row" id="symbol-research">
     <input id="query" type="text" placeholder="e.g. RELIANCE, KAYNES 4000 CE, NIFTY 25000 CE SEP" autocomplete="off">
     <button id="analyze-btn">ANALYZE</button>
   </div>
@@ -326,10 +353,12 @@
        collapsed into one badge. -->
   <div id="query-identity-row"></div>
 
+  <div class="panel" id="panel-ai-explain"><h2>AI explanation <span class="note">optional — never the source of truth</span></h2><div class="body"><p class="chart-hint">Research a symbol, then click Explain simply if you want a paraphrase of TIRE evidence.</p><button type="button" class="secondary" id="explain-simply-btn" disabled data-explain-ready="0">Explain simply</button></div></div>
+
   <section class="report" id="report">
     <h2 class="section-label">QUICK VIEW <span class="note">simple first -- technical details stay under View Evidence / MORE DETAILS</span></h2>
 
-    <div class="panel" id="panel-research-context"><h2>Market Context <span class="note">informational -- not a directional vote</span></h2><div class="body"></div></div>
+    <div class="panel" id="panel-research-context"><h2>What is happening <span class="note">research state — not a buy/sell instruction</span></h2><div class="body"></div></div>
 
     <!-- QUICK VIEW ROW 1: underlying summary + final assessment (decision,
          WHY, INVALIDATION -- already structured fields, not buried text). -->
@@ -545,14 +574,27 @@ function badge(label, value) {
 // state
 // ============================================================
 
-const state = { lastResponse: null, lastFetchedAt: null, inFlight: false, refreshTimer: null, priceChart: null };
+const state = { lastResponse: null, lastFetchedAt: null, inFlight: false, pendingQuery: null, refreshTimer: null, priceChart: null };
+let lastResearchDashboard = null;
+let discoverPollTimer = null;
 
 // ============================================================
 // networking / refresh controller
 // ============================================================
 
+function enableExplainSimply() {
+  const btn = document.getElementById("explain-simply-btn");
+  if (!btn) return;
+  btn.disabled = false;
+  btn.removeAttribute("disabled");
+  btn.setAttribute("data-explain-ready", "1");
+}
+
 async function analyze(query) {
-  if (state.inFlight) return; // never overlap requests
+  if (state.inFlight) {
+    state.pendingQuery = query;
+    return;
+  }
   state.inFlight = true;
   document.getElementById("analyze-btn").disabled = true;
   document.getElementById("manual-refresh-btn").disabled = true;
@@ -586,12 +628,16 @@ async function analyze(query) {
     document.getElementById("error-box").textContent = "REFRESH FAILED: " + failed.message + (state.lastResponse ? " (showing last successful analysis)" : "");
     document.getElementById("error-box").style.display = "block";
     if (state.lastResponse) markStale();
-    return;
+  } else {
+    state.lastResponse = data;
+    state.lastFetchedAt = new Date();
+    renderDashboard(data);
   }
-
-  state.lastResponse = data;
-  state.lastFetchedAt = new Date();
-  renderDashboard(data);
+  if (state.pendingQuery) {
+    const next = state.pendingQuery;
+    state.pendingQuery = null;
+    return analyze(next);
+  }
 }
 
 function markStale() {
@@ -648,6 +694,30 @@ document.getElementById("refresh-interval").addEventListener("change", scheduleR
 // server -- no new computation, no ranking done in this file.
 // ============================================================
 
+const STATE_PLAIN = {
+  EARLY_SETUP: "Developing opportunity",
+  CONFIRMED_SETUP: "Confirmed setup — not a buy instruction",
+  CONFIRMATION_PENDING: "Waiting for confirmation",
+  DATA_INSUFFICIENT: "Not enough reliable data",
+  CONFLICT: "Independent evidence groups disagree",
+  NO_TRADE: "Nothing compelling is developing",
+  EXTENDED: "The move is already extended",
+  WATCH: "Watch — confirmation is incomplete",
+  UNKNOWN: "Unknown"
+};
+const BLOCKER_PLAIN = {
+  DATA_INSUFFICIENT: "Not enough reliable data.",
+  INSUFFICIENT_HISTORY: "Insufficient historical data to validate the developing pattern.",
+  CONFLICT: "Independent evidence groups disagree.",
+  CONTRACT_UNUSABLE: "Contract is not usable for reliable options research.",
+  CORE_STREAM_STALE: "A required data stream is stale.",
+  NO_DIRECTIONAL_BIAS: "Evidence did not establish a directional bias.",
+  EXTENDED: "The move is already extended.",
+  REQUIRED_CONFIRMATION_MISSING: "Waiting for confirmation.",
+  NONE: "No blocking condition identified.",
+  PROVIDER_CONFLICT: "Data providers disagree."
+};
+
 function researchCardHeadlineState(o) {
   const bucket = o.research_bucket || "";
   const pattern = o.developing_pattern || "NONE";
@@ -658,8 +728,8 @@ function researchCardHeadlineState(o) {
     if (pattern && pattern !== "NONE") return "DEVELOPING";
     return "WATCH";
   }
-  if (bucket === "DATA_INSUFFICIENT") return "DATA_INSUFFICIENT";
-  if (bucket === "CONFLICT") return "CONFLICT";
+  if (bucket === "DATA_INSUFFICIENT") return "Needs data";
+  if (bucket === "CONFLICT") return "Conflict";
   return bucket === "NOT_INTERESTING" ? "WATCH" : (bucket || "WATCH");
 }
 
@@ -669,34 +739,40 @@ const PATTERN_PLAIN = {
   RELATIVE_STRENGTH_ROTATION: "The stock is leading versus both the index and its official sector.",
   FUTURES_STRUCTURE: "The futures-versus-spot relationship has changed.",
   PRE_BREAKOUT_COMPRESSION: "Price is tightening near an important level, without a confirmed break yet.",
+  PRE_BREAKOUT_COMPRESSION_CANDIDATE: "Compression candidate — not multi-day proof.",
   FAILED_BREAKDOWN_RECLAIM: "A recent breakdown failed to hold and price has come back.",
   NONE: "No named developing pattern is present."
 };
 
-async function runDailyResearch() {
-  const symbolsRaw = document.getElementById("research-symbols").value.trim();
-  const btn = document.getElementById("research-btn");
-  const results = document.getElementById("research-results");
-  btn.disabled = true;
-  results.innerHTML = "";
-  results.appendChild(el("p", { class: "hint", text: "researching " + (symbolsRaw ? symbolsRaw : "the default universe") + "…" }));
-
-  let data = null;
-  try {
-    const url = apiUrl("/api/research/daily") + (symbolsRaw ? "?symbols=" + encodeURIComponent(symbolsRaw) : "");
-    const resp = await fetch(url);
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}));
-      throw new Error(body.detail ? JSON.stringify(body.detail) : ("request failed (" + resp.status + ")"));
-    }
-    data = await resp.json();
-  } catch (err) {
-    results.innerHTML = "";
-    results.appendChild(el("p", { class: "hint", text: "DAILY RESEARCH FAILED: " + err.message }));
-    btn.disabled = false;
+function updateScanProgress(job) {
+  const line = document.getElementById("scan-progress-line");
+  const last = document.getElementById("last-scan-line");
+  if (!line) return;
+  if (!job || job.status === "NONE") {
+    line.textContent = "Ready to scan the market";
+    if (last) last.textContent = "Last scan: none yet";
     return;
   }
-  btn.disabled = false;
+  if (job.status === "QUEUED" || job.status === "RUNNING") {
+    const total = job.total || 0;
+    const processed = job.processed || 0;
+    line.textContent = "Market scan running" + (total ? ("  " + processed + " / " + total + " checked") : "");
+    return;
+  }
+  if (job.status === "FAILED") {
+    line.textContent = "Scan could not finish" + (job.error ? (" — " + job.error) : "");
+    return;
+  }
+  line.textContent = "Scan complete";
+  if (last && job.result && job.result.generated_at) {
+    last.textContent = "Last scan: " + new Date(job.result.generated_at).toLocaleString();
+  }
+}
+
+function renderDiscoverResults(data) {
+  const results = document.getElementById("research-results");
+  const btn = document.getElementById("research-btn");
+  if (btn) btn.disabled = false;
   results.innerHTML = "";
 
   // Header: date/time, market status, freshness. No run-level "data age"
@@ -724,7 +800,12 @@ async function runDailyResearch() {
     if (cov.stage1_attempted === null) {
       covBlock.appendChild(el("p", { class: "chart-hint", text: "EXPLICIT SYMBOL QUERY -- not a whole-market F&O scan. Names in this query: " + (data.universe ? data.universe.length : cov.universe_count) }));
     } else {
+      covBlock.appendChild(el("p", { class: "chart-hint", text: "Universe source: " + (data.universe_source || "upstox_instrument_master.NSE_FO_equity_underlyings") }));
       covBlock.appendChild(el("p", { class: "chart-hint", text: "DEFAULT WHOLE F&O SCAN -- Universe: " + cov.universe_count + " F&O equities" }));
+      covBlock.appendChild(el("p", { class: "chart-hint", text: "F&O ban list: unknown — no verified source is wired" }));
+      if (data.stage1_cap_applied) {
+        covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 1 survivor cap applied -- " + data.stage1_truncated_count + " matching names were not promoted to Stage 2. This is a provider-safety limit, not a claim they were uninteresting." }));
+      }
     }
     if (cov.stage1_attempted !== null) {
       covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 1: " + cov.stage1_successful + " / " + cov.stage1_attempted + " evaluated" }));
@@ -763,6 +844,11 @@ async function runDailyResearch() {
         snap.successful_symbols + "/" + snap.requested_symbols + " symbols successfully analyzed" +
         (snap.failed_symbols ? " (" + snap.failed_symbols + " unavailable)" : ""),
     }));
+    snapBlock.appendChild(el("p", {
+      class: "chart-hint",
+      text: "Timing -- Stage 1: " + (snap.stage1_seconds || 0).toFixed(1) + "s  ·  Stage 2: " + (snap.stage2_seconds || 0).toFixed(1) +
+        "s  ·  avg Stage 2 latency: " + (snap.avg_stage2_latency_seconds || 0).toFixed(1) + "s  ·  " + (snap.news_timing_note || ""),
+    }));
     results.appendChild(snapBlock);
   }
 
@@ -770,29 +856,36 @@ async function runDailyResearch() {
   // valid developing names is a correct result -- never manufacture
   // EARLY_SETUP. Ranked shortlist remains available below as an
   // explainable sort of gated names, not an opportunity score.
-  function renderResearchCard(o, parent) {
+    function renderResearchCard(o, parent) {
       const headline = researchCardHeadlineState(o);
       const card = el("div", { class: "simple-card list-block", style: "margin-bottom:12px" });
-      card.appendChild(el("h2", { text: o.symbol + "  --  " + o.contract_right + " " + o.contract_strike + (o.research_bucket ? "  [" + o.research_bucket + "]" : "") }));
-      card.appendChild(el("p", { style: "font-weight:700", text: headline === "DEVELOPING" ? "DEVELOPING" : headline }));
-      card.appendChild(el("p", { class: "chart-hint", text: "Current spot: " + (o.current_spot || "n/a") + "  ·  Contract expiry: " + (o.contract_expiry || "n/a") + "  ·  Contract LTP: " + (o.contract_ltp !== null ? "₹" + o.contract_ltp : "n/a") }));
-      const whyWatch = PATTERN_PLAIN[o.developing_pattern] || o.why_investigate_now || o.what_is_developing;
-      card.appendChild(el("p", { text: "Why we're watching: " + whyWatch }));
-      if (o.confirming_evidence && o.confirming_evidence.length) {
-        card.appendChild(el("p", { style: "font-weight:600;margin-top:4px", text: "Supporting evidence" }));
-        const ul = el("ul", { class: "hint", style: "margin:0" });
-        o.confirming_evidence.forEach((x) => ul.appendChild(el("li", { text: x })));
-        card.appendChild(ul);
-      }
-      card.appendChild(el("p", { class: "chart-hint", text: "Still missing: " + o.what_has_not_happened_yet }));
-      if (o.what_would_confirm) card.appendChild(el("p", { class: "chart-hint", text: "Confirm if: " + o.what_would_confirm }));
-      if (o.what_invalidates) card.appendChild(el("p", { class: "chart-hint", text: "Invalid if: " + o.what_invalidates }));
-      card.appendChild(el("p", { text: "Contract: " + o.liquidity_grade.toUpperCase() }));
-      card.appendChild(el("p", { text: o.thesis }));
-      if (o.why_investigate_now) card.appendChild(el("p", { style: "font-weight:600", text: "WHY INVESTIGATE NOW: " + o.why_investigate_now }));
+      card.appendChild(el("h3", { text: o.symbol }));
+      card.appendChild(el("p", { style: "font-weight:700", text: headline === "DEVELOPING" ? "Developing" : headline }));
+      card.appendChild(el("p", { text: (o.why_watching || o.why_investigate_now || PATTERN_PLAIN[o.developing_pattern] || "Relative strength / structure to review") }));
+      card.appendChild(el("p", { style: "font-weight:700", text: "Why interesting" }));
+      const why = el("ul", { class: "hint" });
+      why.appendChild(el("li", { text: o.what_is_happening || PATTERN_PLAIN[o.developing_pattern] || o.what_is_developing || "n/a" }));
+      if (o.promoted_because) why.appendChild(el("li", { text: o.promoted_because }));
+      card.appendChild(why);
+      card.appendChild(el("p", { style: "font-weight:700", text: "Main blocker" }));
+      card.appendChild(el("ul", { class: "hint" }, [el("li", { text: o.what_is_missing || o.what_has_not_happened_yet || "None identified" })]));
+      card.appendChild(el("p", { style: "font-weight:700", text: "Confirm when" }));
+      card.appendChild(el("ul", { class: "hint" }, [el("li", { text: o.what_would_confirm || "n/a" })]));
+      card.appendChild(el("p", { style: "font-weight:700", text: "Invalidated if" }));
+      card.appendChild(el("ul", { class: "hint" }, [el("li", { text: o.what_invalidates || "n/a" })]));
+      const openResearch = el("button", { class: "secondary", text: "RESEARCH" });
+      openResearch.addEventListener("click", () => {
+        document.getElementById("query").value = o.symbol;
+        document.getElementById("symbol-research").scrollIntoView({ behavior: "smooth" });
+        document.getElementById("analyze-btn").click();
+      });
+      card.appendChild(openResearch);
       const evidence = el("details", { style: "margin-top:8px" });
       evidence.appendChild(el("summary", { text: "View Evidence" }));
-      if (o.developing_pattern) evidence.appendChild(el("p", { class: "chart-hint", text: "DEVELOPING PATTERN: " + o.developing_pattern + "  ·  TIMING: " + (o.timing_stage || "n/a") + "  ·  MOVE CONTEXT: " + (o.move_context || "n/a") + "  ·  PRICE STAGE: " + o.early_stage_state + (o.already_moved ? "  ·  ALREADY MOVED" : "") }));
+      evidence.appendChild(el("p", { class: "chart-hint", text: "Current spot: " + (o.current_spot || "n/a") + "  ·  Contract: " + o.contract_right + " " + o.contract_strike + "  ·  expiry: " + (o.contract_expiry || "n/a") + "  ·  LTP: " + (o.contract_ltp !== null ? "₹" + o.contract_ltp : "n/a") }));
+      if (o.developing_pattern) evidence.appendChild(el("p", { class: "chart-hint", text: "DEVELOPING PATTERN: " + o.developing_pattern + "  ·  TIMING: " + (o.timing_stage || "n/a") + "  ·  MOVE CONTEXT: " + (o.move_context || "n/a") + "  ·  PRICE STAGE: " + o.early_stage_state + (o.already_moved ? "  ·  ALREADY MOVED" : "") + (o.research_state ? "  ·  RESEARCH STATE: " + o.research_state : "") }));
+      evidence.appendChild(el("p", { class: "chart-hint", text: "Options: " + (o.options_data_quality || "n/a") }));
+      evidence.appendChild(el("p", { class: "chart-hint", text: "News: " + (o.news_data_quality || "n/a") + " -- news is context, not a bullish/bearish vote" }));
       const badges = el("div", { style: "margin:4px 0" });
       [badge("DATA FRESHNESS", fs.state), o.research_bucket ? badge("RESEARCH BUCKET", o.research_bucket) : null, o.timing_stage ? badge("TIMING", o.timing_stage) : null, badge("EARLY-STAGE STATE", o.early_stage_state), badge("EVIDENCE COMPLETENESS", o.research_confidence), badge("FINAL DECISION", o.actionability), badge("CONTRACT QUALITY", o.contract_quality), badge("LIQUIDITY", o.liquidity_grade.toUpperCase()), badge("DECAY", o.decay_verdict), badge("EVENT RISK", o.event_risk), badge("MARKET CONTEXT", o.market_context)].filter(Boolean).forEach((b) => { b.style.marginRight = "6px"; badges.appendChild(b); });
       const multiDayBadges = el("div", { style: "margin:2px 0 4px" });
@@ -801,6 +894,7 @@ async function runDailyResearch() {
       evidence.appendChild(badges);
       evidence.appendChild(el("p", { class: "chart-hint", text: "WHAT IS DEVELOPING: " + o.what_is_developing }));
       evidence.appendChild(el("p", { class: "chart-hint", text: "WHAT HAS NOT HAPPENED YET: " + o.what_has_not_happened_yet }));
+      if (o.why_investigate_now) evidence.appendChild(el("p", { class: "chart-hint", text: "WHY INVESTIGATE NOW: " + o.why_investigate_now }));
       evidence.appendChild(el("p", { class: "chart-hint", text: "WHY NOT ALREADY EXTENDED: " + o.why_not_extended }));
       evidence.appendChild(el("p", { class: "chart-hint", text: "NEAREST IMPORTANT LEVEL: " + (o.nearest_important_level || "n/a") + (o.room_before_level_pct !== null ? "  (room before that level: " + o.room_before_level_pct + "%)" : "") }));
       evidence.appendChild(el("p", { class: "chart-hint", text: "MARKET CONTEXT: " + o.market_context + " -- " + o.market_context_detail }));
@@ -849,36 +943,49 @@ async function runDailyResearch() {
   if (regimeCard) {
     results.appendChild(el("p", { class: "chart-hint", text: regimeCard.market_context + " -- " + regimeCard.market_context_detail + " (copied from a gated Stage-2 symbol this run; not a synthesized whole-market score)." }));
   } else {
-    results.appendChild(el("p", { class: "chart-hint", text: "MARKET_REGIME_UNAVAILABLE -- no gated Stage-2 card this run to copy global context from." }));
+    results.appendChild(el("p", { class: "chart-hint", text: "Market regime unavailable — no gated Stage-2 card this run to copy context from." }));
   }
 
   if (data.zero_valid_early_opportunities) {
-    results.appendChild(el("p", { style: "font-weight:700;margin-top:6px", text: "ZERO VALID DEVELOPING SETUPS" }));
-    results.appendChild(el("p", { class: "hint", text: "No gated Stage-2 symbol currently classifies as HIGH_QUALITY_DEVELOPING or DEVELOPING. That is a valid research result, not a missing feature. Fresh news without a named structural pattern is listed under EVENTS TO MONITOR, not here." }));
+    const z = el("div", { "data-discover-filter": "developing" });
+    z.appendChild(el("p", { style: "font-weight:700;margin-top:6px", text: "Nothing compelling is developing" }));
+    z.appendChild(el("p", { class: "hint", text: "No gated Stage-2 symbol currently classifies as a developing setup. That is a valid research result. Fresh news without a named structural pattern is listed under Event Driven, not here." }));
+    results.appendChild(z);
   } else {
-    results.appendChild(el("h2", { text: "DEVELOPING NOW / DEVELOPING SETUPS", style: "margin-top:10px" }));
-    results.appendChild(el("p", { class: "hint", text: "Named structural pre-move situations. Not a prediction. Not BUY/SELL. News-only names are not listed here." }));
-    (data.developing_now || []).forEach((o) => renderResearchCard(o, results));
+    const d = el("div", { "data-discover-filter": "developing" });
+    d.appendChild(el("h2", { text: "DEVELOPING NOW", style: "margin-top:10px" }));
+    d.appendChild(el("p", { class: "hint", text: "Named structural pre-move situations. Not a prediction. Not BUY/SELL." }));
+    (data.developing_now || []).forEach((o) => renderResearchCard(o, d));
+    results.appendChild(d);
   }
+  const ev = el("div", { "data-discover-filter": "event" });
+  ev.appendChild(el("h2", { text: "EVENTS", style: "margin-top:12px" }));
   if (data.events_to_monitor && data.events_to_monitor.length) {
-    results.appendChild(el("h2", { text: "EVENTS TO MONITOR", style: "margin-top:12px" }));
-    results.appendChild(el("p", { class: "hint", text: "Fresh material news without a named structural development pattern. Monitor transmission; this is not automatically an early setup." }));
-    data.events_to_monitor.forEach((o) => renderResearchCard(o, results));
+    ev.appendChild(el("p", { class: "hint", text: "Fresh material news without a named structural development pattern." }));
+    data.events_to_monitor.forEach((o) => renderResearchCard(o, ev));
+  } else {
+    ev.appendChild(el("p", { class: "hint", text: "No event-driven names in this scan." }));
   }
+  results.appendChild(ev);
 
-  function renderBucketSection(title, items) {
-    if (!items || !items.length) return;
-    results.appendChild(el("h2", { text: title, style: "margin-top:12px" }));
-    items.forEach((o) => renderResearchCard(o, results));
+  function renderBucketSection(title, items, filterKey, emptyText) {
+    const wrap = el("div");
+    if (filterKey) wrap.setAttribute("data-discover-filter", filterKey);
+    wrap.appendChild(el("h2", { text: title, style: "margin-top:12px" }));
+    if (!items || !items.length) {
+      wrap.appendChild(el("p", { class: "hint", text: emptyText }));
+    } else {
+      items.forEach((o) => renderResearchCard(o, wrap));
+    }
+    results.appendChild(wrap);
   }
-  renderBucketSection("ALREADY MOVED (gated Stage-2)", data.already_moved);
+  renderBucketSection("EXTENDED", [].concat(data.already_moved || [], data.extended || []), "extended", "No extended or already-moved names in this scan.");
   if (data.already_moved_rejections && data.already_moved_rejections.length) {
     results.appendChild(el("p", { class: "chart-hint", text: "Also rejected at gate/Stage-1 as already extended: " + data.already_moved_rejections.join(", ") }));
   }
-  renderBucketSection("CONFIRMED (timing may already be late)", data.confirmed);
-  renderBucketSection("EXTENDED", data.extended);
-  renderBucketSection("CONFLICT", data.conflict);
-  renderBucketSection("DATA INSUFFICIENT", data.data_insufficient);
+  renderBucketSection("CONFIRMED", [].concat(data.confirmation_pending || [], data.confirmed || []), "confirmed", "No confirmed or waiting-for-confirmation names in this scan.");
+  renderBucketSection("CONFLICTS", data.conflict, "conflict", "No conflicting names in this scan.");
+  renderBucketSection("NEEDS DATA", data.data_insufficient, "data", "No names were held solely for missing data in this scan.");
 
   if (data.no_high_conviction) {
     const headline = data.coverage && data.coverage.classification === "POOR" ? "RESEARCH INCOMPLETE" : "NO HIGH-CONVICTION STRUCTURAL SHORTLIST TODAY";
@@ -928,6 +1035,62 @@ async function runDailyResearch() {
     rejectedDetails.appendChild(ul);
     results.appendChild(rejectedDetails);
   }
+}
+
+async function pollDiscoverJob() {
+  const resp = await fetch(apiUrl("/api/research/jobs/latest"));
+  const job = await resp.json();
+  updateScanProgress(job);
+  if (job.status === "COMPLETE" && job.result) {
+    renderDiscoverResults(job.result);
+    return true;
+  }
+  if (job.status === "FAILED") {
+    const results = document.getElementById("research-results");
+    results.innerHTML = "";
+    results.appendChild(el("p", { class: "hint", text: "Market scan could not finish: " + (job.error || "unknown error") }));
+    document.getElementById("research-btn").disabled = false;
+    return true;
+  }
+  return job.status !== "QUEUED" && job.status !== "RUNNING";
+}
+
+async function runDailyResearch() {
+  const symbolsRaw = document.getElementById("research-symbols").value.trim();
+  const btn = document.getElementById("research-btn");
+  const results = document.getElementById("research-results");
+  btn.disabled = true;
+  results.innerHTML = "";
+  results.appendChild(el("p", { class: "hint", text: "Starting market scan…" }));
+  try {
+    const url = apiUrl("/api/research/jobs/discover") + (symbolsRaw ? "?symbols=" + encodeURIComponent(symbolsRaw) : "");
+    const resp = await fetch(url, { method: "POST" });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail ? JSON.stringify(body.detail) : ("request failed (" + resp.status + ")"));
+    }
+    const job = await resp.json();
+    updateScanProgress(job);
+  } catch (err) {
+    results.innerHTML = "";
+    results.appendChild(el("p", { class: "hint", text: "Could not start the market scan: " + err.message }));
+    btn.disabled = false;
+    return;
+  }
+  if (discoverPollTimer) clearInterval(discoverPollTimer);
+  const tick = async () => {
+    try {
+      const done = await pollDiscoverJob();
+      if (done && discoverPollTimer) {
+        clearInterval(discoverPollTimer);
+        discoverPollTimer = null;
+      }
+    } catch (err) {
+      document.getElementById("scan-progress-line").textContent = "Progress check failed: " + err.message;
+    }
+  };
+  await tick();
+  discoverPollTimer = setInterval(tick, 800);
 }
 
 document.getElementById("research-btn").addEventListener("click", runDailyResearch);
@@ -1447,6 +1610,71 @@ document.getElementById("ipo-compare-query").addEventListener("keydown", (e) => 
 // top-level render
 // ============================================================
 
+async function requestAiExplain(data) {
+  const body = document.querySelector("#panel-ai-explain .body");
+  if (!body) return;
+  const btn = document.getElementById("explain-simply-btn");
+  body.innerHTML = "";
+  body.appendChild(el("p", { class: "chart-hint", text: "Asking the optional local model to paraphrase TIRE evidence…" }));
+  if (btn) body.appendChild(btn);
+  const v = data.visual || {};
+  const facts = {
+    symbol: data.parsed_symbol || data.query || "",
+    state: data.research_state || v.research_state || "UNKNOWN",
+    observation: v.development ? (v.development.what_is_developing || "") : "No named developing pattern.",
+    supporting_evidence: (v.development && v.development.supporting_evidence) ? v.development.supporting_evidence.slice(0, 6) : [],
+    conflicting_evidence: (v.development && v.development.conflicting_evidence) ? v.development.conflicting_evidence.slice(0, 6) : [],
+    missing_evidence: v.development ? [v.development.what_is_missing || ""] : [],
+    confirmation: v.development ? (v.development.confirm_if || "") : "",
+    invalidation: v.development ? (v.development.invalidate_if || "") : "",
+  };
+  const fallback = function (note) {
+    body.innerHTML = "";
+    body.appendChild(el("p", { class: "chart-hint", text: note || "AI explanation unavailable — showing TIRE's evidence summary." }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "In simple terms" }));
+    body.appendChild(el("p", { text: facts.observation }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "Why it matters" }));
+    body.appendChild(el("p", { text: v.development ? (v.development.why_it_matters || facts.state) : facts.state }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "What's missing" }));
+    body.appendChild(el("p", { text: (facts.missing_evidence && facts.missing_evidence[0]) || "n/a" }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "What confirms it" }));
+    body.appendChild(el("p", { text: facts.confirmation || "n/a" }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "What invalidates it" }));
+    body.appendChild(el("p", { text: facts.invalidation || "n/a" }));
+    body.appendChild(el("p", { class: "chart-hint", text: "AI explanation based on TIRE evidence. The deterministic engine is the authority." }));
+    if (btn) { enableExplainSimply(); body.appendChild(btn); }
+  };
+  try {
+    const resp = await fetch(apiUrl("/api/research/explain"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ facts: facts, source_evidence_ids: ["E1", "E2", "E3"] }),
+    });
+    const out = await resp.json();
+    if (!out.ok || !out.explanation) {
+      fallback("AI explanation unavailable — showing TIRE's evidence summary.");
+      return;
+    }
+    const x = out.explanation;
+    body.innerHTML = "";
+    body.appendChild(el("p", { style: "font-weight:700", text: "In simple terms" }));
+    body.appendChild(el("p", { text: x.summary || "" }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "Why it matters" }));
+    body.appendChild(el("p", { text: x.developing_observation || facts.observation }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "What's missing" }));
+    body.appendChild(el("p", { text: (x.missing_evidence && x.missing_evidence.length) ? x.missing_evidence.join(" ") : "n/a" }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "What confirms it" }));
+    body.appendChild(el("p", { text: x.confirmation_condition || facts.confirmation || "n/a" }));
+    body.appendChild(el("p", { style: "font-weight:700", text: "What invalidates it" }));
+    body.appendChild(el("p", { text: x.invalidation_condition || facts.invalidation || "n/a" }));
+    if (x.data_quality_note) body.appendChild(el("p", { class: "chart-hint", text: x.data_quality_note }));
+    body.appendChild(el("p", { class: "chart-hint", text: "AI explanation based on TIRE evidence." }));
+    if (btn) { enableExplainSimply(); body.appendChild(btn); }
+  } catch (e) {
+    fallback("AI explanation unavailable — showing TIRE's evidence summary.");
+  }
+}
+
 function renderDashboard(data) {
   document.getElementById("manual-refresh-btn").disabled = false;
   document.getElementById("last-analysis-label").textContent =
@@ -1468,6 +1696,8 @@ function renderDashboard(data) {
   }
 
   const v = data.visual;
+  lastResearchDashboard = data;
+  enableExplainSimply();
   document.getElementById("report").style.display = "block";
 
   renderUnderlyingSummary(data);
@@ -1925,21 +2155,27 @@ function renderResearchContext(data) {
   const dev = v.development;
   const blk = v.blockers;
 
-  body.appendChild(el("p", { style: "font-weight:700", text: "RESEARCH STATE: " + (data.research_state || (v.research_state || "UNKNOWN")) }));
-  body.appendChild(el("p", { class: "chart-hint", text: "Research maturity of the situation. Not a buy/sell instruction. Compatibility decision (TRADEABLE/WATCH/NO_TRADE) is demoted below." }));
+  body.appendChild(el("p", { style: "font-weight:700", text: "What is happening: " + (STATE_PLAIN[data.research_state || (v.research_state || "UNKNOWN")] || (data.research_state || v.research_state || "UNKNOWN")) }));
+  body.appendChild(el("p", { class: "chart-hint", text: "Research maturity of the situation. Not a buy/sell instruction. Compatibility decision is demoted below." }));
 
   if (blk && blk.primary && blk.primary.blocker_class !== "NONE") {
-    body.appendChild(el("p", { style: "font-weight:700;margin-top:10px;color:var(--bad)", text: "PRIMARY BLOCKER: " + blk.primary.blocker_class }));
+    const lead = BLOCKER_PLAIN[blk.primary.blocker_class] || blk.primary.blocker_class;
+    body.appendChild(el("p", { style: "font-weight:700;margin-top:10px;color:var(--bad)", text: "MAIN BLOCKER: " + lead }));
     body.appendChild(el("p", { text: blk.primary.explanation }));
     if (blk.secondary && blk.secondary.length) {
       body.appendChild(el("p", { class: "chart-hint", text: "Also true right now (secondary, not the main reason):" }));
       blk.secondary.forEach((s) => {
-        body.appendChild(el("p", { class: "chart-hint", text: "\u2022 " + s.blocker_class + ": " + s.explanation }));
+        body.appendChild(el("p", { class: "chart-hint", text: "\u2022 " + (BLOCKER_PLAIN[s.blocker_class] || s.blocker_class) + " " + s.explanation }));
       });
     }
-    if (blk.missing_confirmation) {
+    if (blk.missing_confirmation && blk.primary.blocker_class !== "CONTRACT_UNUSABLE" && blk.primary.blocker_class !== "INSUFFICIENT_HISTORY") {
       body.appendChild(el("p", { class: "chart-hint", text: "Confirmation still missing: " + blk.missing_confirmation }));
+    } else if (blk.missing_confirmation) {
+      body.appendChild(el("p", { class: "chart-hint", text: "Also incomplete (not the main blocker): " + blk.missing_confirmation }));
     }
+  }
+  if (v.futures && v.futures.no_futures_reason) {
+    body.appendChild(el("p", { style: "margin-top:8px", text: "Futures: " + v.futures.no_futures_reason }));
   }
 
   const ext = v.extension_distance;
@@ -1963,7 +2199,14 @@ function renderResearchContext(data) {
     body.appendChild(el("p", { class: "chart-hint", text: "Evidence freshness: " + (dev.freshness_note || "") }));
   }
 
-  body.appendChild(el("p", { style: "font-weight:700;margin-top:10px", text: "SUPPORTING EVIDENCE / STREAMS" }));
+  if (v.historical_structure) {
+    const hs = v.historical_structure;
+    body.appendChild(el("p", { style: "font-weight:700;margin-top:10px", text: "HISTORICAL STRUCTURE" }));
+    body.appendChild(el("p", { class: "chart-hint", text: hs.detail || hs.status }));
+    if (hs.status === "INSUFFICIENT_HISTORY") {
+      body.appendChild(el("p", { class: "chart-hint", text: "Multi-day compression is not claimed — history is incomplete." }));
+    }
+  }
 
   if (streams.length) {
     const ul = el("ul", { class: "hint" });
@@ -2818,9 +3061,10 @@ function renderFutures(futures) {
   const body = document.querySelector("#panel-global .body");
   body.appendChild(el("h2", { text: "Futures" }));
   if (!futures || futures.instrument_key === null) {
-    body.appendChild(el("p", { class: "chart-hint", text: "no futures resolved for this underlying" }));
     if (futures && futures.no_futures_reason) {
-      body.appendChild(el("p", { class: "chart-hint", text: "Why: " + futures.no_futures_reason }));
+      body.appendChild(el("p", { text: futures.no_futures_reason }));
+    } else {
+      body.appendChild(el("p", { class: "chart-hint", text: "no futures resolved for this underlying" }));
     }
     return;
   }
@@ -3497,7 +3741,49 @@ async function loadSystemStatus() {
     if (marketLine) marketLine.textContent = "Market Status: status fetch failed -- " + e;
   }
 }
-loadSystemStatus();
+loadSystemStatus().finally(() => {
+  document.querySelectorAll(".primary-nav [data-jump]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = document.getElementById(btn.getAttribute("data-jump"));
+      if (target) target.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+  const filters = document.getElementById("discover-filters");
+  if (filters) {
+    filters.addEventListener("click", (ev) => {
+      const chip = ev.target.closest("[data-filter]");
+      if (!chip) return;
+      const key = chip.getAttribute("data-filter");
+      document.querySelectorAll("#research-results [data-discover-filter]").forEach((node) => {
+        node.style.display = (key === "all" || node.getAttribute("data-discover-filter") === key) ? "" : "none";
+      });
+    });
+  }
+  if (!document.body.dataset.explainBound) {
+    document.body.dataset.explainBound = "1";
+    document.body.addEventListener("click", (ev) => {
+      if (!ev.target.closest("#explain-simply-btn")) return;
+      if (lastResearchDashboard) requestAiExplain(lastResearchDashboard);
+    });
+  }
+  const symbols = document.getElementById("research-symbols");
+  if (symbols) {
+    fetch(apiUrl("/api/research/jobs/latest")).then((r) => r.json()).then((job) => {
+      updateScanProgress(job);
+      if (job.status === "COMPLETE" && job.result) renderDiscoverResults(job.result);
+      else if (job.status === "QUEUED" || job.status === "RUNNING") {
+        if (discoverPollTimer) clearInterval(discoverPollTimer);
+        discoverPollTimer = setInterval(async () => {
+          const done = await pollDiscoverJob();
+          if (done && discoverPollTimer) { clearInterval(discoverPollTimer); discoverPollTimer = null; }
+        }, 800);
+      } else {
+        document.getElementById("research-results").innerHTML = "";
+        document.getElementById("research-results").appendChild(el("p", { class: "hint", text: "Ready to scan the market" }));
+      }
+    }).catch(() => {});
+  }
+});
 </script>
 </body>
 </html>

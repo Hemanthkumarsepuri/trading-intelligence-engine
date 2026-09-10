@@ -820,6 +820,18 @@ class SectorContextVisual(BaseModel):
     detail: str
 
 
+class HistoricalStructureView(BaseModel):
+    status: str
+    session_count: int
+    completed_session_count: int
+    atr_pct: Decimal | None = None
+    multi_day_range_pct: Decimal | None = None
+    multi_day_compression: bool = False
+    near_lookback_high: bool = False
+    near_lookback_low: bool = False
+    detail: str = ""
+
+
 class VisualData(BaseModel):
     price_chart: PriceChartData
     option_chain: OptionChainVisual
@@ -849,6 +861,7 @@ class VisualData(BaseModel):
     delivery: DeliveryVisual | None = None
     institutional_flows: InstitutionalFlowVisual | None = None
     sector: SectorContextVisual | None = None
+    historical_structure: HistoricalStructureView | None = None
 
 
 _APPROACHING_EXTENSION_WITHIN_PCT = Decimal("1.5")
@@ -1077,4 +1090,19 @@ def build_visual_data(report: OptionsIntelligenceReport) -> VisualData:
         extension_distance=_build_extension_distance(report),
         sample_breadth=sample_breadth, delivery=delivery, institutional_flows=flows,
         sector=_build_sector_context(report),
+        historical_structure=(
+            HistoricalStructureView(
+                status=report.historical_structure.status.value,
+                session_count=report.historical_structure.session_count,
+                completed_session_count=report.historical_structure.completed_session_count,
+                atr_pct=report.historical_structure.atr_pct,
+                multi_day_range_pct=report.historical_structure.multi_day_range_pct,
+                multi_day_compression=report.historical_structure.multi_day_compression,
+                near_lookback_high=report.historical_structure.near_lookback_high,
+                near_lookback_low=report.historical_structure.near_lookback_low,
+                detail=report.historical_structure.detail,
+            )
+            if report.historical_structure is not None
+            else None
+        ),
     )

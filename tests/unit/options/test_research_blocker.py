@@ -70,6 +70,21 @@ def test_kaynes_style_case_primary_blocker_is_contract_unusable_not_confirmation
     assert not any(s.blocker_class == BlockerClass.CONTRACT_UNUSABLE for s in result.secondary)
 
 
+def test_kaynes_contract_unusable_outranks_insufficient_history() -> None:
+    decision = DecisionResult(
+        decision=FinalDecision.NO_TRADE,
+        assessment=_assessment(option_quality=QualityLevel.INSUFFICIENT, liquidity_quality=QualityLevel.INSUFFICIENT),
+        reasoning="no sufficiently liquid option candidate exists for this bias",
+    )
+    result = determine_blockers(
+        decision=decision, candles_are_current=True, chain_is_current=True, quote_is_current=True,
+        day_change_pct=Decimal("0.1"), development=_FUTURES_STRUCTURE_NARRATIVE,
+        historical_insufficient=True,
+    )
+    assert result.primary.blocker_class == BlockerClass.CONTRACT_UNUSABLE
+    assert any(s.blocker_class == BlockerClass.INSUFFICIENT_HISTORY for s in result.secondary)
+
+
 def test_data_insufficient_always_wins() -> None:
     decision = DecisionResult(
         decision=FinalDecision.DATA_INSUFFICIENT,

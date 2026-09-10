@@ -168,6 +168,17 @@ class ResearchScanSnapshot(_FrozenModel):
     coverage: ResearchCoverage
     per_symbol_freshness: list[SymbolFreshnessRecord] = Field(default_factory=list)
     generated_at: datetime
+    universe_source: str = "upstox_instrument_master.NSE_FO_equity_underlyings"
+    fno_ban_status: str = "FNO_BAN_STATUS_UNKNOWN"
+    universe_discovery_seconds: float = 0.0
+    stage1_seconds: float = 0.0
+    stage2_seconds: float = 0.0
+    assembly_seconds: float = 0.0
+    avg_stage2_latency_seconds: float = 0.0
+    survivor_cap_applied: bool = False
+    truncated_at_stage1: int = 0
+    index_relative_strength_available: bool = False
+    news_timing_note: str = "News fetch is inside per-symbol Stage 2; not a separate timed stage."
 
 
 class ResearchRunRecord(_FrozenModel):
