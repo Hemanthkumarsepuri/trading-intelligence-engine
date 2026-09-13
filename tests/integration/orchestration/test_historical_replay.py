@@ -34,7 +34,7 @@ from app.orchestration.historical_replay import (
     replay_symbol_session,
     replay_symbol_window,
 )
-from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
+from app.orchestration.options_intelligence_pipeline import Repositories
 from app.persistence.jsonl_file import (
     JsonlCandleRepository,
     JsonlIvObservationRepository,
@@ -112,7 +112,7 @@ def test_walks_every_real_local_bar_in_the_session(tmp_path: Path) -> None:
     repo = _seed(tmp_path, candles)
     result = asyncio.run(replay_symbol_session(
         "RELIANCE", date(2026, 8, 27), candle_repository=repo, instrument_master=_MASTER,
-        repositories=_repositories(tmp_path), config=PipelineConfig(),
+        repositories=_repositories(tmp_path), config=None,
     ))
     assert result.symbol == "RELIANCE"
     assert result.session_date == date(2026, 8, 27)
@@ -131,7 +131,7 @@ def test_flat_synthetic_data_produces_no_observations(tmp_path: Path) -> None:
     repo = _seed(tmp_path, candles)
     result = asyncio.run(replay_symbol_session(
         "RELIANCE", date(2026, 8, 27), candle_repository=repo, instrument_master=_MASTER,
-        repositories=_repositories(tmp_path), config=PipelineConfig(),
+        repositories=_repositories(tmp_path), config=None,
     ))
     assert result.observations == []
 
@@ -147,7 +147,7 @@ def test_real_historical_data_produces_genuine_price_only_observations(tmp_path:
     repo = _seed(tmp_path, real_candles)
     result = asyncio.run(replay_symbol_session(
         "RELIANCE", date(2026, 8, 25), candle_repository=repo, instrument_master=_MASTER,
-        repositories=_repositories(tmp_path), config=PipelineConfig(),
+        repositories=_repositories(tmp_path), config=None,
     ))
     assert result.observations, "expected at least one real price-only observation from the real sample session"
     for obs in result.observations:
@@ -167,11 +167,11 @@ def test_replay_is_reproducible(tmp_path: Path) -> None:
     repositories = _repositories(tmp_path)
     first = asyncio.run(replay_symbol_session(
         "RELIANCE", date(2026, 8, 27), candle_repository=repo, instrument_master=_MASTER,
-        repositories=repositories, config=PipelineConfig(),
+        repositories=repositories, config=None,
     ))
     second = asyncio.run(replay_symbol_session(
         "RELIANCE", date(2026, 8, 27), candle_repository=repo, instrument_master=_MASTER,
-        repositories=repositories, config=PipelineConfig(),
+        repositories=repositories, config=None,
     ))
     assert first.bars_evaluated == second.bars_evaluated
     assert len(first.observations) == len(second.observations)
@@ -183,7 +183,7 @@ def test_window_replay_covers_every_real_trading_session_in_range(tmp_path: Path
     repo = _seed(tmp_path, candles)
     result = asyncio.run(replay_symbol_window(
         "RELIANCE", date(2026, 8, 27), date(2026, 8, 31), candle_repository=repo, instrument_master=_MASTER,
-        repositories=_repositories(tmp_path), config=PipelineConfig(),
+        repositories=_repositories(tmp_path), config=None,
     ))
     assert [r.session_date for r in result.session_results] == [date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 31)]
 

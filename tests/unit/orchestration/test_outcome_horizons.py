@@ -177,25 +177,35 @@ def test_confirmation_not_confirmed_when_breakeven_never_reached() -> None:
     assert result.confirmation_outcome == ConfirmationOutcome.NOT_CONFIRMED
 
 
-def test_confirmation_unknown_when_no_breakeven_on_the_observation() -> None:
-    obs = _observation(breakeven=None)
+def test_confirmation_unknown_when_neither_breakeven_nor_level_recorded() -> None:
+    obs = _observation(breakeven=None, nearest_level_kind=None, nearest_level_value=None)
     candles = _window_candles(obs, highs=["1005", "1010", "1012", "1011"], lows=["1000", "1003", "1005", "1004"], closes=["1003", "1006", "1008", "1007"])
     result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
     assert result.confirmation_outcome == ConfirmationOutcome.UNKNOWN
 
 
-def test_invalidation_invalidated_when_bullish_support_is_broken() -> None:
-    obs = _observation(direction="BULLISH", spot="1000", nearest_level_kind="support", nearest_level_value="990")
-    candles = _window_candles(obs, highs=["1000", "998", "992", "994"], lows=["995", "990", "985", "990"], closes=["997", "992", "988", "992"])
+def test_confirmation_not_confirmed_when_only_breakeven_missing_but_level_holds() -> None:
+    """Confirmation now checks BOTH signals -- a real, recorded opposing
+    level that hasn't broken still yields NOT_CONFIRMED, never UNKNOWN,
+    even with no breakeven."""
+    obs = _observation(breakeven=None)  # default nearest_level_kind="resistance"/"1030" stays
+    candles = _window_candles(obs, highs=["1005", "1010", "1012", "1011"], lows=["1000", "1003", "1005", "1004"], closes=["1003", "1006", "1008", "1007"])
     result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
-    assert result.invalidation_outcome == InvalidationOutcome.INVALIDATED
+    assert result.confirmation_outcome == ConfirmationOutcome.NOT_CONFIRMED
 
 
-def test_invalidation_not_invalidated_when_level_holds() -> None:
-    obs = _observation(direction="BULLISH", spot="1000", nearest_level_kind="support", nearest_level_value="980")
-    candles = _window_candles(obs, highs=["1005", "1010", "1012", "1011"], lows=["1000", "998", "996", "997"], closes=["1003", "1006", "1008", "1007"])
+def test_invalidation_is_always_unknown_no_matter_what_price_does() -> None:
+    """95% sprint, Sprint 1 correctness fix: this architecture tracks only
+    the CONFIRMATION-relevant opposing level (see
+    `outcome_horizons._opposing_level_broken_through()`'s own docstring),
+    never a separate invalidation-side level -- `invalidation_outcome`
+    must stay honestly UNKNOWN regardless of what price does, never
+    fabricated from the confirmation level's own breach (that would
+    mislabel a real breakout as "invalidated")."""
+    obs = _observation(direction="BULLISH", spot="1000", nearest_level_kind="resistance", nearest_level_value="1010")
+    candles = _window_candles(obs, highs=["1005", "1015", "1025", "1022"], lows=["1000", "1005", "1015", "1018"], closes=["1003", "1012", "1022", "1020"])
     result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
-    assert result.invalidation_outcome == InvalidationOutcome.NOT_INVALIDATED
+    assert result.invalidation_outcome == InvalidationOutcome.UNKNOWN
 
 
 def test_invalidation_unknown_when_no_level_recorded() -> None:
@@ -203,6 +213,24 @@ def test_invalidation_unknown_when_no_level_recorded() -> None:
     candles = _window_candles(obs, highs=["1005", "1010", "1012", "1011"], lows=["1000", "998", "996", "997"], closes=["1003", "1006", "1008", "1007"])
     result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
     assert result.invalidation_outcome == InvalidationOutcome.UNKNOWN
+
+
+def test_confirmation_confirmed_when_the_opposing_level_is_broken_through() -> None:
+    """The real, corrected semantics: a BULLISH thesis's recorded nearest
+    RESISTANCE (the opposing obstacle) being broken through IS
+    confirmation, matching every named pattern's own documented
+    `confirm_if` text ("price holds beyond the nearby opposing level")."""
+    obs = _observation(direction="BULLISH", spot="1000", breakeven=None, nearest_level_kind="resistance", nearest_level_value="1010")
+    candles = _window_candles(obs, highs=["1005", "1015", "1025", "1022"], lows=["1000", "1005", "1015", "1018"], closes=["1003", "1012", "1022", "1020"])
+    result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
+    assert result.confirmation_outcome == ConfirmationOutcome.CONFIRMED
+
+
+def test_confirmation_not_confirmed_when_the_opposing_level_holds() -> None:
+    obs = _observation(direction="BULLISH", spot="1000", breakeven=None, nearest_level_kind="resistance", nearest_level_value="1030")
+    candles = _window_candles(obs, highs=["1005", "1008", "1010", "1009"], lows=["1000", "1003", "1005", "1004"], closes=["1003", "1006", "1008", "1007"])
+    result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
+    assert result.confirmation_outcome == ConfirmationOutcome.NOT_CONFIRMED
 
 
 def test_compute_all_horizons_returns_all_five_in_ascending_order() -> None:

@@ -2182,7 +2182,14 @@ function renderResearchContext(data) {
   if (ext) {
     body.appendChild(el("p", {
       class: "chart-hint", style: "margin-top:6px",
-      text: "Day move: " + (ext.day_change_pct >= 0 ? "+" : "") + ext.day_change_pct.toFixed(2) + "%  ·  Extended threshold: \u00b1" +
+      // 95% sprint browser UAT fix -- day_change_pct arrives as a JSON
+      // string (the API serializes Decimal fields as strings), so calling
+      // .toFixed() on it directly threw "TypeError: ... .toFixed is not
+      // a function" and broke this whole research-context render (found
+      // live via headed browser UAT, not a test). fmtPct() already does
+      // this safely everywhere else in this file (num() coercion + "n/a"
+      // fallback) -- reused here instead of a second, unsafe formatter.
+      text: "Day move: " + fmtPct(ext.day_change_pct) + "  ·  Extended threshold: \u00b1" +
         ext.extended_threshold_pct + "%  ·  Status: " + ext.status.replace(/_/g, " "),
     }));
   }

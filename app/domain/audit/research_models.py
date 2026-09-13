@@ -305,6 +305,17 @@ class ResearchObservation(_FrozenModel):
     # second evidence computation -- always copied verbatim from a field
     # `daily_research.py`'s own thesis-building already produced.
     missing_evidence: str | None = None
+    # 95% sprint, Sprint 2 -- the real, already-computed named development
+    # pattern (`DevelopmentPattern` value, e.g. "PRE_BREAKOUT_COMPRESSION",
+    # or "NONE") this observation was built from -- verbatim from
+    # `ResearchThesisView.developing_pattern` (live) or
+    # `DevelopmentNarrativeView.pattern` (price-only replay). This is the
+    # ONE field `app.orchestration.pattern_aggregation` groups by; adding
+    # it here (rather than parsing `thesis` free text) is what makes
+    # deterministic historical pattern aggregation possible without a
+    # second classification. `None` only for an older persisted record
+    # written before this field existed.
+    pattern: str | None = None
 
 
 class ResearchCheckpointLabel(str, Enum):

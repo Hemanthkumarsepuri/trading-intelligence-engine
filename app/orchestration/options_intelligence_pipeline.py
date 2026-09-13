@@ -710,6 +710,7 @@ async def analyze_symbol(
         spot=vwap_ema_spot, vwap_value=report.analysis.vwap_value if report.analysis else None,
         ema_value=report.analysis.ema50 if report.analysis else None,
     )
+    report.technical_levels = technical_levels
     report.level_classifications = classify_level_confluence(
         levels, technical_levels, near_pct_threshold=config.near_level_pct_threshold,
     )

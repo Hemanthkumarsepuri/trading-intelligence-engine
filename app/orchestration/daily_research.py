@@ -95,6 +95,7 @@ from app.orchestration.visual_data import (
     DirectionComparisonVisual,
     LevelView,
     SupportResistanceVisual,
+    TechnicalLevelView,
     VisualData,
 )
 from app.utils.time import ensure_utc, utc_now
@@ -889,6 +890,30 @@ def _nearest_opposing_level(candidate: _GatedCandidate) -> LevelView | None:
     own thesis direction -- see `_nearest_opposing_level_in()`."""
     sr = candidate.response.visual.support_resistance if candidate.response.visual else None
     return _nearest_opposing_level_in(candidate.direction, sr)
+
+
+def _nearest_opposing_technical_level(
+    direction: str, sr: SupportResistanceVisual | None, spot: Decimal | None,
+) -> TechnicalLevelView | None:
+    """95% sprint, Sprint 1 -- the price-only counterpart to
+    `_nearest_opposing_level_in()`: the nearest REAL candle-derived
+    (swing/VWAP/EMA) technical level standing in the way of a thesis in
+    `direction`, for use when there is no option chain at all (so
+    `sr.support`/`sr.resistance`, which are OI-structural, are honestly
+    empty -- see `options_intelligence_pipeline.py`'s stage-9 comment).
+    Reads `sr.technical_only` (`SupportResistanceVisual`'s own real,
+    already-computed list of candle-derived levels with no corroborating
+    OI concentration -- `_build_support_resistance()`'s existing,
+    unmodified logic; NOT a second technical-analysis engine). `None`
+    when no real technical level on the opposing side exists, or `spot`
+    is unavailable to rank distance -- never a guess."""
+    if sr is None or spot is None or spot == 0:
+        return None
+    wanted_kind = "resistance" if direction == "BULLISH" else "support"
+    candidates = [lv for lv in sr.technical_only if lv.kind == wanted_kind]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda lv: abs(lv.price - spot))
 
 
 def _headroom_pct(candidate: _GatedCandidate) -> Decimal | None:
@@ -2402,6 +2427,7 @@ def build_research_observation(
         coverage_classification=coverage_classification, thesis=thesis.thesis,
         structural_context=thesis.structural_context, participation_depth=thesis.participation_depth,
         relative_strength=thesis.relative_strength, pre_breakout_signal=thesis.pre_breakout_signal,
+        pattern=thesis.developing_pattern,
     )
 
 
@@ -2457,8 +2483,16 @@ def build_price_only_observation(
     if generated_at is None:
         return None
 
-    nearest_level = _nearest_opposing_level_in(direction, v.support_resistance)
-    spot = str(v.price_chart.candles[-1].close) if v.price_chart is not None and v.price_chart.candles else None
+    spot_decimal = v.price_chart.candles[-1].close if v.price_chart is not None and v.price_chart.candles else None
+    spot = str(spot_decimal) if spot_decimal is not None else None
+    # 95% sprint, Sprint 1 -- the OI-structural lookup
+    # (`_nearest_opposing_level_in()`) is honestly empty with no chain;
+    # the real candle-derived technical level is what this observation
+    # actually has (see `_nearest_opposing_technical_level()`'s own
+    # docstring). This is what lets a later outcome evaluation
+    # (`app.orchestration.outcome_horizons`) determine a genuine
+    # INVALIDATED/NOT_INVALIDATED result instead of UNKNOWN.
+    nearest_level = _nearest_opposing_technical_level(direction, v.support_resistance, spot_decimal)
 
     return ResearchObservation(
         run_id=run_id, audit_id=response.audit_id, generated_at=generated_at,
@@ -2480,7 +2514,7 @@ def build_price_only_observation(
         spot_at_observation=spot,
         contractual_expiry_breakeven=None,
         nearest_level_kind=nearest_level.kind if nearest_level is not None else None,
-        nearest_level_value=str(nearest_level.strike) if nearest_level is not None else None,
+        nearest_level_value=str(nearest_level.price) if nearest_level is not None else None,
         market_context=None, participation_note=None,
         coverage_classification=coverage_classification, thesis=development.what_is_developing,
         derivatives_evidence_available=False,
@@ -2488,6 +2522,7 @@ def build_price_only_observation(
             f"{development.what_is_missing} Historical option-chain/futures evidence is unavailable for this instant."
         ),
         source="REPLAY",
+        pattern=development.pattern,
     )
 
 

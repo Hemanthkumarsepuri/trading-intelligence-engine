@@ -62,7 +62,12 @@ from app.domain.options.price_oi_interpretation import BasisChangeObservation, P
 from app.domain.options.realized_volatility import RealizedVolatilityResult, VolatilityState
 from app.domain.options.research_blocker import BlockerAssessment
 from app.domain.options.sector_strength import SectorInfo, SectorRelativeStrength
-from app.domain.options.support_resistance import Level, LevelClassification, LevelStability
+from app.domain.options.support_resistance import (
+    Level,
+    LevelClassification,
+    LevelStability,
+    TechnicalLevel,
+)
 from app.domain.options.temporal_evidence import TemporalObservation
 from app.domain.options.term_structure import ExpirySelectionNote, TermStructure
 from app.domain.strategy.current_analysis import CurrentAnalysisResult
@@ -174,6 +179,19 @@ class OptionsIntelligenceReport:
     # docstring). Empty when technical levels couldn't be computed
     # (insufficient real candle history) -- never fabricated.
     level_classifications: list[LevelClassification] = field(default_factory=list)
+    # 95% sprint, Sprint 1 -- the real candle-derived (swing/VWAP/EMA)
+    # technical levels `technical_price_levels()`/`vwap_ema_levels()`
+    # already compute internally to build `level_classifications` above
+    # and the `PRE_BREAKOUT_COMPRESSION` proximity check, now ALSO kept
+    # here directly. Unlike `support_levels`/`resistance_levels` (OI/
+    # chain-derived, empty with no chain -- see stage 9's own comment),
+    # this list is populated purely from real M15 candles and is
+    # therefore available even for a price-only (no-derivatives) replay
+    # observation -- see `app.orchestration.daily_research
+    # .build_price_only_observation()`. Never a second TA engine: the
+    # SAME functions, called once, stored twice for two different real
+    # consumers.
+    technical_levels: list[TechnicalLevel] = field(default_factory=list)
 
     # Sprint 7A, Objective 3 -- multi-strike OI migration, informational
     # only (see app.domain.options.oi_migration's own docstring for why

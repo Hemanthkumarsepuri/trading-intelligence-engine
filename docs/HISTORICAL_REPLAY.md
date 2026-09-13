@@ -261,14 +261,34 @@ real contract ever evaluated" signal) and `missing_evidence: str | None
 = None`.
 
 **Verified end to end against the real sample data**, not just unit
-fixtures: replaying RELIANCE's real 2026-08-25 session produces 12
-genuine `PRE_BREAKOUT_COMPRESSION` / `EARLY_SETUP` / `BULLISH`
-observations, each with `selected_right=None`,
-`derivatives_evidence_available=False`, and a truthful thesis
-("Price is compressing near a real opposing level while structure has
-not yet broken.") that never claims derivatives confirmation
-(`tests/integration/orchestration/test_historical_replay.py::
+fixtures: replaying RELIANCE's real 2026-08-25 session produces genuine
+`PRE_BREAKOUT_COMPRESSION` / `EARLY_SETUP` / `BULLISH` observations, each
+with `selected_right=None`, `derivatives_evidence_available=False`, and a
+truthful thesis ("Price is compressing near a real opposing level while
+structure has not yet broken.") that never claims derivatives
+confirmation (`tests/integration/orchestration/test_historical_replay.py::
 test_real_historical_data_produces_genuine_price_only_observations`).
+
+### 5a. 95% sprint, Sprint 1 -- real technical levels, not just chain levels
+
+`nearest_level_kind`/`nearest_level_value` used to be `None` for every
+price-only observation, because the lookup reused
+`report.support_levels`/`resistance_levels` (chain-OI-derived only,
+honestly empty with no chain). The pipeline already separately computes
+real candle-based `technical_levels` internally
+(`technical_price_levels()` + `vwap_ema_levels()`, used for
+`level_classifications` and the `PRE_BREAKOUT_COMPRESSION` proximity
+check) — now also stored directly on the report
+(`OptionsIntelligenceReport.technical_levels`) and exposed via
+`VisualData.support_resistance.technical_only` (`_build_support_resistance()`,
+unmodified). `build_price_only_observation()` reads the nearest real
+technical level on the thesis's opposing side from there
+(`_nearest_opposing_technical_level()`) instead of the always-empty
+chain-only lookup — verified against the real sample data: real
+resistance values (e.g. `1306.14`, `1311.96`) now populate every
+`PRE_BREAKOUT_COMPRESSION` observation's `nearest_level_value`, not
+`None`. No second technical-analysis engine — same functions, called
+once, stored/exposed twice for two real consumers.
 
 ## 6. Outcome horizons + confirmation/invalidation split
 
@@ -292,38 +312,72 @@ Confirmation and invalidation are two **separate** deterministic
 outcomes, per Sections 18-19 (the existing live sweep folds an analogous
 pair of facts into one `progression` axis; this module keeps them apart):
 
-- `ConfirmationOutcome`: `CONFIRMED` / `NOT_CONFIRMED` / `UNKNOWN` — did
-  the window's real high/low actually reach the option's own
-  `contractual_expiry_breakeven`.
-- `InvalidationOutcome`: `INVALIDATED` / `NOT_INVALIDATED` / `UNKNOWN` —
-  did the window's real high/low actually break the observation's own
-  `nearest_level_kind`/`nearest_level_value`.
+- `ConfirmationOutcome`: `CONFIRMED` / `NOT_CONFIRMED` / `UNKNOWN` — CONFIRMED
+  when EITHER the window's real high/low reached the option's own
+  `contractual_expiry_breakeven` (contract-based observations) OR price
+  broke THROUGH the observation's own recorded nearest opposing level in
+  the thesis's favorable direction (available for price-only observations
+  too, since Sprint 1 -- see `_opposing_level_broken_through()`). Every
+  named pattern's own documented `confirm_if` text agrees ("price holds
+  beyond the nearby opposing level").
+- `InvalidationOutcome`: **honestly `UNKNOWN` always**, for now. 95% sprint
+  correctness fix: the earlier version of this module fed "opposing level
+  broken" into `InvalidationOutcome` -- backwards (a BULLISH thesis's
+  resistance breaking above IS the setup working, not failing; caught by
+  `tests/unit/orchestration/test_pattern_aggregation.py` before it could
+  mislabel a real breakout as "invalidated"). This architecture tracks
+  only that ONE confirmation-relevant opposing level, never a separate
+  "structure that must NOT break" invalidation-side level -- a real
+  INVALIDATED/NOT_INVALIDATED determination needs that second level,
+  which doesn't exist yet. Never guessed from an unrelated fact (Section
+  7 of the 95% sprint brief: "Otherwise: UNKNOWN. Never guess.") -- a
+  real, named, scoped follow-up.
 
 `UNKNOWN` (never a forced binary) whenever the original observation
-didn't record a breakeven/level to check in the first place — which is
-ALWAYS the case for a price-only observation's confirmation outcome (no
-contract, so no breakeven exists to check; honestly `UNKNOWN`, never
-fabricated as CONFIRMED or NOT_CONFIRMED). A price-only observation's
-`nearest_level_kind`/`nearest_level_value` are also currently `None`
-(Section 9's known follow-up below), so its invalidation outcome is
-likewise honestly `UNKNOWN` today rather than a genuine
-INVALIDATED/NOT_INVALIDATED determination.
+didn't record a breakeven/level to check in the first place.
 
-## 7. Measured performance (honest, not optimized)
+## 7. Measured performance -- 95% sprint, Sprint 2b fix (~27x)
 
-The replay integration test suite (9 tests, walking 20-546 real local
-bars across various session/window combinations, each a full
-`run_analysis()` pipeline call) measures roughly 5-8 minutes wall-clock
-on this machine. `JsonlCandleRepository` re-reads and re-parses its
-entire file on every `query()`/`latest()` call (documented as its own
-known trade-off in `persistence/jsonl_file.py`'s module docstring:
-"adequate for this product's real write rate... revisit if that
-changes") — replay is the first caller that queries it dozens of times
-per session walk rather than a few times per live analysis, so this cost
-is now visible where it wasn't before. Not optimized this phase (Section
-38 asks for "small controlled jobs," which this still is at
-single-symbol/single-window scale) — a real, worthwhile follow-up if
-replay is used at larger scale.
+**Before**: the 8-test replay integration suite (100-546 real local bars
+across various session/window combinations, each a full `run_analysis()`
+pipeline call) measured **481s** (8 minutes) wall-clock; a real
+100-bar/4-session window replay measured **308.3s** (~3.1s/bar).
+
+**Root cause, found by profiling `analyze_symbol()` for one real bar
+with `cProfile`, not guessed**: `cProfile` showed 3.0 of 3.2 real seconds
+inside the asyncio event loop's I/O wait
+(`_overlapped.GetQueuedCompletionStatus` on Windows) -- i.e., the process
+was genuinely SLEEPING, not computing. `PipelineConfig`'s default retry
+policy (`chain_fetch_attempts=3`/`chain_fetch_backoff_seconds=1.0`,
+`underlying_quote_fetch_attempts=2`/`...backoff_seconds=1.0`, used by
+`options_intelligence_pipeline._retry()`) exists to ride out a REAL live
+provider's transient network blips. `HistoricalReplayProvider`'s
+`ProviderUnavailable` is never transient -- every chain-fetch attempt
+(the main one, plus one per comparable expiry in the term-structure
+stage) sleeps a full `backoff_seconds` between guaranteed-to-fail
+retries, for zero possible benefit.
+
+The `JsonlCandleRepository` full-file-rescan hypothesis this section
+originally suspected was investigated FIRST (Sprint 2b's own
+`CachedCandleRepository`, `app/persistence/caching.py`) and measured to
+have **no detectable effect** on this dataset (~550 candles is too small
+for file I/O to matter) -- kept anyway since it is real, correct,
+harmless, and documented to matter more for a larger local candle store
+(Section 10's own "in-memory caching where safe"), but it was NOT the
+actual bottleneck. The real fix (`historical_replay
+._DEFAULT_REPLAY_CONFIG`, `chain_fetch_attempts=1`,
+`underlying_quote_fetch_attempts=1` -- "try once, fail fast," used only
+when a caller doesn't supply their own `PipelineConfig`) changes nothing
+about what a replay run can determine (a permanently-unavailable stream
+stays unavailable either way), only how much wall-clock time is spent
+finding that out.
+
+**After**: the same 100-bar/4-session window replay measures **11.2s**
+(~0.1s/bar) with byte-for-byte identical results (same 32 observations,
+same pattern, same `missing_evidence` coverage -- verified, not assumed).
+The 8-test replay integration suite now measures **21.5s**. The full
+project test suite (2002 tests as of this sprint) now runs in **83s**
+end to end, down from needing the slow replay suite run separately.
 
 ## 8. Testing
 
@@ -352,38 +406,76 @@ replay is used at larger scale.
   full-session bar-walk count, reproducibility, window-mode session
   enumeration, the honest zero-observations case (flat synthetic data),
   and — the actual proof — real observations from the real sample CSV.
-- Full pre-existing suite (1927 tests before this phase; 1956 with this
-  phase's new fast unit tests, run separately from the slower replay
-  integration file) + ruff + `mypy --strict` re-verified green after
-  every change in this phase, including every gap-closure edit.
+- `tests/unit/orchestration/test_pattern_aggregation.py` — pure counting
+  (exclusion of no-pattern observations, exact grouping, missing-outcome
+  defaults to PENDING never dropped, deterministic sort order), the
+  outcome-translation adapter's every branch (pending/insufficient/
+  follow-through/no-follow-through, and the "FAILED_SETUP never produced"
+  correctness guarantee), and one real end-to-end run over a JSONL-backed
+  repository.
+- `tests/unit/data/test_caching.py` — `CachedCandleRepository` hits the
+  backing repository exactly once across many repeated queries, returns
+  results identical to the uncached repository, preserves no-lookahead,
+  and invalidates correctly on write.
+- Full pre-existing suite (1927 tests before this phase) + this phase's
+  own new tests = **2002 tests, full suite, one run, 83s** (down from
+  needing the slow replay integration file run separately) + ruff +
+  `mypy --strict` re-verified green after every change in this phase,
+  including every gap-closure and correctness-fix edit.
 
-## 9. What this phase deliberately did NOT build
+## 10. Pattern aggregation -- 95% sprint, Sprint 2
+
+`app.orchestration.pattern_aggregation` -- "when this named pattern
+appeared historically, what happened afterward?" A lightweight,
+read-only, descriptive summary over already-persisted
+`ResearchObservation`s and their already-computed outcomes -- reuses
+`ResearchOutcomeStatus` (`PENDING`/`FOLLOW_THROUGH_OBSERVED`/
+`NO_FOLLOW_THROUGH`/`FAILED_SETUP`/`INSUFFICIENT_OUTCOME_DATA`) verbatim
+as ONE shared vocabulary for both live and replay observations, rather
+than inventing a second one. `aggregate_by_pattern()` is pure (no I/O,
+trivially testable); two small adapters resolve each source's own real
+outcome mechanism (`outcome_for_live_observation()` over real persisted
+checkpoints; `outcome_for_replay_observation()` over
+`outcome_horizons`'s own facts at the +5-session reference horizon).
+`ResearchObservation` gained one new additive field, `pattern: str |
+None`, populated verbatim from `ResearchThesisView.developing_pattern`
+(live) / `DevelopmentNarrativeView.pattern` (replay) -- the one field
+this aggregation groups by, never parsed from `thesis` free text.
+`FAILED_SETUP` is never produced for replay observations (Section 6's
+own `InvalidationOutcome` limitation -- no genuine invalidation-side
+level exists yet to justify it). Never a probability, win rate, or
+confidence -- exact counts only (`tests/unit/orchestration
+/test_pattern_aggregation.py`).
+
+## 11. Replay caching layer -- 95% sprint, Sprint 2b
+
+`app.persistence.caching.CachedCandleRepository` -- a read-through,
+in-memory cache wrapping any real `CandleRepository`, scoped to one
+caller-held instance (`replay_symbol_session()` constructs one per
+session). Investigated as the suspected replay-performance bottleneck
+(Section 7); measured to have no detectable effect on this dataset (the
+real bottleneck was retry/backoff sleep, not file I/O -- see Section 7),
+but kept: it is real, correct (no-lookahead preserved -- every call still
+filters to its own `as_of`; `tests/unit/data/test_caching.py`), harmless,
+and will matter more once a local candle store is large enough for
+`JsonlCandleRepository`'s per-call full-file re-read to become
+measurable on its own.
+
+## 12. What this phase deliberately did NOT build
 
 Per explicit scope agreement during this phase (documented, not silently
 dropped):
 
-- **Technical (candle-based) support/resistance is not yet exposed on a
-  price-only observation's `nearest_level_kind`/`nearest_level_value`.**
-  `report.support_levels`/`resistance_levels` (used by both the live
-  contract-based gate and, currently, the price-only gate's level
-  lookup) are chain-OI-derived only; the pipeline already separately
-  computes real candle-based `technical_levels`
-  (`technical_price_levels()` + `vwap_ema_levels()`, used internally for
-  `level_classifications` and for the `PRE_BREAKOUT_COMPRESSION`
-  pattern's own proximity check), but that series isn't yet threaded
-  through to `VisualData`/`build_price_only_observation()`. The
-  practical effect: a price-only observation's invalidation outcome
-  (Section 6 above) is honestly `UNKNOWN` today rather than a genuine
-  INVALIDATED/NOT_INVALIDATED read — never wrong, just less precise than
-  it could be. A real, named, scoped follow-up (add a `technical_levels`
-  field to the report and `VisualData`, then use it in the price-only
-  gate's level lookup instead of the chain-only `support_resistance`).
-- Aggregate pattern/quality reporting (Sections 22-23); market-regime and
-  sector-conditional analysis (Sections 26-27).
-- Any UI surface for replay results (Section 32 says expose API
-  structure only, not a UI, and this phase did not add new HTTP
-  endpoints either — the mechanism is proven at the orchestration layer;
-  wiring `POST /api/research/replay` etc. is a small, separate follow-up
-  once a UI consumer is actually wanted).
+- A genuine INVALIDATED/NOT_INVALIDATED determination (Section 6) --
+  needs a second, distinct "structure that must NOT break" level this
+  architecture doesn't track yet (only the confirmation-relevant
+  opposing level). Honestly `UNKNOWN` in the meantime, never guessed.
+- Market-regime and sector-conditional analysis (a further breakdown of
+  pattern aggregation by regime/sector -- `PatternAggregate` already
+  carries the real `symbols` a reader can cross-reference manually).
+- Any UI surface for replay results or pattern aggregation (the
+  mechanism is proven at the orchestration layer; wiring
+  `POST /api/research/replay` / a pattern-aggregation endpoint is a
+  small, separate follow-up once a UI consumer is actually wanted).
 - 5paisa. ML of any kind. Any change to Qwen (untouched, unused by any
   code in this phase).

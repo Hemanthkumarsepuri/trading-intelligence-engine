@@ -59,6 +59,7 @@ from app.orchestration.daily_research import (
 )
 from app.orchestration.dashboard_service import run_analysis
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
+from app.persistence.caching import CachedCandleRepository
 from app.persistence.interfaces import CandleRepository
 from app.utils.time import IST, ensure_utc
 
@@ -69,6 +70,31 @@ _SESSION_OPEN = time(9, 15)
 _SESSION_CLOSE = time(15, 30)
 
 COVERAGE_CLASSIFICATION_REPLAY = "REPLAY"
+
+# 95% sprint, Sprint 2b -- the REAL replay performance bottleneck,
+# found by profiling (not guessed): `PipelineConfig`'s default retry
+# settings (`chain_fetch_attempts=3`/`chain_fetch_backoff_seconds=1.0`,
+# `underlying_quote_fetch_attempts=2`/`...backoff_seconds=1.0`) exist to
+# ride out a REAL live provider's transient network blips
+# (`options_intelligence_pipeline._retry()` retries on
+# `ProviderTimeout`/`ProviderUnavailable`/`ProviderRateLimited`). A
+# `HistoricalReplayProvider`'s `ProviderUnavailable` is never transient
+# -- it is a permanent, structural fact about this instant (no chain
+# will ever exist for it) -- so those same retries just sleep
+# `backoff_seconds` between guaranteed-to-fail attempts, for zero
+# benefit, on EVERY chain-fetch call (the main one, PLUS one per
+# comparable expiry in the term-structure stage). Profiled: this
+# accounted for the overwhelming majority of the ~3s/bar measured before
+# this fix (cProfile showed 3.0 of 3.2s in the asyncio event loop's I/O
+# wait, i.e. `asyncio.sleep()` inside `_retry()`'s backoff -- NOT actual
+# computation, and NOT `JsonlCandleRepository` file re-reads, which the
+# Sprint 2b `CachedCandleRepository` fix above addresses separately and
+# remains worth keeping for a larger local candle store). `attempts=1`
+# means "try once, fail fast" -- this changes NOTHING about what a
+# replay run can determine (a permanently-unavailable stream stays
+# unavailable either way), only how much real wall-clock time is spent
+# finding that out. A caller-supplied `config` always overrides this.
+_DEFAULT_REPLAY_CONFIG = PipelineConfig(chain_fetch_attempts=1, underlying_quote_fetch_attempts=1)
 
 
 @dataclass(frozen=True)
@@ -121,12 +147,22 @@ async def replay_symbol_session(
         raise ValueError(f"{symbol!r} not found in the real Upstox instrument master")
 
     strategy = strategy or EMAVWAPAlignmentStrategy()
-    config = config or PipelineConfig()
+    config = config or _DEFAULT_REPLAY_CONFIG
     run_id = run_id or uuid.uuid4().hex
-    provider = HistoricalReplayProvider(candles=candle_repository)
+    # 95% sprint, Sprint 2b -- one session walks dozens of real bars, and
+    # every bar's analyze_symbol() call re-queries this same symbol's
+    # candles at least twice; without this, `JsonlCandleRepository`
+    # re-reads and re-parses its ENTIRE backing file on every single one
+    # of those calls (measured: ~3s/bar). Wrapping it here reads the
+    # backing store once for this session and serves the rest from
+    # memory -- no-lookahead is unaffected (`CachedCandleRepository`
+    # applies the exact same `as_of` filtering per call; see its own
+    # docstring). Never persisted or shared beyond this one call.
+    cached_candles = CachedCandleRepository(candle_repository)
+    provider = HistoricalReplayProvider(candles=cached_candles)
 
     session_start, session_end = _session_bounds_utc(session_date)
-    session_bars = await candle_repository.query(
+    session_bars = await cached_candles.query(
         instrument_id=ref.instrument_key, timeframe=Timeframe.M15, start=session_start, end=session_end, as_of=session_end,
     )
 

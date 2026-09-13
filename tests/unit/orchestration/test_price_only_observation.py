@@ -25,6 +25,7 @@ from app.orchestration.visual_data import (
     OptionChainVisual,
     PriceChartData,
     SupportResistanceVisual,
+    TechnicalLevelView,
     VisualData,
 )
 
@@ -42,6 +43,7 @@ def _response(
     decision: str | None = "WATCH",
     research_state: str | None = "EARLY_SETUP",
     visual_present: bool = True,
+    technical_only: list[TechnicalLevelView] | None = None,
 ) -> AnalyzeResponse:
     development = (
         DevelopmentNarrativeView(
@@ -64,7 +66,8 @@ def _response(
         option_chain=OptionChainVisual(), requested_contract=None, direction_comparison=None,
         news=NewsVisual(items=[]), evidence=[], convergence=convergence, adversarial=None, quality=None,
         futures=FuturesVisual(instrument_key=None, ltp=None, open_interest=None, basis_pct=None, oi_interpretation=None),
-        global_context=None, support_resistance=SupportResistanceVisual(support=[], resistance=[]),
+        global_context=None,
+        support_resistance=SupportResistanceVisual(support=[], resistance=[], technical_only=technical_only or []),
         term_structure=None,
         freshness=FreshnessVisual(market_state=market_state, freshness_label=None, data_age_seconds=1.0, generated_at=_AS_OF),
         research_state=research_state, development=development,
@@ -190,3 +193,48 @@ def test_no_observation_without_a_real_generated_at() -> None:
     response = _response(generated_at=None)
     obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
     assert obs is None
+
+
+# ============================================================
+# 95% sprint, Sprint 1 -- nearest opposing TECHNICAL level (candle-
+# derived, not chain-OI) is threaded through so a later outcome
+# evaluation can determine a real invalidation result instead of UNKNOWN.
+# ============================================================
+
+
+def test_bullish_observation_uses_the_nearest_real_technical_resistance() -> None:
+    response = _response(
+        convergence="CONVERGENCE_BULLISH", spot="1000",
+        technical_only=[
+            TechnicalLevelView(kind="resistance", price=Decimal("1050"), evidence="swing high"),
+            TechnicalLevelView(kind="resistance", price=Decimal("1020"), evidence="VWAP"),  # nearer to spot
+            TechnicalLevelView(kind="support", price=Decimal("980"), evidence="swing low"),  # wrong side
+        ],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.nearest_level_kind == "resistance"
+    assert obs.nearest_level_value == "1020"
+
+
+def test_bearish_observation_uses_the_nearest_real_technical_support() -> None:
+    response = _response(
+        convergence="CONVERGENCE_BEARISH", pattern="RELATIVE_STRENGTH", spot="1000",
+        technical_only=[
+            TechnicalLevelView(kind="support", price=Decimal("950"), evidence="swing low"),
+            TechnicalLevelView(kind="support", price=Decimal("985"), evidence="EMA50"),  # nearer to spot
+            TechnicalLevelView(kind="resistance", price=Decimal("1010"), evidence="swing high"),  # wrong side
+        ],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.nearest_level_kind == "support"
+    assert obs.nearest_level_value == "985"
+
+
+def test_no_nearest_level_when_no_real_technical_level_exists() -> None:
+    response = _response(convergence="CONVERGENCE_BULLISH", technical_only=[])
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.nearest_level_kind is None
+    assert obs.nearest_level_value is None

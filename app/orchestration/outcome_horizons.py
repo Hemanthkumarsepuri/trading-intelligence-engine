@@ -19,8 +19,21 @@ computable rather than silently using data from beyond it.
 Never a probability, a score, or a trade result -- `confirmation_outcome`/
 `invalidation_outcome` each answer one factual yes/no/unknown question
 about whether a specific, already-recorded condition on the ORIGINAL
-`ResearchObservation` (its nearest opposing S/R level; its option's
-contractual expiry breakeven) was actually crossed, nothing more.
+`ResearchObservation` was actually crossed, nothing more.
+
+95% sprint, Sprint 1 correctness note: `confirmation_outcome` is CONFIRMED
+when EITHER the option's own contractual expiry breakeven was reached
+(contract-based observations) OR the observation's recorded nearest
+OPPOSING level was broken through in the thesis's own favorable
+direction (available for a price-only observation too) -- both are real
+"the setup did what it needed to" facts; every named pattern's own
+documented `confirm_if` text agrees (`app.domain.options.development`).
+`invalidation_outcome` is honestly `UNKNOWN` today: this architecture
+tracks only that ONE confirmation-relevant opposing level, never a
+separate "structure that must NOT break" invalidation-side level, so a
+real INVALIDATED/NOT_INVALIDATED determination isn't available yet --
+never guessed from an unrelated fact (Section 7: "Otherwise: UNKNOWN.
+Never guess."). A named, scoped follow-up once that level exists.
 """
 
 from __future__ import annotations
@@ -108,23 +121,46 @@ def horizon_target_timestamp(observation: ResearchObservation, horizon: OutcomeH
     return ensure_utc(datetime.combine(target_session, _SESSION_CLOSE, tzinfo=IST))
 
 
-def _level_broken(*, kind: str | None, value: str | None, direction: str, window_high: Decimal, window_low: Decimal) -> InvalidationOutcome:
+def _opposing_level_broken_through(
+    *, kind: str | None, value: str | None, direction: str, window_high: Decimal, window_low: Decimal,
+) -> bool | None:
+    """Whether price broke THROUGH the observation's own recorded nearest
+    OPPOSING level (`nearest_level_kind`/`nearest_level_value` -- the
+    obstacle above spot for a BULLISH thesis, below spot for a BEARISH
+    one; see `app.orchestration.daily_research
+    ._nearest_opposing_level_in()`/`_nearest_opposing_technical_level()`,
+    which are what populate it). `None` (never guessed) when no such
+    level was recorded.
+
+    95% sprint, Sprint 1 correctness fix: this event is CONFIRMATION-
+    relevant, not invalidation. Every real pattern's own documented
+    `confirm_if` text agrees (`app.domain.options.development`, e.g.
+    PRE_BREAKOUT_COMPRESSION: "Price holds BEYOND the nearby opposing
+    level...") -- holding beyond the obstacle in the thesis's own
+    favorable direction is what a breakout achieving its setup looks
+    like, not what invalidates it. The previous version of this function
+    fed this fact into `InvalidationOutcome` backwards (labeling a real
+    breakout above resistance, on a BULLISH thesis, as "invalidated") --
+    caught by `tests/unit/orchestration/test_pattern_aggregation.py`
+    before it could mislabel a real result.
+    """
     if kind is None or value is None:
-        return InvalidationOutcome.UNKNOWN
+        return None
     level = Decimal(value)
     if direction == "BULLISH":
-        broken = window_low <= level if kind == "support" else window_high >= level
-    else:
-        broken = window_high >= level if kind == "resistance" else window_low <= level
-    return InvalidationOutcome.INVALIDATED if broken else InvalidationOutcome.NOT_INVALIDATED
+        # `kind` is always "resistance" here in practice (the opposing
+        # side above spot) -- the `support` branch is dead in production
+        # but kept explicit rather than assumed, for any older persisted
+        # observation with a differently-populated value.
+        return window_low <= level if kind == "support" else window_high >= level
+    return window_high >= level if kind == "resistance" else window_low <= level
 
 
-def _breakeven_reached(*, breakeven: str | None, right: str | None, window_high: Decimal, window_low: Decimal) -> ConfirmationOutcome:
+def _breakeven_reached(*, breakeven: str | None, right: str | None, window_high: Decimal, window_low: Decimal) -> bool | None:
     if breakeven is None:
-        return ConfirmationOutcome.UNKNOWN
+        return None
     be = Decimal(breakeven)
-    reached = window_high >= be if right == "CE" else window_low <= be
-    return ConfirmationOutcome.CONFIRMED if reached else ConfirmationOutcome.NOT_CONFIRMED
+    return window_high >= be if right == "CE" else window_low <= be
 
 
 def compute_price_path_outcome(
@@ -173,14 +209,37 @@ def compute_price_path_outcome(
         favorable = (observation_spot - window_low) / observation_spot * Decimal(100)
         adverse = (window_high - observation_spot) / observation_spot * Decimal(100)
 
-    confirmation = _breakeven_reached(
+    # 95% sprint, Sprint 1 correctness fix -- CONFIRMATION now combines
+    # BOTH real signals this observation might carry: the option's own
+    # contractual breakeven (contract-based, live observations) and the
+    # recorded opposing level actually being broken through (available
+    # for a price-only observation too -- see
+    # `_opposing_level_broken_through()`'s own docstring). Either real
+    # `True` confirms; both honestly absent/unreached is the only way to
+    # land on NOT_CONFIRMED or UNKNOWN.
+    breakeven_hit = _breakeven_reached(
         breakeven=observation.contractual_expiry_breakeven, right=observation.selected_right,
         window_high=window_high, window_low=window_low,
     )
-    invalidation = _level_broken(
+    level_hit = _opposing_level_broken_through(
         kind=observation.nearest_level_kind, value=observation.nearest_level_value, direction=observation.direction,
         window_high=window_high, window_low=window_low,
     )
+    if breakeven_hit is None and level_hit is None:
+        confirmation = ConfirmationOutcome.UNKNOWN
+    elif breakeven_hit or level_hit:
+        confirmation = ConfirmationOutcome.CONFIRMED
+    else:
+        confirmation = ConfirmationOutcome.NOT_CONFIRMED
+    # No genuinely separate INVALIDATION-side level is tracked on
+    # `ResearchObservation` today (only the CONFIRMATION-relevant
+    # opposing level above -- see its own docstring); a real invalidation
+    # determination would need a distinct "structure that must NOT break"
+    # level this architecture doesn't yet populate. Honestly `UNKNOWN`
+    # rather than fabricated from the same level's breach (Section 7:
+    # "Otherwise: UNKNOWN. Never guess.") -- a real, named, scoped
+    # follow-up, not a silent gap (see `docs/HISTORICAL_REPLAY.md`).
+    invalidation = InvalidationOutcome.UNKNOWN
     return PricePathOutcome(
         horizon=horizon, target_timestamp=target_timestamp, data_sufficient=True,
         subsequent_high=window_high, subsequent_low=window_low, subsequent_close=subsequent_close,
