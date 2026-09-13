@@ -16,7 +16,12 @@ env/
 # Downloaded/cached market reference and historical data (real, large,
 # regenerable via scripts/fetch_upstox_historical.py and
 # app/data/providers/upstox_instrument_master.py's cache) -- never committed.
-data/
+# Anchored to the repo root ONLY -- an unanchored `data/` here previously
+# also matched `app/data/` (providers/normalization/ingestion/validation,
+# real source code), which meant that entire subsystem was silently
+# excluded from every commit since this repo's first one. Found and fixed
+# 2026-09-13 during Phase 3 audit; see the dedicated fix commit.
+/data/
 
 # IDE
 .vscode/
