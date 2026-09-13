@@ -316,6 +316,26 @@ class ResearchObservation(_FrozenModel):
     # second classification. `None` only for an older persisted record
     # written before this field existed.
     pattern: str | None = None
+    # 95% sprint (Section 6) -- a GENUINELY separate level from
+    # `nearest_level_kind`/`nearest_level_value` above. That field is the
+    # OPPOSING/obstacle level (resistance for a BULLISH thesis) -- real
+    # pattern text agrees breaking THROUGH it is confirmation, not
+    # invalidation (see `outcome_horizons.py`'s own correctness-fix
+    # docstring). This field is the thesis's OWN supporting structure
+    # (support for a BULLISH thesis) -- the floor a PRE_BREAKOUT_COMPRESSION
+    # setup's compression range depends on NOT breaking; that pattern's
+    # own `invalidate_if` text ("compression expands without a break, the
+    # nearby level rejects") is exactly this geometry: price leaving the
+    # compression range on the WRONG side. Populated ONLY for
+    # PRE_BREAKOUT_COMPRESSION today -- the one pattern whose own
+    # documented definition makes this level's meaning unambiguous;
+    # every other pattern's `invalidate_if` describes something this
+    # single static level cannot honestly represent (a relative-strength
+    # collapse, a reclaimed level being lost again, an OI reversal), so
+    # this stays `None` for them rather than guessing. `None` also for
+    # every observation written before this field existed.
+    invalidation_level_kind: str | None = None
+    invalidation_level_value: str | None = None
 
 
 class ResearchCheckpointLabel(str, Enum):

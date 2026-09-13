@@ -28,6 +28,7 @@ _FRIDAY_0915 = datetime(2026, 8, 28, 3, 45, tzinfo=UTC)  # 09:15 IST
 def _observation(
     *, direction: str = "BULLISH", spot: str = "1000", breakeven: str | None = "1020",
     nearest_level_kind: str | None = "resistance", nearest_level_value: str | None = "1030",
+    invalidation_level_kind: str | None = None, invalidation_level_value: str | None = None,
     generated_at: datetime = _FRIDAY_0915, right: str = "CE",
 ) -> ResearchObservation:
     return ResearchObservation(
@@ -35,7 +36,9 @@ def _observation(
         selected_right=right, selected_strike="1000", early_stage_state="EARLY_DIRECTIONAL_BUILD",
         research_confidence="MODERATE", actionability="WATCH", spot_at_observation=spot,
         contractual_expiry_breakeven=breakeven, nearest_level_kind=nearest_level_kind,
-        nearest_level_value=nearest_level_value, market_context=None, participation_note=None,
+        nearest_level_value=nearest_level_value,
+        invalidation_level_kind=invalidation_level_kind, invalidation_level_value=invalidation_level_value,
+        market_context=None, participation_note=None,
         coverage_classification="REPLAY", thesis="test thesis",
     )
 
@@ -194,14 +197,16 @@ def test_confirmation_not_confirmed_when_only_breakeven_missing_but_level_holds(
     assert result.confirmation_outcome == ConfirmationOutcome.NOT_CONFIRMED
 
 
-def test_invalidation_is_always_unknown_no_matter_what_price_does() -> None:
-    """95% sprint, Sprint 1 correctness fix: this architecture tracks only
-    the CONFIRMATION-relevant opposing level (see
-    `outcome_horizons._opposing_level_broken_through()`'s own docstring),
-    never a separate invalidation-side level -- `invalidation_outcome`
-    must stay honestly UNKNOWN regardless of what price does, never
-    fabricated from the confirmation level's own breach (that would
-    mislabel a real breakout as "invalidated")."""
+def test_invalidation_stays_unknown_from_the_confirmation_level_alone() -> None:
+    """The CONFIRMATION-relevant opposing level (`nearest_level_kind`/
+    `nearest_level_value`) must never feed `invalidation_outcome`, no
+    matter what price does -- fabricating one from the other would
+    mislabel a real breakout as "invalidated" (the exact bug fixed in
+    the 95% sprint). Genuine invalidation now comes ONLY from the
+    separately-tracked `invalidation_level_kind`/`invalidation_level_value`
+    (see the tests below); this observation doesn't carry one, so
+    `invalidation_outcome` must stay UNKNOWN even though price clearly
+    broke through the (confirmation-relevant) resistance."""
     obs = _observation(direction="BULLISH", spot="1000", nearest_level_kind="resistance", nearest_level_value="1010")
     candles = _window_candles(obs, highs=["1005", "1015", "1025", "1022"], lows=["1000", "1005", "1015", "1018"], closes=["1003", "1012", "1022", "1020"])
     result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
@@ -213,6 +218,66 @@ def test_invalidation_unknown_when_no_level_recorded() -> None:
     candles = _window_candles(obs, highs=["1005", "1010", "1012", "1011"], lows=["1000", "998", "996", "997"], closes=["1003", "1006", "1008", "1007"])
     result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
     assert result.invalidation_outcome == InvalidationOutcome.UNKNOWN
+
+
+# ============================================================
+# genuine invalidation -- final 95% sprint (Section 6): populated ONLY
+# for PRE_BREAKOUT_COMPRESSION observations via the separately-tracked
+# `invalidation_level_kind`/`invalidation_level_value` fields.
+# ============================================================
+
+
+def test_invalidation_invalidated_when_bullish_support_is_broken() -> None:
+    """A BULLISH PRE_BREAKOUT_COMPRESSION observation's own supporting
+    floor (support, below spot) giving way is genuine invalidation --
+    the compression range breaking on the WRONG side."""
+    obs = _observation(
+        direction="BULLISH", spot="1000", breakeven=None, nearest_level_kind=None, nearest_level_value=None,
+        invalidation_level_kind="support", invalidation_level_value="990",
+    )
+    candles = _window_candles(obs, highs=["1000", "998", "995", "992"], lows=["995", "992", "988", "985"], closes=["996", "993", "990", "987"])
+    result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
+    assert result.invalidation_outcome == InvalidationOutcome.INVALIDATED
+
+
+def test_invalidation_not_invalidated_when_bullish_support_holds() -> None:
+    obs = _observation(
+        direction="BULLISH", spot="1000", breakeven=None, nearest_level_kind=None, nearest_level_value=None,
+        invalidation_level_kind="support", invalidation_level_value="980",
+    )
+    candles = _window_candles(obs, highs=["1005", "1008", "1006", "1004"], lows=["998", "996", "995", "997"], closes=["1000", "999", "998", "1000"])
+    result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
+    assert result.invalidation_outcome == InvalidationOutcome.NOT_INVALIDATED
+
+
+def test_invalidation_invalidated_when_bearish_resistance_is_broken() -> None:
+    """The mirrored BEARISH case: the thesis's own supporting ceiling
+    (resistance, above spot) giving way on the WRONG side."""
+    obs = _observation(
+        direction="BEARISH", spot="1000", breakeven=None, nearest_level_kind=None, nearest_level_value=None,
+        right="PE", invalidation_level_kind="resistance", invalidation_level_value="1010",
+    )
+    candles = _window_candles(obs, highs=["1005", "1008", "1012", "1015"], lows=["1000", "1002", "1005", "1008"], closes=["1003", "1006", "1010", "1013"])
+    result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
+    assert result.invalidation_outcome == InvalidationOutcome.INVALIDATED
+
+
+def test_invalidation_and_confirmation_are_independent_outcomes() -> None:
+    """A real observation can carry BOTH a confirmation-relevant opposing
+    level and an invalidation-relevant supporting level at once (a real
+    PRE_BREAKOUT_COMPRESSION candidate has both); the two must be
+    evaluated independently, never conflated."""
+    obs = _observation(
+        direction="BULLISH", spot="1000", breakeven=None,
+        nearest_level_kind="resistance", nearest_level_value="1030",
+        invalidation_level_kind="support", invalidation_level_value="980",
+    )
+    # Price stays comfortably inside the compression range: neither the
+    # resistance (confirmation) nor the support (invalidation) breaks.
+    candles = _window_candles(obs, highs=["1005", "1008", "1006", "1004"], lows=["998", "996", "995", "997"], closes=["1000", "999", "998", "1000"])
+    result = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_1H, candles, as_of=obs.generated_at + timedelta(hours=1))
+    assert result.confirmation_outcome == ConfirmationOutcome.NOT_CONFIRMED
+    assert result.invalidation_outcome == InvalidationOutcome.NOT_INVALIDATED
 
 
 def test_confirmation_confirmed_when_the_opposing_level_is_broken_through() -> None:

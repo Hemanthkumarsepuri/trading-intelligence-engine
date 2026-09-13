@@ -28,12 +28,18 @@ OPPOSING level was broken through in the thesis's own favorable
 direction (available for a price-only observation too) -- both are real
 "the setup did what it needed to" facts; every named pattern's own
 documented `confirm_if` text agrees (`app.domain.options.development`).
-`invalidation_outcome` is honestly `UNKNOWN` today: this architecture
-tracks only that ONE confirmation-relevant opposing level, never a
-separate "structure that must NOT break" invalidation-side level, so a
-real INVALIDATED/NOT_INVALIDATED determination isn't available yet --
-never guessed from an unrelated fact (Section 7: "Otherwise: UNKNOWN.
-Never guess."). A named, scoped follow-up once that level exists.
+
+Final 95% sprint (Section 6) correctness note: `invalidation_outcome` is
+now a GENUINE determination (INVALIDATED/NOT_INVALIDATED), not just
+UNKNOWN, for the one case where a deterministic invalidation-side level
+can be established safely -- `ResearchObservation.invalidation_level_kind`/
+`invalidation_level_value`, populated only for PRE_BREAKOUT_COMPRESSION
+observations (see that field's own docstring for exactly why it is
+scoped that narrowly). It stays honestly `UNKNOWN` for every other
+pattern and for observations written before this field existed --
+never guessed from an unrelated fact (Section 7 / Section 6: "If a
+deterministic invalidation rule cannot be established safely: return
+UNKNOWN. Do not manufacture a rule.").
 """
 
 from __future__ import annotations
@@ -156,6 +162,41 @@ def _opposing_level_broken_through(
     return window_high >= level if kind == "resistance" else window_low <= level
 
 
+def _supporting_level_broken_through(
+    *, kind: str | None, value: str | None, direction: str, window_high: Decimal, window_low: Decimal,
+) -> bool | None:
+    """Whether price broke THROUGH the observation's own recorded
+    INVALIDATION-side SUPPORTING level (`invalidation_level_kind`/
+    `invalidation_level_value` -- the thesis's OWN structure: support
+    below spot for a BULLISH thesis, resistance above spot for a
+    BEARISH one; see `app.orchestration.daily_research
+    ._nearest_supporting_level_in()`/`_nearest_supporting_technical_level()`,
+    which are what populate it, scoped to PRE_BREAKOUT_COMPRESSION
+    observations only -- see `ResearchObservation.invalidation_level_kind`'s
+    own docstring for why). `None` (never guessed) when no such level
+    was recorded -- every other pattern, and every observation written
+    before this field existed.
+
+    Final 95% sprint (Section 6) addition -- the genuinely SEPARATE
+    counterpart to `_opposing_level_broken_through()` above. That
+    function's breach is CONFIRMATION (the obstacle in the thesis's
+    favorable direction giving way); this one's breach is INVALIDATION
+    (the thesis's OWN supporting floor/ceiling giving way on the WRONG
+    side) -- PRE_BREAKOUT_COMPRESSION's own documented `invalidate_if`
+    text ("compression expands without a break, the nearby level
+    rejects") is exactly this geometry.
+    """
+    if kind is None or value is None:
+        return None
+    level = Decimal(value)
+    if direction == "BULLISH":
+        # `kind` is always "support" here in practice (the thesis's own
+        # floor, below spot) -- the `resistance` branch kept explicit
+        # rather than assumed, for any differently-populated value.
+        return window_low <= level if kind == "support" else window_high >= level
+    return window_high >= level if kind == "resistance" else window_low <= level
+
+
 def _breakeven_reached(*, breakeven: str | None, right: str | None, window_high: Decimal, window_low: Decimal) -> bool | None:
     if breakeven is None:
         return None
@@ -231,15 +272,25 @@ def compute_price_path_outcome(
         confirmation = ConfirmationOutcome.CONFIRMED
     else:
         confirmation = ConfirmationOutcome.NOT_CONFIRMED
-    # No genuinely separate INVALIDATION-side level is tracked on
-    # `ResearchObservation` today (only the CONFIRMATION-relevant
-    # opposing level above -- see its own docstring); a real invalidation
-    # determination would need a distinct "structure that must NOT break"
-    # level this architecture doesn't yet populate. Honestly `UNKNOWN`
-    # rather than fabricated from the same level's breach (Section 7:
-    # "Otherwise: UNKNOWN. Never guess.") -- a real, named, scoped
-    # follow-up, not a silent gap (see `docs/HISTORICAL_REPLAY.md`).
-    invalidation = InvalidationOutcome.UNKNOWN
+    # Final 95% sprint (Section 6) -- a genuinely separate INVALIDATION-
+    # side level (`invalidation_level_kind`/`invalidation_level_value`)
+    # is now tracked, but only for PRE_BREAKOUT_COMPRESSION observations
+    # (see that field's own docstring for why it stays scoped that
+    # narrowly). `_supporting_level_broken_through()` returns `None`
+    # (never guessed) for every observation that doesn't carry it --
+    # every other pattern, and every observation written before this
+    # field existed -- so `invalidation` stays honestly `UNKNOWN` there
+    # too (Section 7: "Otherwise: UNKNOWN. Never guess.").
+    invalidation_hit = _supporting_level_broken_through(
+        kind=observation.invalidation_level_kind, value=observation.invalidation_level_value,
+        direction=observation.direction, window_high=window_high, window_low=window_low,
+    )
+    if invalidation_hit is None:
+        invalidation = InvalidationOutcome.UNKNOWN
+    elif invalidation_hit:
+        invalidation = InvalidationOutcome.INVALIDATED
+    else:
+        invalidation = InvalidationOutcome.NOT_INVALIDATED
     return PricePathOutcome(
         horizon=horizon, target_timestamp=target_timestamp, data_sufficient=True,
         subsequent_high=window_high, subsequent_low=window_low, subsequent_close=subsequent_close,

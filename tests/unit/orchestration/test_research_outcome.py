@@ -39,10 +39,12 @@ from app.orchestration.visual_data import (
     CandlePoint,
     ContractAssessmentView,
     ContractCaseView,
+    DevelopmentNarrativeView,
     DirectionalPathsView,
     DirectionComparisonVisual,
     FreshnessVisual,
     FuturesVisual,
+    LevelView,
     NewsVisual,
     OptionChainVisual,
     PriceChartData,
@@ -303,6 +305,73 @@ def test_research_observation_is_genuinely_immutable() -> None:
     except pydantic.ValidationError:
         raised = True
     assert raised, "ResearchObservation must be frozen -- a later checkpoint must never be able to edit the original"
+
+
+def _level(*, kind: str, strike: str) -> LevelView:
+    return LevelView(
+        kind=kind, strike=Decimal(strike), strength="MODERATE", stability="STABLE",
+        distance_from_spot_pct=Decimal("1.0"), distance_pct=Decimal("1.0"),
+        evidence="OI concentration", stability_detail="stable across snapshots",
+    )
+
+
+def test_build_research_observation_wires_a_genuine_invalidation_level_for_pre_breakout_compression() -> None:
+    """Final 95% sprint (Section 6) -- the LIVE (contract-based) path,
+    not just the price-only replay path: a PRE_BREAKOUT_COMPRESSION
+    candidate's real OI-structural SUPPORT (BULLISH thesis's own floor)
+    must populate `invalidation_level_kind`/`invalidation_level_value`,
+    genuinely separate from the RESISTANCE `nearest_level_kind`/
+    `nearest_level_value` above it (confirmation-relevant)."""
+    response = _build_response()
+    assert response.visual is not None
+    response = response.model_copy(update={
+        "visual": response.visual.model_copy(update={
+            "development": DevelopmentNarrativeView(
+                pattern="PRE_BREAKOUT_COMPRESSION", what_is_developing="compressing", why_it_matters="x",
+                what_is_missing="a held break", confirm_if="holds beyond resistance", invalidate_if="support gives way",
+                freshness_note="quote=current",
+            ),
+            "support_resistance": SupportResistanceVisual(
+                support=[_level(kind="support", strike="980")], resistance=[_level(kind="resistance", strike="1030")],
+            ),
+        }),
+    })
+    shortlist, _ = rank_candidates({"X": response})
+    candidate = shortlist[0]
+    thesis = build_research_thesis(candidate)
+    assert thesis.developing_pattern == "PRE_BREAKOUT_COMPRESSION"
+
+    observation = build_research_observation(candidate, thesis, run_id="run1", coverage_classification="HIGH")
+
+    assert observation.nearest_level_kind == "resistance"
+    assert observation.nearest_level_value == "1030"
+    assert observation.invalidation_level_kind == "support"
+    assert observation.invalidation_level_value == "980"
+
+
+def test_build_research_observation_leaves_invalidation_level_none_for_other_patterns() -> None:
+    response = _build_response()
+    assert response.visual is not None
+    response = response.model_copy(update={
+        "visual": response.visual.model_copy(update={
+            "development": DevelopmentNarrativeView(
+                pattern="RELATIVE_STRENGTH", what_is_developing="x", why_it_matters="x",
+                what_is_missing="x", confirm_if="x", invalidate_if="x", freshness_note="quote=current",
+            ),
+            "support_resistance": SupportResistanceVisual(
+                support=[_level(kind="support", strike="980")], resistance=[_level(kind="resistance", strike="1030")],
+            ),
+        }),
+    })
+    shortlist, _ = rank_candidates({"X": response})
+    candidate = shortlist[0]
+    thesis = build_research_thesis(candidate)
+    assert thesis.developing_pattern == "RELATIVE_STRENGTH"
+
+    observation = build_research_observation(candidate, thesis, run_id="run1", coverage_classification="HIGH")
+
+    assert observation.invalidation_level_kind is None
+    assert observation.invalidation_level_value is None
 
 
 def test_old_persisted_observation_without_sprint4_fields_remains_readable() -> None:

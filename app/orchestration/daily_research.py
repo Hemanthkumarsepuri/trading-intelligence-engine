@@ -865,24 +865,45 @@ def _gate(
     )
 
 
+def _nearest_level_in(kind: str, sr: SupportResistanceVisual | None) -> LevelView | None:
+    """Pure lookup over already-computed levels: the nearest REAL S/R
+    level of the given `kind` ("support"/"resistance") in `sr`. Shared
+    core for both the CONFIRMATION-relevant opposing-level lookup
+    (`_nearest_opposing_level_in()`) and the INVALIDATION-relevant
+    supporting-level lookup (`_nearest_supporting_level_in()`, 95%
+    sprint Section 6) -- never a directional vote, this geometry exists
+    in exactly one place regardless of which side is being asked for."""
+    if sr is None:
+        return None
+    levels = sr.resistance if kind == "resistance" else sr.support
+    known = [lv for lv in levels if lv.strike is not None]
+    if not known:
+        return None
+    return min(known, key=lambda lv: lv.distance_pct if lv.distance_pct is not None else _WORST_PCT)
+
+
 def _nearest_opposing_level_in(direction: str, sr: SupportResistanceVisual | None) -> LevelView | None:
     """The nearest REAL S/R level standing in the way of a thesis in
     `direction` (bullish -> nearest resistance above spot; bearish ->
     nearest support below spot) -- read-only, CONTEXTUAL use of the
     existing S/R levels; never turned into a directional vote (that
     architecture, and its non-directional neutrality, is untouched).
-    Pure over already-computed levels -- the shared core both
-    `_nearest_opposing_level()` (a real, contract-selected candidate) and
-    `build_price_only_observation()` (Phase 3 gap-closure -- no contract,
-    same real technical/OI-derived levels) call, so this geometry exists
-    in exactly one place."""
-    if sr is None:
-        return None
-    levels = sr.resistance if direction == "BULLISH" else sr.support
-    known = [lv for lv in levels if lv.strike is not None]
-    if not known:
-        return None
-    return min(known, key=lambda lv: lv.distance_pct if lv.distance_pct is not None else _WORST_PCT)
+    The shared core both `_nearest_opposing_level()` (a real,
+    contract-selected candidate) and `build_price_only_observation()`
+    (Phase 3 gap-closure -- no contract, same real technical/OI-derived
+    levels) call."""
+    return _nearest_level_in("resistance" if direction == "BULLISH" else "support", sr)
+
+
+def _nearest_supporting_level_in(direction: str, sr: SupportResistanceVisual | None) -> LevelView | None:
+    """95% sprint, Section 6 -- the nearest REAL S/R level on the
+    THESIS'S OWN side (bullish -> nearest support below spot; bearish ->
+    nearest resistance above spot): the structural floor/ceiling a
+    PRE_BREAKOUT_COMPRESSION setup's own compression range depends on
+    NOT breaking. Genuinely different from the opposing/confirmation
+    level above -- see `ResearchObservation.invalidation_level_kind`'s
+    own docstring for exactly which patterns this is used for and why."""
+    return _nearest_level_in("support" if direction == "BULLISH" else "resistance", sr)
 
 
 def _nearest_opposing_level(candidate: _GatedCandidate) -> LevelView | None:
@@ -890,6 +911,32 @@ def _nearest_opposing_level(candidate: _GatedCandidate) -> LevelView | None:
     own thesis direction -- see `_nearest_opposing_level_in()`."""
     sr = candidate.response.visual.support_resistance if candidate.response.visual else None
     return _nearest_opposing_level_in(candidate.direction, sr)
+
+
+def _nearest_supporting_level(candidate: _GatedCandidate) -> LevelView | None:
+    """The nearest REAL S/R level on this candidate's own thesis side --
+    see `_nearest_supporting_level_in()`."""
+    sr = candidate.response.visual.support_resistance if candidate.response.visual else None
+    return _nearest_supporting_level_in(candidate.direction, sr)
+
+
+def _nearest_technical_level_in(
+    kind: str, sr: SupportResistanceVisual | None, spot: Decimal | None,
+) -> TechnicalLevelView | None:
+    """Pure lookup over already-computed candle-derived levels: the
+    nearest REAL technical level of the given `kind`. Shared core for
+    `_nearest_opposing_technical_level()`/`_nearest_supporting_technical_level()`
+    -- see `_nearest_level_in()`'s own docstring for why this is one
+    function, not two, and NOT a second technical-analysis engine
+    (reads `sr.technical_only`, `_build_support_resistance()`'s existing,
+    unmodified output). `None` when no real technical level of that kind
+    exists, or `spot` is unavailable to rank distance -- never a guess."""
+    if sr is None or spot is None or spot == 0:
+        return None
+    candidates = [lv for lv in sr.technical_only if lv.kind == kind]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda lv: abs(lv.price - spot))
 
 
 def _nearest_opposing_technical_level(
@@ -900,20 +947,17 @@ def _nearest_opposing_technical_level(
     (swing/VWAP/EMA) technical level standing in the way of a thesis in
     `direction`, for use when there is no option chain at all (so
     `sr.support`/`sr.resistance`, which are OI-structural, are honestly
-    empty -- see `options_intelligence_pipeline.py`'s stage-9 comment).
-    Reads `sr.technical_only` (`SupportResistanceVisual`'s own real,
-    already-computed list of candle-derived levels with no corroborating
-    OI concentration -- `_build_support_resistance()`'s existing,
-    unmodified logic; NOT a second technical-analysis engine). `None`
-    when no real technical level on the opposing side exists, or `spot`
-    is unavailable to rank distance -- never a guess."""
-    if sr is None or spot is None or spot == 0:
-        return None
-    wanted_kind = "resistance" if direction == "BULLISH" else "support"
-    candidates = [lv for lv in sr.technical_only if lv.kind == wanted_kind]
-    if not candidates:
-        return None
-    return min(candidates, key=lambda lv: abs(lv.price - spot))
+    empty -- see `options_intelligence_pipeline.py`'s stage-9 comment)."""
+    return _nearest_technical_level_in("resistance" if direction == "BULLISH" else "support", sr, spot)
+
+
+def _nearest_supporting_technical_level(
+    direction: str, sr: SupportResistanceVisual | None, spot: Decimal | None,
+) -> TechnicalLevelView | None:
+    """95% sprint, Section 6 -- the price-only counterpart to
+    `_nearest_supporting_level_in()`: the nearest REAL candle-derived
+    level on the thesis's OWN side."""
+    return _nearest_technical_level_in("support" if direction == "BULLISH" else "resistance", sr, spot)
 
 
 def _headroom_pct(candidate: _GatedCandidate) -> Decimal | None:
@@ -2415,6 +2459,13 @@ def build_research_observation(
     generated_at = candidate.response.generated_at
     if generated_at is None:
         raise ValueError(f"{candidate.symbol}: cannot build a research observation without a real generated_at")
+    # 95% sprint (Section 6) -- see `ResearchObservation.invalidation_level_kind`'s
+    # own docstring for exactly why this is scoped to PRE_BREAKOUT_COMPRESSION
+    # only: every other pattern's `invalidate_if` text describes something
+    # this single static level cannot honestly represent.
+    invalidation_level = (
+        _nearest_supporting_level(gated) if thesis.developing_pattern == "PRE_BREAKOUT_COMPRESSION" else None
+    )
     return ResearchObservation(
         run_id=run_id, audit_id=candidate.response.audit_id, generated_at=generated_at,
         symbol=candidate.symbol, direction=candidate.direction, selected_right=c.right, selected_strike=str(c.strike),
@@ -2423,6 +2474,8 @@ def build_research_observation(
         contractual_expiry_breakeven=thesis.contractual_expiry_breakeven,
         nearest_level_kind=nearest_level.kind if nearest_level is not None else None,
         nearest_level_value=str(nearest_level.strike) if nearest_level is not None else None,
+        invalidation_level_kind=invalidation_level.kind if invalidation_level is not None else None,
+        invalidation_level_value=str(invalidation_level.strike) if invalidation_level is not None else None,
         market_context=thesis.market_context, participation_note=thesis.participation_note,
         coverage_classification=coverage_classification, thesis=thesis.thesis,
         structural_context=thesis.structural_context, participation_depth=thesis.participation_depth,
@@ -2493,6 +2546,13 @@ def build_price_only_observation(
     # (`app.orchestration.outcome_horizons`) determine a genuine
     # INVALIDATED/NOT_INVALIDATED result instead of UNKNOWN.
     nearest_level = _nearest_opposing_technical_level(direction, v.support_resistance, spot_decimal)
+    # 95% sprint (Section 6) -- same PRE_BREAKOUT_COMPRESSION-only scoping
+    # as `build_research_observation()`; see
+    # `ResearchObservation.invalidation_level_kind`'s own docstring.
+    invalidation_level = (
+        _nearest_supporting_technical_level(direction, v.support_resistance, spot_decimal)
+        if development.pattern == "PRE_BREAKOUT_COMPRESSION" else None
+    )
 
     return ResearchObservation(
         run_id=run_id, audit_id=response.audit_id, generated_at=generated_at,
@@ -2515,6 +2575,8 @@ def build_price_only_observation(
         contractual_expiry_breakeven=None,
         nearest_level_kind=nearest_level.kind if nearest_level is not None else None,
         nearest_level_value=str(nearest_level.price) if nearest_level is not None else None,
+        invalidation_level_kind=invalidation_level.kind if invalidation_level is not None else None,
+        invalidation_level_value=str(invalidation_level.price) if invalidation_level is not None else None,
         market_context=None, participation_note=None,
         coverage_classification=coverage_classification, thesis=development.what_is_developing,
         derivatives_evidence_available=False,

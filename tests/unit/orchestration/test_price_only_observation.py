@@ -238,3 +238,69 @@ def test_no_nearest_level_when_no_real_technical_level_exists() -> None:
     assert obs is not None
     assert obs.nearest_level_kind is None
     assert obs.nearest_level_value is None
+
+
+# ============================================================
+# Final 95% sprint (Section 6) -- the genuinely SEPARATE invalidation-
+# side SUPPORTING level, populated ONLY for PRE_BREAKOUT_COMPRESSION
+# (see `ResearchObservation.invalidation_level_kind`'s own docstring).
+# ============================================================
+
+
+def test_pre_breakout_compression_bullish_gets_a_supporting_invalidation_level() -> None:
+    response = _response(
+        convergence="CONVERGENCE_BULLISH", pattern="PRE_BREAKOUT_COMPRESSION", spot="1000",
+        technical_only=[
+            TechnicalLevelView(kind="resistance", price=Decimal("1020"), evidence="VWAP"),
+            TechnicalLevelView(kind="support", price=Decimal("950"), evidence="swing low"),
+            TechnicalLevelView(kind="support", price=Decimal("980"), evidence="EMA50"),  # nearer to spot
+        ],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.invalidation_level_kind == "support"
+    assert obs.invalidation_level_value == "980"
+    # the confirmation-relevant opposing level is still populated, separately
+    assert obs.nearest_level_kind == "resistance"
+    assert obs.nearest_level_value == "1020"
+
+
+def test_pre_breakout_compression_bearish_gets_a_supporting_invalidation_level() -> None:
+    response = _response(
+        convergence="CONVERGENCE_BEARISH", pattern="PRE_BREAKOUT_COMPRESSION", spot="1000",
+        technical_only=[
+            TechnicalLevelView(kind="support", price=Decimal("980"), evidence="EMA50"),
+            TechnicalLevelView(kind="resistance", price=Decimal("1030"), evidence="swing high"),
+            TechnicalLevelView(kind="resistance", price=Decimal("1010"), evidence="VWAP"),  # nearer to spot
+        ],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.invalidation_level_kind == "resistance"
+    assert obs.invalidation_level_value == "1010"
+
+
+def test_non_pre_breakout_compression_pattern_never_gets_an_invalidation_level() -> None:
+    """Section 6: every other pattern's `invalidate_if` describes
+    something this single static level cannot honestly represent, so it
+    must stay `None` rather than guessing -- even when a real technical
+    level exists on the supporting side."""
+    response = _response(
+        convergence="CONVERGENCE_BEARISH", pattern="RELATIVE_STRENGTH", spot="1000",
+        technical_only=[TechnicalLevelView(kind="resistance", price=Decimal("1010"), evidence="swing high")],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.invalidation_level_kind is None
+    assert obs.invalidation_level_value is None
+
+
+def test_pre_breakout_compression_with_no_supporting_technical_level_stays_none() -> None:
+    response = _response(
+        convergence="CONVERGENCE_BULLISH", pattern="PRE_BREAKOUT_COMPRESSION", spot="1000",
+        technical_only=[TechnicalLevelView(kind="resistance", price=Decimal("1020"), evidence="VWAP")],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.invalidation_level_kind is None
+    assert obs.invalidation_level_value is None
