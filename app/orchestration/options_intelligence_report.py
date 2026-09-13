@@ -152,6 +152,19 @@ class OptionsIntelligenceReport:
     # aggregate elsewhere on this report (`atm_strike`, `pcr_oi`, `candidates`,
     # `requested_contract`, ...) was already derived from this SAME snapshot.
     option_chain: OptionChainSnapshot | None = None
+    # Phase 3 gap-closure -- `True` unless the PROVIDER itself structurally
+    # cannot supply option-chain history for this `as_of` (a
+    # `HistoricalReplayProvider` replaying a date before any real snapshot
+    # was ever captured -- see `AnalysisProvider.capabilities`). Distinct
+    # from `option_chain is None`, which can ALSO be true for a genuine
+    # live fetch failure (a real, transient problem) or simply because no
+    # chain has been fetched yet at this point in construction --
+    # `derivatives_history_available=False` is the one honest signal that
+    # means "this provider was never going to have chain data for this
+    # instant, by design, not by accident." Never set to `False` for a
+    # live `UpstoxProvider` fetch failure -- that path is unchanged and
+    # remains fatal (`report.error`), exactly as before this phase.
+    derivatives_history_available: bool = True
 
     support_levels: list[Level] = field(default_factory=list)
     resistance_levels: list[Level] = field(default_factory=list)

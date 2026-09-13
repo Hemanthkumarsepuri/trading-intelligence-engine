@@ -302,3 +302,38 @@ answer was **one EVENT_DRIVEN name (ONGC)** and **not** a list of
 manufactured EARLY_SETUPs. RELIANCE+KAYNES alone was
 `ZERO_VALID_EARLY_OPPORTUNITIES`. That is success under the stated
 quality bar.
+
+## Phase 3 addendum (2026-09-13) — can this be validated historically?
+
+Phase 3 asked the natural next question: "did this framework identify
+opportunities early enough, objectively, in hindsight?" It built a real
+historical-replay mechanism (`docs/HISTORICAL_REPLAY.md`) that runs this
+SAME early-opportunity classification against a chosen past instant using
+only locally persisted historical candles — no new classification logic,
+no second engine.
+
+It initially found, and documented rather than hid, that a replay
+against a genuinely historical date could not clear the options-fatal
+gate `_gate()` depends on (Upstox has no historical option-chain
+endpoint). A same-day gap-closure pass fixed this without weakening live
+behavior: the pipeline now distinguishes "a live provider that should
+have chain data just failed" (still fatal, unchanged) from "this
+provider structurally never has chain data for this instant" (degrades
+to price-only evidence instead) via an explicit provider-capability
+declaration, never a class-name check. `PRE_BREAKOUT_COMPRESSION`,
+`FAILED_BREAKDOWN_RECLAIM`, and `RELATIVE_STRENGTH`/
+`RELATIVE_STRENGTH_ROTATION` — this document's own named patterns that
+don't fundamentally need a chain — now produce real, replay-sourced
+`ResearchObservation`s (verified against the real sample RELIANCE data:
+12 genuine `PRE_BREAKOUT_COMPRESSION` observations on one real session).
+`OI_MIGRATION`/`FUTURES_STRUCTURE` still correctly never appear without
+real migration/basis data — never fabricated, never silently voted
+NO_SIGNAL either; they simply aren't selected, exactly like a live report
+with a dead OI signal. Every price-only observation is explicitly marked
+`derivatives_evidence_available=False` and carries no contract
+(`selected_right`/`selected_strike` are honestly `None`) — never a claim
+that derivatives confirmed anything they didn't.
+
+The live +1/+3/+5-session outcome tracking this document already
+describes is unaffected and remains a second, independent way this
+framework is being validated going forward.

@@ -250,7 +250,7 @@ def build_quality_assessment(
     )
 
 
-def decide(assessment: QualityAssessment) -> DecisionResult:
+def decide(assessment: QualityAssessment, *, derivatives_evidence_available: bool = True) -> DecisionResult:
     """Decision policy (this project's own documented rule, not a
     statistically derived optimum):
 
@@ -259,7 +259,9 @@ def decide(assessment: QualityAssessment) -> DecisionResult:
        about, regardless of how the other five dimensions look.
     2. `NO_TRADE` if the evidence matrix itself has no convergence (either
        `CONFLICT` or `INSUFFICIENT_EVIDENCE`), or if there is no bias, or
-       if no viable (sufficiently liquid) candidate exists at all.
+       if no viable (sufficiently liquid) candidate exists at all --
+       UNLESS `derivatives_evidence_available=False` (Phase 3 gap-closure,
+       see below), in which case step 3 still runs.
     3. Otherwise, count how many of the four remaining quality dimensions
        (setup, option, liquidity, risk — market bias/convergence is
        already handled by step 2) are `STRONG` vs `WEAK`:
@@ -268,6 +270,24 @@ def decide(assessment: QualityAssessment) -> DecisionResult:
        - anything else -> `WATCH` (real evidence, but not decisive enough
          to call tradeable outright — this is the deliberately common,
          honest middle outcome, not a failure state).
+
+    `derivatives_evidence_available` (Phase 3 gap-closure, default `True`
+    -- every call site before this phase, and every LIVE call site since,
+    passes nothing and gets IDENTICAL behavior to before this parameter
+    existed). `False` means the PROVIDER itself structurally has no
+    option-chain history for this instant (`HistoricalReplayProvider`
+    replaying a genuinely historical date) -- `option_quality`/
+    `liquidity_quality` are INSUFFICIENT not because a real chain was
+    checked and found illiquid, but because no chain could be checked at
+    all. Skipping step 2's contract-based `NO_TRADE` in that case lets
+    step 3's dimension counting run on `setup_quality`/`risk_quality`
+    alone; `option_quality`/`liquidity_quality`/`risk_quality` remain
+    forced `INSUFFICIENT` (never `STRONG`), which makes `TRADEABLE`
+    (requiring 3+ `STRONG`) mathematically impossible without a real
+    contract -- the worst this can ever produce is `WATCH`, never a
+    recommendation to trade an option this system never actually
+    evaluated. This never changes what a LIVE, chain-capable provider's
+    genuine `NO_TRADE`-for-illiquidity means.
     """
     if assessment.data_quality == QualityLevel.INSUFFICIENT:
         return DecisionResult(
@@ -286,7 +306,9 @@ def decide(assessment: QualityAssessment) -> DecisionResult:
             decision=FinalDecision.NO_TRADE, assessment=assessment, reasoning="no directional market bias established"
         )
 
-    if assessment.option_quality == QualityLevel.INSUFFICIENT or assessment.liquidity_quality == QualityLevel.INSUFFICIENT:
+    if derivatives_evidence_available and (
+        assessment.option_quality == QualityLevel.INSUFFICIENT or assessment.liquidity_quality == QualityLevel.INSUFFICIENT
+    ):
         return DecisionResult(
             decision=FinalDecision.NO_TRADE, assessment=assessment,
             reasoning="no sufficiently liquid option candidate exists for this bias",

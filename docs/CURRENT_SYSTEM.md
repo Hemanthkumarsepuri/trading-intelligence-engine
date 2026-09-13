@@ -126,6 +126,36 @@ Rejected: recommendation, buy/sell, probability, confidence, targets, stop-loss,
 and unsupported claim phrases. On failure, the UI falls back to deterministic text.
 If Qwen is down, TIRE continues. See `docs/TIRE_QWEN.md`.
 
+## PHASE 3 — HISTORICAL REPLAY (added 2026-09-13, gap-closed same day)
+
+`app.orchestration.historical_replay` runs the SAME `analyze_symbol()`/
+`run_analysis()` pipeline against a chosen past instant, fed by
+`HistoricalReplayProvider` (locally persisted M15 candles only — never a
+live call). `analyze_symbol`'s `provider` parameter is typed against a
+Protocol (`AnalysisProvider`, in `options_intelligence_pipeline.py`)
+carrying an explicit `capabilities: ProviderCapabilities` declaration
+(`historical_option_chain`/`historical_futures`/`historical_news`) rather
+than checking a provider's class name. A missing historical option chain
+is no longer fatal for a provider that structurally never had one
+(`HistoricalReplayProvider`) — the pipeline degrades to price-only
+evidence instead (technical/regime/relative-strength/PRE_BREAKOUT_
+COMPRESSION/FAILED_BREAKDOWN_RECLAIM all already worked chain-free; only
+OI_MIGRATION/FUTURES_STRUCTURE, which genuinely need chain/futures data,
+are correctly never selected). It stays fatal, byte-for-byte unchanged,
+for a live `UpstoxProvider` fetch failure. `decide()`/`determine_blockers()`
+each gained one backward-compatible `derivatives_evidence_available: bool
+= True` parameter — every pre-Phase-3 and every live call site is
+provably unaffected (full 1956-test suite re-verified green after every
+edit); `TRADEABLE` remains mathematically unreachable without a real
+selected contract. A new `build_price_only_observation()` produces a real
+`ResearchObservation` (contract fields honestly `None`,
+`derivatives_evidence_available=False`) when price evidence alone
+supports a named developing pattern — verified against the real sample
+RELIANCE data (12 genuine `PRE_BREAKOUT_COMPRESSION` observations on one
+real session). See `docs/HISTORICAL_REPLAY.md` for the full design and
+its remaining, explicitly-scoped follow-ups (technical-level exposure for
+invalidation outcomes; no UI surface yet).
+
 ## KNOWN LIMITATIONS
 
 - Full-universe scans are Stage-1 screen + bounded Stage-2 concurrency
@@ -138,7 +168,11 @@ If Qwen is down, TIRE continues. See `docs/TIRE_QWEN.md`.
   5 completed sessions cannot validate multi-day compression.
 - F&O-ban status is `FNO_BAN_STATUS_UNKNOWN`.
 - Option chain / futures / news health stay non-GREEN until a successful fetch this session (health does not probe them).
-- No local multi-year OHLCV warehouse; no 5paisa live failover.
+- No local multi-year OHLCV warehouse; no 5paisa live failover. A
+  controlled, per-symbol local M15 candle store now exists for replay
+  (`JsonlCandleRepository`), populated only for symbols/ranges an
+  operator explicitly backfills — not an automatic whole-universe
+  warehouse.
 - Cash-only universe is not scanned by default.
 - Ranked structural shortlist can still include gated `NOT_INTERESTING` names; they are not in Developing Now.
 - Qwen is explanation-only and may be unreachable.

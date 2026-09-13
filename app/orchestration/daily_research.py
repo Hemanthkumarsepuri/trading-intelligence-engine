@@ -94,6 +94,7 @@ from app.orchestration.visual_data import (
     ContractAssessmentView,
     DirectionComparisonVisual,
     LevelView,
+    SupportResistanceVisual,
     VisualData,
 )
 from app.utils.time import ensure_utc, utc_now
@@ -863,21 +864,31 @@ def _gate(
     )
 
 
-def _nearest_opposing_level(candidate: _GatedCandidate) -> LevelView | None:
-    """The nearest REAL S/R level standing in the way of this candidate's
-    own thesis direction (bullish -> nearest resistance above spot;
-    bearish -> nearest support below spot) -- read-only, CONTEXTUAL use
-    of the existing S/R levels; never turned into a directional vote
-    (that architecture, and its non-directional neutrality, is
-    untouched)."""
-    sr = candidate.response.visual.support_resistance if candidate.response.visual else None
+def _nearest_opposing_level_in(direction: str, sr: SupportResistanceVisual | None) -> LevelView | None:
+    """The nearest REAL S/R level standing in the way of a thesis in
+    `direction` (bullish -> nearest resistance above spot; bearish ->
+    nearest support below spot) -- read-only, CONTEXTUAL use of the
+    existing S/R levels; never turned into a directional vote (that
+    architecture, and its non-directional neutrality, is untouched).
+    Pure over already-computed levels -- the shared core both
+    `_nearest_opposing_level()` (a real, contract-selected candidate) and
+    `build_price_only_observation()` (Phase 3 gap-closure -- no contract,
+    same real technical/OI-derived levels) call, so this geometry exists
+    in exactly one place."""
     if sr is None:
         return None
-    levels = sr.resistance if candidate.direction == "BULLISH" else sr.support
+    levels = sr.resistance if direction == "BULLISH" else sr.support
     known = [lv for lv in levels if lv.strike is not None]
     if not known:
         return None
     return min(known, key=lambda lv: lv.distance_pct if lv.distance_pct is not None else _WORST_PCT)
+
+
+def _nearest_opposing_level(candidate: _GatedCandidate) -> LevelView | None:
+    """The nearest REAL S/R level standing in the way of this candidate's
+    own thesis direction -- see `_nearest_opposing_level_in()`."""
+    sr = candidate.response.visual.support_resistance if candidate.response.visual else None
+    return _nearest_opposing_level_in(candidate.direction, sr)
 
 
 def _headroom_pct(candidate: _GatedCandidate) -> Decimal | None:
@@ -2391,6 +2402,92 @@ def build_research_observation(
         coverage_classification=coverage_classification, thesis=thesis.thesis,
         structural_context=thesis.structural_context, participation_depth=thesis.participation_depth,
         relative_strength=thesis.relative_strength, pre_breakout_signal=thesis.pre_breakout_signal,
+    )
+
+
+def build_price_only_observation(
+    symbol: str, response: AnalyzeResponse, *, run_id: str, coverage_classification: str | None,
+) -> ResearchObservation | None:
+    """Phase 3 gap-closure -- the price-only counterpart to
+    `build_research_observation()`, used when the provider has no
+    historical option-chain evidence to select a contract from (see
+    `app.orchestration.historical_replay`). "One intelligence engine, two
+    inputs": `analyze_symbol()` itself computed EVERY field this function
+    reads -- the same evidence matrix, `classify_development()`, and
+    `derive_research_state()` the live path already runs (see
+    `options_intelligence_pipeline.py`'s own stage-8 comment for what
+    changed there: a missing historical chain is no longer fatal, nothing
+    about how evidence is computed changed). This function performs NO
+    new evidence computation -- it only assembles a `ResearchObservation`
+    from response fields directly, because `_gate()`/`build_research_thesis()`
+    fundamentally require a SELECTED CONTRACT this replay context doesn't
+    have. `selected_right`/`selected_strike`/`contractual_expiry_breakeven`
+    are honestly `None` -- never invented.
+
+    Returns `None` under conditions that would ALREADY reject a live,
+    contract-based candidate for PRICE-evidence reasons alone (failed
+    analysis, stale/unavailable data, no defensible convergence, or a
+    WATCH state with no named development pattern -- Section 12: "WATCH +
+    pattern NONE is never a developing setup", the same rule
+    `classify_research_bucket()` already enforces for the live path).
+    `classify_development()` itself already never selects OI_MIGRATION/
+    FUTURES_STRUCTURE without real migration/basis-change data (both are
+    `None` here, since there is no chain/futures to compute them from) --
+    so a derivatives-dependent pattern can never falsely appear as
+    "developing" through this function; it simply never gets selected,
+    exactly like a real live report with a completely dead OI signal.
+    """
+    if response.error is not None:
+        return None
+    v = response.visual
+    if v is None:
+        return None
+    freshness_state = v.freshness.market_state if v.freshness else response.market_state
+    if freshness_state in _STALE_MARKET_STATES:
+        return None
+    if v.convergence not in ("CONVERGENCE_BULLISH", "CONVERGENCE_BEARISH"):
+        return None  # no defensible price-only direction (CONFLICT or INSUFFICIENT_EVIDENCE)
+    direction = "BULLISH" if v.convergence == "CONVERGENCE_BULLISH" else "BEARISH"
+
+    development = v.development
+    if development is None or development.pattern == "NONE":
+        return None  # Section 12 -- WATCH/no named pattern is never an observation-worthy setup
+
+    generated_at = response.generated_at
+    if generated_at is None:
+        return None
+
+    nearest_level = _nearest_opposing_level_in(direction, v.support_resistance)
+    spot = str(v.price_chart.candles[-1].close) if v.price_chart is not None and v.price_chart.candles else None
+
+    return ResearchObservation(
+        run_id=run_id, audit_id=response.audit_id, generated_at=generated_at,
+        symbol=symbol, direction=direction, selected_right=None, selected_strike=None,
+        # Reuses the SAME `response.research_state` (EARLY_SETUP/WATCH/...)
+        # `derive_research_state()` already computed price-only, rather
+        # than the contract-aware `classify_early_stage_state()`
+        # vocabulary (RANGE_BOUND/EARLY_DIRECTIONAL_BUILD/...), which
+        # needs a real contract's liquidity/decay context this
+        # observation genuinely does not have.
+        early_stage_state=response.research_state or "UNKNOWN",
+        # Never a false confidence claim: an entire evidence axis
+        # (derivatives) is missing, so this never reads STRONG/VERY
+        # STRONG regardless of how convincing the price evidence alone
+        # looks -- see `ResearchObservation.derivatives_evidence_available`'s
+        # own docstring.
+        research_confidence="WEAK",
+        actionability=response.decision or "DATA_INSUFFICIENT",
+        spot_at_observation=spot,
+        contractual_expiry_breakeven=None,
+        nearest_level_kind=nearest_level.kind if nearest_level is not None else None,
+        nearest_level_value=str(nearest_level.strike) if nearest_level is not None else None,
+        market_context=None, participation_note=None,
+        coverage_classification=coverage_classification, thesis=development.what_is_developing,
+        derivatives_evidence_available=False,
+        missing_evidence=(
+            f"{development.what_is_missing} Historical option-chain/futures evidence is unavailable for this instant."
+        ),
+        source="REPLAY",
     )
 
 

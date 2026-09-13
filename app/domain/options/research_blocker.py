@@ -95,6 +95,7 @@ def determine_blockers(
     day_change_pct: Decimal | None,
     development: DevelopmentNarrative | None,
     historical_insufficient: bool = False,
+    derivatives_evidence_available: bool = True,
 ) -> BlockerAssessment:
     """Precedence (most fundamental / most specific first -- a case can be
     simultaneously true for several of these; only one is ever PRIMARY):
@@ -156,11 +157,21 @@ def determine_blockers(
         # explanation, contradicting Section 4's "no contradictory
         # explanations" requirement. This blocker's own explanation must
         # always describe the contract-quality fact it is actually reporting.
-        contract_reason = (
-            "no sufficiently liquid option candidate exists for this bias"
-            if assessment.liquidity_quality == QualityLevel.INSUFFICIENT
-            else "no option candidate with sufficient contract quality (pricing/Greeks/strike structure) exists for this bias"
-        )
+        if derivatives_evidence_available:
+            contract_reason = (
+                "no sufficiently liquid option candidate exists for this bias"
+                if assessment.liquidity_quality == QualityLevel.INSUFFICIENT
+                else "no option candidate with sufficient contract quality (pricing/Greeks/strike structure) exists for this bias"
+            )
+        else:
+            # Phase 3 gap-closure -- truthful correction: this is NOT a
+            # real chain with an illiquid/poor-quality contract (that
+            # would need `derivatives_evidence_available=True`, the
+            # unchanged live case above); no chain could be checked at
+            # all for this historical instant. Never worded as "illiquid"
+            # -- that would misrepresent a structural absence as a real,
+            # observed contract defect.
+            contract_reason = "historical option-chain evidence unavailable for this instant -- no contract could be assessed"
         candidates.append(ResearchBlocker(BlockerClass.CONTRACT_UNUSABLE, contract_reason))
     if stale:
         candidates.append(ResearchBlocker(

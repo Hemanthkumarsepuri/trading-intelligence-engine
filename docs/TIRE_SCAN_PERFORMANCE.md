@@ -226,3 +226,14 @@ cap truncated 179 names. Snapshot reuse did not beat in-session Sprint 2
 totals. See `docs/TIRE_GREEN_TRANSFORMATION.md`.
 
 See `docs/TIRE_SPRINT2.md`.
+
+## Phase 3 addendum (2026-09-13) — replay performance
+
+Historical replay (`docs/HISTORICAL_REPLAY.md`) walks one symbol's real
+local M15 bars for one session at a time (26 bars/session), each running
+the full `run_analysis()` pipeline exactly like a manual query — no
+network I/O (candles come from a local `JsonlCandleRepository`), so its
+cost is CPU-bound pipeline latency × bars, not provider-throttling
+dominated like the live whole-market scan above. Whole-universe replay is
+explicitly not implemented this phase (Section 15) — only single-symbol/
+single-window replay, matching "small controlled jobs" (Section 38).

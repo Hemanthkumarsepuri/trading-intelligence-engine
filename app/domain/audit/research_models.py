@@ -240,8 +240,14 @@ class ResearchObservation(_FrozenModel):
     generated_at: datetime
     symbol: str
     direction: str  # BULLISH or BEARISH, verbatim from the candidate's own preferred_direction
-    selected_right: str
-    selected_strike: str
+    # Phase 3 gap-closure -- `None` for a price-only observation (no
+    # historical option-chain evidence to select a contract from, see
+    # `app.orchestration.historical_replay`'s price-only gate). Every
+    # LIVE observation before and after this phase always supplies a real
+    # value here; `None` is exclusively a replay/no-derivatives fact,
+    # never a live gap.
+    selected_right: str | None = None
+    selected_strike: str | None = None
     early_stage_state: str
     research_confidence: str
     actionability: str  # the real, unmodified response.decision (or DATA_INSUFFICIENT)
@@ -269,6 +275,36 @@ class ResearchObservation(_FrozenModel):
     participation_depth: str | None = None
     relative_strength: str | None = None
     pre_breakout_signal: bool | None = None
+    # Phase 3 -- additive, same backward-compat-default pattern: an OLDER
+    # persisted record (every one written before this phase) had exactly
+    # one source, so it defaults to "LIVE" rather than leaving this
+    # ambiguous. "REPLAY" marks an observation produced by
+    # `app.orchestration.historical_replay` against locally persisted
+    # historical candles instead of a live scan -- see that module's own
+    # docstring. Replay observations are written to their OWN, separate
+    # repository/files (never the live `research_observations.jsonl`), so
+    # this field is redundant-but-explicit defense-in-depth, not the only
+    # thing keeping the two apart.
+    source: str = "LIVE"
+    # Phase 3 gap-closure -- `False` means this observation was built from
+    # PRICE/TECHNICAL evidence alone because the provider had no
+    # historical option-chain data for this instant (see
+    # `app.orchestration.historical_replay`'s price-only gate). Every
+    # observation before this phase, and every LIVE observation since,
+    # defaults `True` (unchanged meaning: a real contract was selected).
+    # This is the one authoritative "was a real contract ever evaluated"
+    # signal -- `selected_right`/`selected_strike` being `None` already
+    # implies it, but this field makes the fact explicit and queryable
+    # without inferring it from another field's absence.
+    derivatives_evidence_available: bool = True
+    # Phase 3 gap-closure -- the real, already-computed "what's missing"
+    # text for this observation (e.g. "historical option-chain evidence
+    # unavailable for this instant" for a price-only replay observation,
+    # or a live observation's own real confirmation gap). `None` when
+    # nothing is missing beyond ordinary pending confirmation. Never a
+    # second evidence computation -- always copied verbatim from a field
+    # `daily_research.py`'s own thesis-building already produced.
+    missing_evidence: str | None = None
 
 
 class ResearchCheckpointLabel(str, Enum):

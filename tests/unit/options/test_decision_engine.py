@@ -191,6 +191,93 @@ def test_decide_no_trade_when_no_candidates_exist() -> None:
     assert result.decision == FinalDecision.NO_TRADE
 
 
+# -- Phase 3 gap-closure: derivatives_evidence_available -----------------
+
+
+def test_decide_no_candidates_defaults_to_the_unchanged_live_behavior() -> None:
+    """The new parameter's default (`True`) must reproduce EXACTLY the
+    pre-Phase-3 behavior for every existing call site -- this is the same
+    fixture as `test_decide_no_trade_when_no_candidates_exist()`, called
+    without the new kwarg at all."""
+    matrix = _matrix([(EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH)])
+    assessment = build_quality_assessment(
+        matrix=matrix, regime=MarketRegime.TRENDING_BULLISH, candidates=[], chain_issues=[],
+        underlying_data_state_is_ok=True, iv_rank=_UNAVAILABLE_RANK,
+    )
+    result = decide(assessment)
+    assert result.decision == FinalDecision.NO_TRADE
+
+
+def test_decide_no_candidates_with_derivatives_available_true_is_still_no_trade() -> None:
+    """A LIVE provider (derivatives_evidence_available=True, explicit)
+    with zero real candidates is still NO_TRADE -- this parameter never
+    changes a genuine live "no viable contract" outcome."""
+    matrix = _matrix([(EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH)])
+    assessment = build_quality_assessment(
+        matrix=matrix, regime=MarketRegime.TRENDING_BULLISH, candidates=[], chain_issues=[],
+        underlying_data_state_is_ok=True, iv_rank=_UNAVAILABLE_RANK,
+    )
+    result = decide(assessment, derivatives_evidence_available=True)
+    assert result.decision == FinalDecision.NO_TRADE
+
+
+def test_decide_watch_when_derivatives_unavailable_but_setup_is_strong() -> None:
+    """A replay provider (derivatives_evidence_available=False) with zero
+    candidates but a real, strong price-only setup reaches WATCH -- never
+    silently NO_TRADE'd purely because no chain could be checked."""
+    matrix = _matrix(
+        [
+            (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH),
+            (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
+        ]
+    )
+    assessment = build_quality_assessment(
+        matrix=matrix, regime=MarketRegime.TRENDING_BULLISH, candidates=[], chain_issues=[],
+        underlying_data_state_is_ok=True, iv_rank=_UNAVAILABLE_RANK,
+    )
+    result = decide(assessment, derivatives_evidence_available=False)
+    assert result.decision == FinalDecision.WATCH
+
+
+def test_decide_never_tradeable_when_derivatives_unavailable() -> None:
+    """Mathematically impossible by construction (see `decide()`'s own
+    docstring): option_quality/liquidity_quality/risk_quality are all
+    forced INSUFFICIENT with zero candidates, so at most 1 of the 4
+    dimensions (setup_quality) can ever be STRONG -- TRADEABLE needs 3+.
+    Verified here with an otherwise maximally favorable setup."""
+    matrix = _matrix(
+        [
+            (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH),
+            (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
+            (EvidenceGroup.NEWS_EVENT, EvidenceDirection.BULLISH),
+            (EvidenceGroup.RELATIVE_STRENGTH, EvidenceDirection.BULLISH),
+        ]
+    )
+    assessment = build_quality_assessment(
+        matrix=matrix, regime=MarketRegime.TRENDING_BULLISH, candidates=[], chain_issues=[],
+        underlying_data_state_is_ok=True, iv_rank=_UNAVAILABLE_RANK,
+    )
+    result = decide(assessment, derivatives_evidence_available=False)
+    assert result.decision != FinalDecision.TRADEABLE
+
+
+def test_decide_still_no_trade_on_conflict_even_without_derivatives() -> None:
+    """`derivatives_evidence_available=False` never rescues a genuine
+    CONFLICT -- that gate runs first, unchanged."""
+    matrix = _matrix(
+        [
+            (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH),
+            (EvidenceGroup.GLOBAL, EvidenceDirection.BEARISH),
+        ]
+    )
+    assessment = build_quality_assessment(
+        matrix=matrix, regime=MarketRegime.RANGE, candidates=[], chain_issues=[],
+        underlying_data_state_is_ok=True, iv_rank=_UNAVAILABLE_RANK,
+    )
+    result = decide(assessment, derivatives_evidence_available=False)
+    assert result.decision == FinalDecision.NO_TRADE
+
+
 def test_decide_tradeable_when_all_dimensions_strong() -> None:
     matrix = _matrix(
         [

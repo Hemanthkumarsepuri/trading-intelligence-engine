@@ -41,6 +41,7 @@ from app.domain.options.query_parser import ParsedQuery, parse_instrument_query
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.orchestration.audit_journal import build_analysis_snapshot
 from app.orchestration.options_intelligence_pipeline import (
+    AnalysisProvider,
     PipelineConfig,
     Repositories,
     analyze_symbol,
@@ -173,7 +174,7 @@ def _parsed_response_fields(parsed: ParsedQuery) -> dict[str, object]:
 async def run_analysis(
     query: str,
     *,
-    provider: UpstoxProvider,
+    provider: AnalysisProvider,
     instrument_master: Sequence[dict[str, object]],
     strategy: EMAVWAPAlignmentStrategy,
     repositories: Repositories,

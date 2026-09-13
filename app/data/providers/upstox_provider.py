@@ -26,6 +26,7 @@ from urllib.parse import quote
 import httpx
 
 from app.data.providers.base import (
+    ProviderCapabilities,
     RawCandle,
     RawIPODetail,
     RawIPOInvestorCategory,
@@ -90,6 +91,10 @@ class UpstoxProvider:
     """
 
     name = "upstox"
+    # Phase 3 gap-closure -- a live provider genuinely can supply every
+    # evidence family (its own defaults), unlike a replay provider. See
+    # `ProviderCapabilities`'s own docstring.
+    capabilities = ProviderCapabilities()
 
     def __init__(
         self,

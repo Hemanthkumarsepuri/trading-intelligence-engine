@@ -216,6 +216,43 @@ class RawNewsItem(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# Provider capabilities (Phase 3 gap-closure)
+# --------------------------------------------------------------------------
+
+
+class ProviderCapabilities(BaseModel):
+    """What a provider can genuinely supply for a given evidence FAMILY --
+    never inferred by the intelligence engine from a provider's class name
+    or from a fetch happening to fail; a provider declares this about
+    itself, once, structurally.
+
+    `UpstoxProvider` (live) declares every capability `True` (its defaults)
+    -- this changes nothing about live behavior. `HistoricalReplayProvider`
+    declares `historical_option_chain`/`historical_futures`/
+    `historical_news` `False`: Upstox genuinely has no historical
+    option-chain snapshot API, no historical futures-quote reconstruction,
+    and no historical news archive, so a replay provider MUST say so
+    rather than let a caller discover it only via a failed fetch. This is
+    the distinction the analysis engine needs to tell "the provider says
+    this evidence structurally cannot exist for this instant" (never
+    fatal -- degrade honestly) apart from "the provider claims it can
+    supply this but the real fetch failed anyway" (a genuine live
+    problem -- stays fatal, unchanged).
+
+    `historical_candles` exists for completeness/documentation -- nothing
+    currently branches on it (a provider with no candle capability at all
+    cannot usefully implement `AnalysisProvider` in the first place, since
+    `analyze_symbol()`'s very first data-dependent stages need a quote and
+    M15 history unconditionally).
+    """
+
+    historical_candles: bool = True
+    historical_option_chain: bool = True
+    historical_futures: bool = True
+    historical_news: bool = True
+
+
+# --------------------------------------------------------------------------
 # Provider protocols
 # --------------------------------------------------------------------------
 

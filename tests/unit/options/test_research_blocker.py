@@ -85,6 +85,45 @@ def test_kaynes_contract_unusable_outranks_insufficient_history() -> None:
     assert any(s.blocker_class == BlockerClass.INSUFFICIENT_HISTORY for s in result.secondary)
 
 
+# -- Phase 3 gap-closure: derivatives_evidence_available -----------------
+
+
+def test_contract_unusable_text_is_unchanged_when_derivatives_available_defaults_true() -> None:
+    """The default (`True`) must reproduce EXACTLY the pre-Phase-3 wording
+    for every existing call site."""
+    decision = DecisionResult(
+        decision=FinalDecision.NO_TRADE,
+        assessment=_assessment(option_quality=QualityLevel.INSUFFICIENT, liquidity_quality=QualityLevel.INSUFFICIENT),
+        reasoning="no sufficiently liquid option candidate exists for this bias",
+    )
+    result = determine_blockers(
+        decision=decision, candles_are_current=True, chain_is_current=True, quote_is_current=True,
+        day_change_pct=Decimal("0.1"), development=_FUTURES_STRUCTURE_NARRATIVE,
+    )
+    assert result.primary.blocker_class == BlockerClass.CONTRACT_UNUSABLE
+    assert "liquid option candidate" in result.primary.explanation
+    assert "historical" not in result.primary.explanation.lower()
+
+
+def test_contract_unusable_text_is_truthful_when_derivatives_unavailable() -> None:
+    """Section 20: never worded as "illiquid" when no chain could be
+    checked at all -- that would misrepresent a structural absence as a
+    real, observed contract defect."""
+    decision = DecisionResult(
+        decision=FinalDecision.WATCH,
+        assessment=_assessment(option_quality=QualityLevel.INSUFFICIENT, liquidity_quality=QualityLevel.INSUFFICIENT),
+        reasoning="real BEARISH evidence, but quality dimensions are not decisive enough for TRADEABLE",
+    )
+    result = determine_blockers(
+        decision=decision, candles_are_current=True, chain_is_current=True, quote_is_current=True,
+        day_change_pct=Decimal("0.1"), development=_FUTURES_STRUCTURE_NARRATIVE,
+        derivatives_evidence_available=False,
+    )
+    assert result.primary.blocker_class == BlockerClass.CONTRACT_UNUSABLE
+    assert "liquid option candidate" not in result.primary.explanation
+    assert "historical option-chain evidence unavailable" in result.primary.explanation.lower()
+
+
 def test_data_insufficient_always_wins() -> None:
     decision = DecisionResult(
         decision=FinalDecision.DATA_INSUFFICIENT,

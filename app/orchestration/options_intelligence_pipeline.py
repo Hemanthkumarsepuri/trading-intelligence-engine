@@ -29,12 +29,19 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 from pydantic import ValidationError
 
 from app.data.normalization.base import DefaultNormalizer
-from app.data.providers.base import RawOptionChain, RawQuote
+from app.data.providers.base import (
+    ProviderCapabilities,
+    RawCandle,
+    RawNewsItem,
+    RawOptionChain,
+    RawQuote,
+)
 from app.data.providers.exceptions import ProviderError
 from app.data.providers.nse_delivery_archive import fetch_delivery_observation
 from app.data.providers.upstox_fo_master import (
@@ -45,7 +52,7 @@ from app.data.providers.upstox_fo_master import (
     select_relevant_expiries,
 )
 from app.data.providers.upstox_instrument_master import resolve_symbol
-from app.data.providers.upstox_provider import ExchangeStatus, UpstoxProvider
+from app.data.providers.upstox_provider import ExchangeStatus
 from app.domain.market.data_state import MarketDataState, classify_market_data_state
 from app.domain.market.delivery_context import DeliveryFreshness, unknown_delivery
 from app.domain.market.institutional_flows import (
@@ -125,11 +132,16 @@ from app.domain.options.historical_structure import (
     assess_historical_structure,
     spot_near_levels,
 )
-from app.domain.options.iv_context import atm_iv_summary, classify_iv_trend, compute_iv_rank
+from app.domain.options.iv_context import (
+    AtmIvSummary,
+    atm_iv_summary,
+    classify_iv_trend,
+    compute_iv_rank,
+)
 from app.domain.options.liquidity import LiquidityGrade, assess_liquidity
 from app.domain.options.market_regime import classify_market_regime
 from app.domain.options.market_regime_context import classify_macro_regime
-from app.domain.options.models import ChainQualityIssueKind, IvObservation
+from app.domain.options.models import ChainQualityIssueKind, ChainTotals, IvObservation
 from app.domain.options.oi_migration import analyze_oi_migration
 from app.domain.options.price_oi_interpretation import classify_basis_change, classify_price_oi
 from app.domain.options.realized_volatility import (
@@ -143,6 +155,7 @@ from app.domain.options.sector_strength import (
     sector_index_trading_symbol,
 )
 from app.domain.options.support_resistance import (
+    Level,
     assess_level_stability,
     classify_level_confluence,
     support_resistance_levels,
@@ -170,6 +183,49 @@ from app.persistence.interfaces import (
     OptionChainRepository,
     QuoteRepository,
 )
+
+
+class AnalysisProvider(Protocol):
+    """Phase 3 (Historical Intelligence + Early Opportunity Validation) --
+    the exact, minimal set of calls `analyze_symbol()`/`run_analysis()`
+    make on `provider`, gathered into one structural Protocol so the SAME
+    pipeline can run against either the live `UpstoxProvider` or a
+    `HistoricalReplayProvider` backed by locally persisted historical
+    candles (see `app.data.providers.historical_replay_provider`) --
+    "one intelligence engine, two inputs," never a second analysis path.
+
+    `UpstoxProvider` already implements every method below; this is a pure
+    typing-level abstraction (structural/duck typing via `Protocol`), not a
+    new runtime wrapper, and changes no live behavior. A replay provider
+    honestly raises `ProviderError` from `get_news()`/`get_chain()` when no
+    genuine historical archive exists for that stream (see that module's
+    own docstring) -- `analyze_symbol()` already tolerates a
+    `ProviderError` from any one of these stages without failing the whole
+    analysis.
+    """
+
+    name: str
+    # Phase 3 gap-closure -- what this provider genuinely supports (see
+    # `ProviderCapabilities`'s own docstring). `analyze_symbol()` reads
+    # this to decide whether a missing option-chain/futures/news stream is
+    # a structural, expected absence (degrade honestly) or a real live
+    # failure (stays fatal, unchanged).
+    capabilities: ProviderCapabilities
+
+    async def get_market_status(self, *, exchange: str) -> ExchangeStatus: ...
+
+    async def get_quote(self, *, security_id: str, exchange_segment: ExchangeSegment, as_of: datetime) -> RawQuote: ...
+
+    async def get_ohlcv(
+        self, *, security_id: str, exchange_segment: ExchangeSegment, timeframe: Timeframe,
+        start: datetime, end: datetime, as_of: datetime,
+    ) -> list[RawCandle]: ...
+
+    async def get_news(self, *, instrument_key: str) -> list[RawNewsItem]: ...
+
+    async def get_chain(self, *, underlying: str, expiry: date, as_of: datetime) -> RawOptionChain: ...
+
+    async def get_quotes(self, security_ids: list[str]) -> dict[str, RawQuote]: ...
 
 
 @dataclass(frozen=True)
@@ -341,7 +397,7 @@ def _blank_report(symbol: str, *, generated_at: datetime, error: str) -> Options
 async def analyze_symbol(
     symbol: str,
     *,
-    provider: UpstoxProvider,
+    provider: AnalysisProvider,
     instrument_master: Sequence[dict[str, object]],
     strategy: EMAVWAPAlignmentStrategy,
     repositories: Repositories,
@@ -536,6 +592,7 @@ async def analyze_symbol(
         underlying=ref.instrument_key, expiry=expiry_info.expiry, start=as_of - config.temporal_lookback,
         end=as_of - timedelta(microseconds=1), as_of=as_of - timedelta(microseconds=1),
     )
+    snapshot: OptionChainSnapshot | None
     try:
         raw_chain = await _retry(
             lambda: provider.get_chain(underlying=ref.instrument_key, expiry=expiry_info.expiry, as_of=as_of),
@@ -543,61 +600,114 @@ async def analyze_symbol(
         )
     except ProviderError as exc:
         _measure("option_chain", t)
-        report.data_warnings.append(f"option chain fetch failed after {config.chain_fetch_attempts} attempt(s): {exc}")
-        report.stage_latencies = stage_latencies
-        report.total_latency_seconds = time.perf_counter() - total_started
-        report.error = f"real option chain fetch failed: {exc}"
-        return report
-    _measure("option_chain", t)
-    snapshot = normalizer.normalize_option_chain(raw_chain, received_at=as_of)
-    await repositories.option_chains.save(snapshot)
-    report.option_chain = snapshot
+        if provider.capabilities.historical_option_chain:
+            # The provider CLAIMS to support this stream -- a real, live
+            # failure. Unchanged from before this phase: fatal, exactly
+            # as documented (this pipeline is Options Intelligence; a
+            # live chain that should exist but genuinely doesn't right
+            # now leaves nothing trustworthy to reason about).
+            report.data_warnings.append(f"option chain fetch failed after {config.chain_fetch_attempts} attempt(s): {exc}")
+            report.stage_latencies = stage_latencies
+            report.total_latency_seconds = time.perf_counter() - total_started
+            report.error = f"real option chain fetch failed: {exc}"
+            return report
+        # Phase 3 gap-closure -- the provider ITSELF declares it never had
+        # historical option-chain data for this instant (a
+        # `HistoricalReplayProvider` replaying a date before any real
+        # snapshot was captured). This is a structural, expected absence,
+        # never a live outage -- every derivatives-dependent stage below
+        # degrades honestly (None/empty inputs its own row builders/
+        # quality functions already handle for a genuinely thin live
+        # chain) instead of the analysis dying here. Never fabricated:
+        # `report.option_chain` stays `None`.
+        report.derivatives_history_available = False
+        report.data_warnings.append(f"historical option-chain evidence unavailable: {exc}")
+        snapshot = None
+    else:
+        _measure("option_chain", t)
+        snapshot = normalizer.normalize_option_chain(raw_chain, received_at=as_of)
+        await repositories.option_chains.save(snapshot)
+        report.option_chain = snapshot
 
     # -- 9. chain quality / OI-PCR/ATM/support-resistance -------------------
     t = time.perf_counter()
-    report.chain_quality_issues = check_chain_quality(
-        snapshot, as_of=as_of, max_age=config.max_chain_age, max_spread_fraction=config.max_chain_spread_fraction
-    )
-    totals = chain_totals(snapshot)
-    report.total_call_oi = totals.total_call_oi
-    report.total_put_oi = totals.total_put_oi
-    report.pcr_oi = totals.put_call_ratio_oi
-    # Sprint 7A, Objective 4 -- the real prior chain's own totals, so PCR
-    # CHANGE + OI BALANCE can be computed from a genuine prior snapshot,
-    # never a second fetch (reuses the SAME `previous_snapshot` already
-    # fetched above for level-stability).
-    previous_totals = chain_totals(previous_snapshot) if previous_snapshot is not None else None
+    atm: Decimal | None
+    levels: list[Level]
+    if snapshot is not None:
+        report.chain_quality_issues = check_chain_quality(
+            snapshot, as_of=as_of, max_age=config.max_chain_age, max_spread_fraction=config.max_chain_spread_fraction
+        )
+        totals = chain_totals(snapshot)
+        report.total_call_oi = totals.total_call_oi
+        report.total_put_oi = totals.total_put_oi
+        report.pcr_oi = totals.put_call_ratio_oi
+        # Sprint 7A, Objective 4 -- the real prior chain's own totals, so PCR
+        # CHANGE + OI BALANCE can be computed from a genuine prior snapshot,
+        # never a second fetch (reuses the SAME `previous_snapshot` already
+        # fetched above for level-stability).
+        previous_totals = chain_totals(previous_snapshot) if previous_snapshot is not None else None
 
-    # Sprint 7A, Objective 3 -- multi-strike OI migration, informational
-    # (see app.domain.options.oi_migration's own docstring). Reuses the
-    # SAME real current/previous snapshots, zero new fetch.
-    report.ce_oi_migration = analyze_oi_migration(
-        current_snapshot=snapshot, previous_snapshot=previous_snapshot, right=OptionRight.CE,
-        top_n=config.oi_migration_top_n, meaningful_shift_pct=config.oi_migration_meaningful_shift_pct,
-    )
-    report.pe_oi_migration = analyze_oi_migration(
-        current_snapshot=snapshot, previous_snapshot=previous_snapshot, right=OptionRight.PE,
-        top_n=config.oi_migration_top_n, meaningful_shift_pct=config.oi_migration_meaningful_shift_pct,
-    )
-    atm = atm_strike(snapshot)
-    report.atm_strike = atm
-    levels = support_resistance_levels(snapshot, limit=3)
-    report.support_levels = [lv for lv in levels if lv.kind.value == "support"]
-    report.resistance_levels = [lv for lv in levels if lv.kind.value == "resistance"]
-    report.level_stability = assess_level_stability(
-        levels, previous_snapshot=previous_snapshot,
-        meaningful_oi_change_fraction=config.level_stability_meaningful_oi_change_fraction,
-    )
+        # Sprint 7A, Objective 3 -- multi-strike OI migration, informational
+        # (see app.domain.options.oi_migration's own docstring). Reuses the
+        # SAME real current/previous snapshots, zero new fetch.
+        report.ce_oi_migration = analyze_oi_migration(
+            current_snapshot=snapshot, previous_snapshot=previous_snapshot, right=OptionRight.CE,
+            top_n=config.oi_migration_top_n, meaningful_shift_pct=config.oi_migration_meaningful_shift_pct,
+        )
+        report.pe_oi_migration = analyze_oi_migration(
+            current_snapshot=snapshot, previous_snapshot=previous_snapshot, right=OptionRight.PE,
+            top_n=config.oi_migration_top_n, meaningful_shift_pct=config.oi_migration_meaningful_shift_pct,
+        )
+        atm = atm_strike(snapshot)
+        report.atm_strike = atm
+        levels = support_resistance_levels(snapshot, limit=3)
+        report.support_levels = [lv for lv in levels if lv.kind.value == "support"]
+        report.resistance_levels = [lv for lv in levels if lv.kind.value == "resistance"]
+        report.level_stability = assess_level_stability(
+            levels, previous_snapshot=previous_snapshot,
+            meaningful_oi_change_fraction=config.level_stability_meaningful_oi_change_fraction,
+        )
+        # Same real `snapshot.underlying_last_price` reference the OI-level
+        # geometry above already uses (`support_resistance_levels()`) --
+        # never mixed with a different "spot" source (see the traced KAYNES
+        # price-consistency root cause, app.domain.market.price_consistency).
+        vwap_ema_spot = snapshot.underlying_last_price
+    else:
+        # Phase 3 gap-closure -- no OI/chain-derived evidence exists for
+        # this instant (see stage 8's own comment). Every value below is
+        # the SAME "no data" shape `check_chain_quality()`/`chain_totals()`/
+        # `atm_strike()`/`support_resistance_levels()` would themselves
+        # produce for a genuinely empty chain -- never a new sentinel, and
+        # never a claim that a chain existed and happened to be empty
+        # (that would be exactly the fabrication Phase 3 forbids;
+        # `report.derivatives_history_available` is the authoritative
+        # "no chain at all" signal, not these zeros).
+        report.chain_quality_issues = []
+        totals = ChainTotals(
+            total_call_oi=0, total_put_oi=0, total_call_volume=0, total_put_volume=0,
+            put_call_ratio_oi=None, put_call_ratio_volume=None, legs_with_known_oi=0, legs_with_missing_oi=0,
+        )
+        report.total_call_oi = totals.total_call_oi
+        report.total_put_oi = totals.total_put_oi
+        report.pcr_oi = totals.put_call_ratio_oi
+        previous_totals = None
+        report.ce_oi_migration = None
+        report.pe_oi_migration = None
+        atm = None
+        report.atm_strike = None
+        levels = []
+        report.support_levels = []
+        report.resistance_levels = []
+        report.level_stability = []
+        # No chain-derived spot reference exists -- fall back to the same
+        # real quote LTP every other stage already trusts as spot.
+        vwap_ema_spot = quote.last_price
     technical_levels = technical_price_levels(candles, lookback=config.technical_level_lookback_candles)
     # Sprint 7A, Objective 11 -- VWAP/EMA50 as additional real, already-
     # computed confluence sources (zero new fetch -- see
     # vwap_ema_levels()'s own docstring).
-    # Same real `snapshot.underlying_last_price` reference the OI-level
-    # geometry above already uses (`support_resistance_levels()`) --
-    # never mixed with a different "spot" source (see the traced KAYNES
-    # price-consistency root cause, app.domain.market.price_consistency).
     technical_levels = technical_levels + vwap_ema_levels(
-        spot=snapshot.underlying_last_price, vwap_value=report.analysis.vwap_value if report.analysis else None,
+        spot=vwap_ema_spot, vwap_value=report.analysis.vwap_value if report.analysis else None,
         ema_value=report.analysis.ema50 if report.analysis else None,
     )
     report.level_classifications = classify_level_confluence(
@@ -611,7 +721,13 @@ async def analyze_symbol(
 
     # -- 10. IV context (+ persisted rank) ---------------------------------
     t = time.perf_counter()
-    report.iv_summary = atm_iv_summary(snapshot)
+    # No chain -> the exact same "no data" shape `atm_iv_summary()` itself
+    # returns for a chain with no resolvable ATM strike (never a new
+    # sentinel).
+    report.iv_summary = (
+        atm_iv_summary(snapshot) if snapshot is not None
+        else AtmIvSummary(atm_strike=None, atm_ce_iv=None, atm_pe_iv=None, chain_iv=None, ce_pe_skew=None)
+    )
     iv_history = await repositories.iv_observations.query_history(
         underlying=ref.instrument_key, as_of=as_of, lookback=config.iv_rank_lookback
     )
@@ -620,7 +736,7 @@ async def analyze_symbol(
         current_chain_iv=report.iv_summary.chain_iv, history=iv_history,
         meaningful_change_points=config.iv_trend_meaningful_change_points,
     )
-    if report.iv_summary.atm_strike is not None:
+    if report.iv_summary.atm_strike is not None and snapshot is not None:
         await repositories.iv_observations.save(
             IvObservation(
                 provider=provider.name, freshness=snapshot.freshness, underlying=ref.instrument_key, expiry=expiry_info.expiry,
@@ -650,7 +766,7 @@ async def analyze_symbol(
 
     # -- 11. price+OI for the ATM legs (needs persisted chain history) -----
     ce_oi_observation = pe_oi_observation = None
-    if atm is not None:
+    if atm is not None and snapshot is not None:
         current_ce = _find_leg(snapshot, strike=atm, right=OptionRight.CE)
         current_pe = _find_leg(snapshot, strike=atm, right=OptionRight.PE)
         previous_ce = _find_leg(previous_snapshot, strike=atm, right=OptionRight.CE) if previous_snapshot else None
@@ -673,7 +789,7 @@ async def analyze_symbol(
     # window -- real elapsed intervals, never fabricated 1/5/15-minute
     # buckets that don't correspond to when this pipeline actually ran) --
     t = time.perf_counter()
-    if atm is not None:
+    if atm is not None and snapshot is not None:
         for prior in temporal_history[-config.max_temporal_observations :]:
             for right in (OptionRight.CE, OptionRight.PE):
                 try:
@@ -692,6 +808,9 @@ async def analyze_symbol(
     # -- 11d. decay attribution (Section 6) ----------------------------------
     t = time.perf_counter()
     for observation in report.temporal_observations:
+        # `report.temporal_observations` is only ever populated inside the
+        # `snapshot is not None` branch above -- guaranteed non-None here.
+        assert snapshot is not None
         prior_snapshot = next((s for s in temporal_history if s.freshness.data_timestamp == observation.t0), None)
         if prior_snapshot is None:
             continue
@@ -710,7 +829,7 @@ async def analyze_symbol(
 
     # -- 11e. unusual activity / anomaly detection (Section 13) -------------
     t = time.perf_counter()
-    if atm is not None and temporal_history:
+    if atm is not None and temporal_history and snapshot is not None:
         current_ce = _find_leg(snapshot, strike=atm, right=OptionRight.CE)
         current_pe = _find_leg(snapshot, strike=atm, right=OptionRight.PE)
         for right_label, leg in (("ATM CE", current_ce), ("ATM PE", current_pe)):
@@ -759,6 +878,8 @@ async def analyze_symbol(
 
         for info in relevant_expiries:
             if info.expiry == expiry_info.expiry:
+                if snapshot is None:
+                    continue  # already recorded as a data_warning at stage 8
                 chain_for_summary = snapshot
             else:
                 try:
@@ -900,7 +1021,8 @@ async def analyze_symbol(
         quote_price=quote.last_price, quote_timestamp=quote.freshness.data_timestamp,
         candle_price=last_candle.close if last_candle is not None else None,
         candle_timestamp=last_candle.freshness.data_timestamp if last_candle is not None else None,
-        option_chain_price=snapshot.underlying_last_price, option_chain_timestamp=snapshot.freshness.data_timestamp,
+        option_chain_price=snapshot.underlying_last_price if snapshot is not None else None,
+        option_chain_timestamp=snapshot.freshness.data_timestamp if snapshot is not None else None,
         futures_price=report.futures_ltp, futures_timestamp=report.futures_timestamp,
         max_consistent_diff_pct=config.max_consistent_price_diff_pct,
         max_partially_aligned_diff_pct=config.max_partially_aligned_price_diff_pct,
@@ -1050,8 +1172,8 @@ async def analyze_symbol(
     assert a is not None  # guaranteed: we returned early above if data_state was INSUFFICIENT_HISTORY
     assert report.regime is not None
 
-    atm_ce_leg = _find_leg(snapshot, strike=atm, right=OptionRight.CE) if atm is not None else None
-    atm_pe_leg = _find_leg(snapshot, strike=atm, right=OptionRight.PE) if atm is not None else None
+    atm_ce_leg = _find_leg(snapshot, strike=atm, right=OptionRight.CE) if atm is not None and snapshot is not None else None
+    atm_pe_leg = _find_leg(snapshot, strike=atm, right=OptionRight.PE) if atm is not None and snapshot is not None else None
     atm_ce_liquidity = assess_liquidity(atm_ce_leg, as_of=as_of, max_quote_age=config.max_option_quote_age) if atm_ce_leg is not None else None
     atm_pe_liquidity = assess_liquidity(atm_pe_leg, as_of=as_of, max_quote_age=config.max_option_quote_age) if atm_pe_leg is not None else None
     liquidity_candidates = [x for x in (atm_ce_liquidity, atm_pe_liquidity) if x is not None]
@@ -1166,11 +1288,21 @@ async def analyze_symbol(
         report.invalidation_level = nearest_support
     elif bias == EvidenceDirection.BEARISH:
         report.invalidation_level = nearest_resistance
-    candidates = generate_candidates(
-        snapshot, bias=bias, supporting_evidence=supporting, contradicting_evidence=contradicting,
-        strikes_each_side=config.strikes_each_side, as_of=as_of, max_quote_age=config.max_option_quote_age,
-        min_liquidity_grade=config.min_candidate_liquidity_grade, nearest_support_strike=nearest_support,
-        nearest_resistance_strike=nearest_resistance,
+    candidates = (
+        generate_candidates(
+            snapshot, bias=bias, supporting_evidence=supporting, contradicting_evidence=contradicting,
+            strikes_each_side=config.strikes_each_side, as_of=as_of, max_quote_age=config.max_option_quote_age,
+            min_liquidity_grade=config.min_candidate_liquidity_grade, nearest_support_strike=nearest_support,
+            nearest_resistance_strike=nearest_resistance,
+        )
+        if snapshot is not None
+        # Phase 3 gap-closure -- no chain, so no contract can genuinely be
+        # selected. Never invented: the exact same "no candidates" shape a
+        # live chain with zero acceptable-liquidity legs would also
+        # produce, which `build_quality_assessment()` already handles
+        # (`assess_option_quality([])`/`assess_liquidity_quality([])` ->
+        # `QualityLevel.INSUFFICIENT`).
+        else []
     )
     report.candidates = candidates
     _measure("candidates", t)
@@ -1197,7 +1329,7 @@ async def analyze_symbol(
     # skipped merely because the overall evidence-matrix bias points the
     # other way (see `contract_analysis.py` module docstring).
     t = time.perf_counter()
-    if requested_strike is not None and requested_right is not None:
+    if requested_strike is not None and requested_right is not None and snapshot is not None:
         report.requested_contract = compare_contracts(
             snapshot, requested_strike=requested_strike, requested_right=requested_right,
             strikes_each_side=config.strikes_each_side, expiry=expiry_info.expiry, as_of=as_of,
@@ -1209,6 +1341,8 @@ async def analyze_symbol(
             decay_viability_acceptable_min_ratio=config.decay_viability_acceptable_min_ratio,
             decay_viability_headwind_min_ratio=config.decay_viability_headwind_min_ratio,
         )
+    elif requested_strike is not None and requested_right is not None and snapshot is None:
+        report.data_warnings.append("a specific contract was requested but no historical option chain is available to assess it")
     _measure("requested_contract", t)
 
     # -- 14d. direction-neutral CE/PE comparison (Sprint 4, Parts D-K) --
@@ -1218,7 +1352,7 @@ async def analyze_symbol(
     # is never fed by, `decide()` (see direction_analysis.py docstring).
     t = time.perf_counter()
     direction_reference_strike = requested_strike if requested_strike is not None else atm
-    if direction_reference_strike is not None and report.adversarial_analysis is not None:
+    if direction_reference_strike is not None and report.adversarial_analysis is not None and snapshot is not None:
         report.direction_comparison = build_direction_comparison(
             snapshot, matrix=matrix, adversarial=report.adversarial_analysis, reference_strike=direction_reference_strike,
             expiry=expiry_info.expiry, as_of=as_of, max_quote_age=config.max_option_quote_age,
@@ -1241,7 +1375,7 @@ async def analyze_symbol(
         iv_rank=report.iv_rank,
         price_consistency=report.price_consistency.classification if report.price_consistency is not None else None,
     )
-    report.decision = decide(assessment)
+    report.decision = decide(assessment, derivatives_evidence_available=report.derivatives_history_available)
     report.quality_tiers = summarize_quality_tiers(report.decision)
     report.research_state = derive_research_state(
         decision=report.decision, candles_are_current=candles_are_current, day_change_pct=report.day_change_pct,
@@ -1255,6 +1389,7 @@ async def analyze_symbol(
             report.historical_structure is not None
             and report.historical_structure.status == HistoricalStructureStatus.INSUFFICIENT_HISTORY
         ),
+        derivatives_evidence_available=report.derivatives_history_available,
     )
     _measure("decision", t)
 
@@ -1342,8 +1477,22 @@ def _assemble_stream_freshness(
     if snapshot is None:
         streams.append(stream_freshness(
             stream=DataStream.OPTION_CHAIN, label=FreshnessLabel.UNAVAILABLE, retrieved_at=quote_retrieved_at,
-            source="upstox /v2/option/chain", blocks_entire_report=True, usable_for_vote=False, completeness="MISSING",
-            detail="option chain not available",
+            source="upstox /v2/option/chain",
+            # Phase 3 gap-closure -- `snapshot is None` reaching this far
+            # (past the fatal early-return stage 8 still uses for a real
+            # live failure) means the provider structurally never had
+            # chain history for this instant -- distinct from "unavailable
+            # because a live fetch just failed" (that path never reaches
+            # here at all; see the option-chain stage's own comment).
+            # Never `blocks_entire_report=True` here: the rest of this
+            # report (price/technical evidence, research_state) is
+            # genuinely usable.
+            blocks_entire_report=False, usable_for_vote=False, completeness="MISSING",
+            detail=(
+                "historical option-chain evidence unavailable for this instant (replay)"
+                if not report.derivatives_history_available
+                else "option chain not available"
+            ),
         ))
     else:
         streams.append(stream_freshness(
@@ -1461,7 +1610,7 @@ def _assemble_stream_freshness(
 async def _attach_cash_context(
     report: OptionsIntelligenceReport,
     *,
-    provider: UpstoxProvider,
+    provider: AnalysisProvider,
     instrument_master: Sequence[dict[str, object]],
     symbol: str,
     as_of: datetime,
@@ -1521,7 +1670,7 @@ async def _attach_cash_context(
 
 
 async def _compute_sample_breadth(
-    provider: UpstoxProvider,
+    provider: AnalysisProvider,
     instrument_master: Sequence[dict[str, object]],
     symbols: tuple[str, ...],
     *,

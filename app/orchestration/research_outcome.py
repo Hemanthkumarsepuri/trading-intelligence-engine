@@ -162,7 +162,7 @@ def _level_broken(
 
 
 def _breakeven_reached(
-    *, breakeven: str | None, right: str, window_high: Decimal | None, window_low: Decimal | None,
+    *, breakeven: str | None, right: str | None, window_high: Decimal | None, window_low: Decimal | None,
 ) -> bool | None:
     if breakeven is None or window_high is None or window_low is None:
         return None
@@ -198,7 +198,13 @@ async def capture_research_outcome_checkpoint(
     v = response.visual
     dc = v.direction_comparison if v else None
     contract = None
-    if dc is not None:
+    # Phase 3 gap-closure -- `selected_right` is `None` only for a
+    # price-only (no derivatives evidence) observation; this live sweep
+    # is only ever invoked for observations in the LIVE outcome
+    # repository, which never holds one (replay observations live in
+    # their own, separate repository -- see `ResearchObservation.source`'s
+    # own docstring), but the check stays explicit rather than assuming.
+    if dc is not None and observation.selected_right is not None:
         contract = dc.ce_assessment if observation.selected_right == "CE" else dc.pe_assessment
 
     spot_at_checkpoint = dc.paths.spot if dc is not None and dc.paths else None
