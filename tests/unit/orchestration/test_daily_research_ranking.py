@@ -586,7 +586,16 @@ def test_categorize_rejection_buckets_real_reason_strings() -> None:
     assert categorize_rejection("no defensible direction (verdict: CONFLICTED)") == "NO_DIRECTIONAL_CONVERGENCE"
     assert categorize_rejection("contract structural quality is HIGH_RISK_STRUCTURE, not ACCEPTABLE") == "POOR_CONTRACT_QUALITY"
     assert categorize_rejection("stale/unavailable data (STALE_DATA)") == "STALE_DATA"
-    assert categorize_rejection("screened out at stage 1 (not among the top 30...)").startswith("STAGE_1_SCREENED_OUT")
+    # Final release gate (Section 5) -- the current wording, and the
+    # pre-Section-5 wording that historical persisted runs still carry.
+    # Both must land in the same category, and neither may fall through
+    # to OTHER (which coverage counts as a reliability FAILURE).
+    assert categorize_rejection(
+        "STAGE_2_SKIPPED_CAPACITY: matched DEVELOPING_MOMENTUM (1 independent evidence dimension(s))..."
+    ).startswith("STAGE_2_DEFERRED_CAPACITY")
+    assert categorize_rejection("screened out at stage 1 (not among the top 30...)").startswith(
+        "STAGE_2_DEFERRED_CAPACITY"
+    )
     assert categorize_rejection("something genuinely novel") == "OTHER"
 
 

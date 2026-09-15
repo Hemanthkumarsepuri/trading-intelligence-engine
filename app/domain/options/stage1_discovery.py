@@ -61,3 +61,44 @@ def promotion_reason(observations: Sequence[str]) -> str:
     if not observations:
         return "Promoted because: explicit Stage-2 request (Stage 1 skipped)."
     return "Promoted because: " + " + ".join(observation_plain_english(item) for item in observations)
+
+
+# ============================================================
+# Independent evidence DIMENSIONS -- final release gate, Section 4/6
+# ============================================================
+# Several buckets above are emitted TOGETHER from a single structural
+# finding, because each names a genuinely different observable fact
+# about that one finding: a compression match always emits
+# INTRADAY_COMPRESSION + NEAR_SESSION_BOUNDARY +
+# PRE_BREAKOUT_COMPRESSION_CANDIDATE, and a reversal match always emits
+# EARLY_REVERSAL + FAILED_BREAKDOWN_RECLAIM_CANDIDATE.
+#
+# That is correct for DESCRIBING a candidate, but it makes a raw bucket
+# COUNT a misleading measure of corroboration: counting labels, one
+# compression finding (3 labels, 1 independent dimension) scores higher
+# than momentum + order flow (2 labels, 2 genuinely independent
+# dimensions). Prioritising expensive Stage-2 capacity is exactly where
+# that distinction matters, so this map records which buckets come from
+# the SAME underlying observation.
+#
+# This is a grouping of existing facts, never a weight and never a
+# score: every dimension counts exactly 1, no dimension is "worth more"
+# than another, and nothing here is derived from the SIZE of any move.
+_BUCKET_DIMENSION: dict[str, str] = {
+    DEVELOPING_MOMENTUM: "MOMENTUM",
+    ORDER_FLOW_PARTICIPATION: "ORDER_FLOW",
+    EARLY_REVERSAL: "REVERSAL",
+    FAILED_BREAKDOWN_RECLAIM_CANDIDATE: "REVERSAL",
+    INTRADAY_COMPRESSION: "COMPRESSION",
+    NEAR_SESSION_BOUNDARY: "COMPRESSION",
+    PRE_BREAKOUT_COMPRESSION_CANDIDATE: "COMPRESSION",
+    RELATIVE_STRENGTH_VS_INDEX: "RELATIVE_STRENGTH",
+}
+
+
+def independent_dimensions(observations: Sequence[str]) -> frozenset[str]:
+    """The genuinely INDEPENDENT evidence dimensions these Stage-1
+    observations rest on -- the honest corroboration measure. An unknown
+    bucket name is counted as its own dimension rather than silently
+    dropped (a new bucket must never quietly stop counting as evidence)."""
+    return frozenset(_BUCKET_DIMENSION.get(name, name) for name in observations)

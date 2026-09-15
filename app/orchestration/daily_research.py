@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -85,6 +86,7 @@ from app.domain.options.stage1_discovery import (
     PRE_BREAKOUT_COMPRESSION_CANDIDATE,
     RELATIVE_STRENGTH_VS_INDEX,
     assert_no_stage1_option_claims,
+    independent_dimensions,
     promotion_reason,
 )
 from app.orchestration.dashboard_service import AnalyzeResponse, run_analysis
@@ -98,7 +100,7 @@ from app.orchestration.visual_data import (
     TechnicalLevelView,
     VisualData,
 )
-from app.utils.time import ensure_utc, utc_now
+from app.utils.time import ensure_utc, to_ist, utc_now
 
 if TYPE_CHECKING:
     from app.data.providers.upstox_provider import UpstoxProvider
@@ -203,7 +205,23 @@ class ScreeningConfig:
 
     quote_batch_size: int = 50  # chunk size for get_quotes() -- stays safely under any undocumented Upstox batch limit
     stale_quote_tolerance: timedelta = timedelta(minutes=15)
-    survivor_cap: int = 30
+    # Final release gate (Section 8) -- raised 30 -> 80 on MEASURED
+    # headroom, never on optimism. Stage 2 cost ~15.6 s/symbol before the
+    # `JsonlOptionChainRepository` fix (see `_JsonlStore
+    # .iter_lines_containing()`); it now costs ~2.6 s/symbol wall at the
+    # SAME provider concurrency of 6, verified on a real 210-symbol scan
+    # (16 Sep 2026: 476.4 s -> 85.0 s end to end, 0 timeouts, 0 stale,
+    # 30/30 Stage 2 successful). Spending that headroom on genuine deep
+    # coverage is the whole point: 80 real candidates analyzed per run
+    # instead of 30, out of ~205 that typically qualify.
+    #
+    # This raises DURATION, never provider PRESSURE: `stage_two_concurrency`
+    # is untouched at 6, so instantaneous load on Upstox is identical to
+    # the 30-symbol run that measured clean. It remains a target, not a
+    # quota -- fewer qualifying symbols simply yields fewer survivors,
+    # never padded -- and whatever still exceeds it is reported honestly
+    # as STAGE_2_DEFERRED_CAPACITY rather than hidden.
+    survivor_cap: int = 80
 
     # Sprint 1 -- real live defect found 2026-08-31: ~100/210 symbols lost
     # to a real batched `/v2/market-quote/quotes` timeout, with ZERO retry
@@ -580,10 +598,62 @@ async def screen_universe(
             continue
         matched.append((symbol, buckets))
 
-    # Corroboration count (real bucket count, never a synthetic score),
-    # then alphabetical -- fully deterministic, no movement/volume
-    # magnitude anywhere in this ordering.
-    ordered = sorted(matched, key=lambda item: (-len(item[1]), item[0]))
+    # Final release gate (Sections 4/6) -- prioritisation of expensive
+    # Stage-2 capacity, fixed after measuring what the previous ordering
+    # actually did on a real 210-symbol scan (15 Sep 2026, scan
+    # 8fe77965e9cc). Two real defects were found and are corrected here.
+    # Still no score, no probability, and no movement/volume magnitude
+    # anywhere in this ordering -- both keys below are counts of real,
+    # already-computed bucket memberships.
+    #
+    # 1. PRIMARY KEY IS NOW INDEPENDENT DIMENSIONS, NOT LABEL COUNT.
+    #    Several buckets are emitted together from ONE structural finding
+    #    (compression emits 3, reversal emits 2 -- see
+    #    `stage1_discovery._BUCKET_DIMENSION`), so the old `-len(buckets)`
+    #    counted LABELS while calling itself "corroboration". That let a
+    #    single compression finding (3 labels, 1 independent dimension)
+    #    outrank momentum + order flow (2 labels, 2 genuinely independent
+    #    dimensions). Measured on that real scan: 6 truncated names had 3
+    #    labels but only 2 dimensions, ranking above 92 names with 2
+    #    labels and the same 2 dimensions. Label count is kept only as a
+    #    secondary key -- among candidates resting on the SAME number of
+    #    independent dimensions, more corroborating observations is a
+    #    real, if weaker, distinction.
+    #
+    # 2. THE FINAL TIE-BREAK IS NO LONGER ALPHABETICAL.
+    #    This is the more serious of the two. On that same real scan the
+    #    cut fell inside a tie group, and alphabetical order decided it:
+    #    every one of the 34 truncated names with 3 labels / 3
+    #    independent dimensions sorted after the promoted ETERNAL, and
+    #    not one sorted before the promoted CROMPTON -- identical
+    #    measured evidence, dropped purely on spelling. Because the rule
+    #    was deterministic on the name alone, it excluded the SAME names
+    #    (KAYNES, SBIN, LT, ICICIBANK, KOTAKBANK, INDIGO, VEDL, IRFC,
+    #    WAAREEENER ...) on every run, forever -- a permanent blind spot
+    #    in a system whose entire purpose is to decide where to look.
+    #
+    #    Ties are now broken by a stable hash of (symbol, session date).
+    #    This is NOT a signal and carries no evidence meaning whatsoever:
+    #    it only orders candidates that are already exactly equal on
+    #    every real measure above it, and it can never move a candidate
+    #    past one with more independent corroboration. Keying on the
+    #    session date keeps a single scan fully REPRODUCIBLE (re-running
+    #    the same session yields the identical order) while rotating
+    #    which equal-ranked names get capacity across sessions, so no
+    #    name is permanently unreachable.
+    session_date = to_ist(as_of).date().isoformat()
+
+    def _fair_tiebreak(symbol: str) -> str:
+        return hashlib.sha256(f"{session_date}|{symbol}".encode()).hexdigest()
+
+    ordered = sorted(
+        matched,
+        key=lambda item: (
+            -len(independent_dimensions(item[1])),
+            -len(item[1]),
+            _fair_tiebreak(item[0]),
+        ),
+    )
     survivors = [symbol for symbol, _ in ordered[: cfg.survivor_cap]]
     survivor_set = set(survivors)
     truncated_count = 0
@@ -593,9 +663,10 @@ async def screen_universe(
             rejected.append(RejectionRecord(
                 symbol=symbol,
                 reason=(
-                    f"screened out at stage 1 (matched {', '.join(buckets)}, but not among the top "
-                    f"{cfg.survivor_cap} by bucket corroboration -- survivor_cap is a provider-safety "
-                    f"limit, not a claim that the remaining names were uninteresting)"
+                    f"STAGE_2_SKIPPED_CAPACITY: matched {', '.join(buckets)} "
+                    f"({len(independent_dimensions(buckets))} independent evidence dimension(s)) and remains a real "
+                    f"Stage-1 candidate, but Stage-2 capacity is {cfg.survivor_cap} analyses per run. Deferred for "
+                    f"capacity only -- NOT a finding that this name is uninteresting, and not a rejection of its evidence."
                 ),
             ))
 
@@ -697,7 +768,15 @@ class DailyResearchResult:
 _REJECTION_CATEGORY_RULES: list[tuple[str, str]] = [
     ("already extended intraday", "ALREADY_EXTENDED"),
     ("insufficient early-stage evidence", "INSUFFICIENT_EARLY_STAGE_EVIDENCE"),
-    ("screened out at stage 1", "STAGE_1_SCREENED_OUT (matched a real bucket, but not among the top corroborated)"),
+    # Final release gate (Section 5) -- a real Stage-1 candidate that was
+    # not deep-analyzed because Stage-2 capacity ran out. It WAS reliably
+    # screened (so it is not a coverage failure, below) and it is NOT an
+    # evidence-based rejection -- the category name has to say so, since
+    # calling this "screened out" understated what it is.
+    ("stage_2_skipped_capacity", "STAGE_2_DEFERRED_CAPACITY (a real Stage-1 candidate, not deep-analyzed this run)"),
+    # Pre-Section-5 wording, kept so historical persisted runs still
+    # categorize correctly rather than falling through to OTHER.
+    ("screened out at stage 1", "STAGE_2_DEFERRED_CAPACITY (a real Stage-1 candidate, not deep-analyzed this run)"),
     ("stale quote data", "STALE_DATA"),
     ("stale/unavailable data", "STALE_DATA"),
     ("no valid upcoming f&o expiry", "DATA_UNAVAILABLE (no upcoming expiry)"),

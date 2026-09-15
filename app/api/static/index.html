@@ -816,14 +816,33 @@ function renderDiscoverResults(data) {
       covBlock.appendChild(el("p", { class: "chart-hint", text: "Universe source: " + (data.universe_source || "upstox_instrument_master.NSE_FO_equity_underlyings") }));
       covBlock.appendChild(el("p", { class: "chart-hint", text: "DEFAULT WHOLE F&O SCAN -- Universe: " + cov.universe_count + " F&O equities" }));
       covBlock.appendChild(el("p", { class: "chart-hint", text: "F&O ban list: unknown — no verified source is wired" }));
-      if (data.stage1_cap_applied) {
-        covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 1 survivor cap applied -- " + data.stage1_truncated_count + " matching names were not promoted to Stage 2. This is a provider-safety limit, not a claim they were uninteresting." }));
-      }
     }
+    // Final release gate (Section 5) -- the explicit STAGE 1 -> STAGE 2
+    // pipeline contract, so deferred candidates can never be mistaken
+    // for rejected ones, or hidden entirely. Every number is a real
+    // count the backend already reported.
     if (cov.stage1_attempted !== null) {
-      covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 1: " + cov.stage1_successful + " / " + cov.stage1_attempted + " evaluated" }));
+      const deferred = data.stage1_truncated_count || 0;
+      const candidates = (cov.stage2_attempted || 0) + deferred;
+      const pipeline = el("div", { style: "margin:6px 0" });
+      pipeline.appendChild(el("p", { style: "font-weight:600;margin:0 0 2px", text: "STAGE 1 -> STAGE 2 COVERAGE" }));
+      const ul = el("ul", { class: "hint", style: "margin:2px 0" });
+      ul.appendChild(el("li", { text: cov.universe_count + " requested (full F&O equity universe)" }));
+      ul.appendChild(el("li", { text: cov.stage1_successful + " Stage 1 analyzed" + (cov.stage1_failed ? "  ·  " + cov.stage1_failed + " Stage 1 failed" : "") }));
+      ul.appendChild(el("li", { text: candidates + " Stage 1 candidates (matched a real discovery bucket)" }));
+      ul.appendChild(el("li", { text: cov.stage2_successful + " Stage 2 analyzed" + (cov.stage2_failed ? "  ·  " + cov.stage2_failed + " Stage 2 failed" : "") }));
+      if (deferred) {
+        ul.appendChild(el("li", {
+          text: deferred + " Stage 2 DEFERRED for capacity -- real candidates that were not deep-analyzed this run. " +
+            "Deferred is not rejected: this is a provider-safety limit on how many deep analyses one run performs, " +
+            "never a finding that these names were uninteresting.",
+        }));
+      }
+      pipeline.appendChild(ul);
+      covBlock.appendChild(pipeline);
+    } else {
+      covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 2: " + cov.stage2_successful + " / " + cov.stage2_attempted + " evaluated" }));
     }
-    covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 2: " + cov.stage2_successful + " / " + cov.stage2_attempted + " evaluated" }));
     const covRow = el("div", { style: "margin:4px 0" });
     covRow.appendChild(badge("COVERAGE", cov.classification));
     covBlock.appendChild(covRow);

@@ -499,3 +499,111 @@ def test_research_run_old_persisted_record_without_coverage_still_deserializes(t
 
     assert len(results) == 1
     assert results[0].coverage is None
+
+
+# ============================================================
+# Final release gate (Section 7) -- the option-chain read fast path
+# ============================================================
+# `JsonlOptionChainRepository` now skips provably-irrelevant lines before
+# the expensive `model_validate_json()` (measured: 12.08s -> 0.50s per
+# `latest()` call on the real 103 MB store). These tests exist to prove
+# the optimisation is an EQUIVALENCE, not a behaviour change -- the
+# fast path must return exactly what the naive full-scan would.
+
+
+def _naive_latest(
+    path: Path, *, underlying: str, expiry: date, as_of: datetime
+) -> OptionChainSnapshot | None:
+    """The pre-optimisation implementation, kept here deliberately as the
+    reference oracle: validate EVERY stored record, filter afterwards."""
+    candidates = []
+    with path.open(encoding="utf-8") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            snapshot = OptionChainSnapshot.model_validate_json(raw)
+            if (
+                snapshot.underlying == underlying
+                and snapshot.expiry == expiry
+                and snapshot.freshness.data_timestamp <= as_of
+            ):
+                candidates.append(snapshot)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda s: s.freshness.data_timestamp)
+
+
+def test_chain_fast_path_matches_a_naive_full_scan_exactly(tmp_path: Path) -> None:
+    """Mixed underlyings/expiries, so most lines are skipped by the raw
+    pre-filter -- the fast path must still agree with the oracle on
+    every one."""
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    written = [
+        ("NIFTY", date(2026, 9, 24)), ("NIFTY", date(2026, 10, 29)),
+        ("BANKNIFTY", date(2026, 9, 24)), ("NSE_EQ|INE002A01018", date(2026, 9, 29)),
+    ]
+    for index, (underlying, expiry) in enumerate(written * 3):
+        asyncio.run(repo.save(_chain(base + timedelta(minutes=index), underlying=underlying, expiry=expiry)))
+
+    as_of = base + timedelta(days=1)
+    for underlying, expiry in [*written, ("ABSENT", date(2026, 9, 24)), ("NIFTY", date(2030, 1, 31))]:
+        fast = asyncio.run(repo.latest(underlying=underlying, expiry=expiry, as_of=as_of))
+        oracle = _naive_latest(path, underlying=underlying, expiry=expiry, as_of=as_of)
+        if oracle is None:
+            assert fast is None, (underlying, expiry)
+        else:
+            assert fast is not None, (underlying, expiry)
+            assert fast.model_dump_json() == oracle.model_dump_json(), (underlying, expiry)
+
+
+def test_chain_fast_path_still_honours_the_as_of_cutoff(tmp_path: Path) -> None:
+    """The pre-filter must never let a record from beyond `as_of` through
+    -- no-lookahead is enforced by the unchanged predicate, not by the
+    substring scan."""
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    asyncio.run(repo.save(_chain(base)))
+    asyncio.run(repo.save(_chain(base + timedelta(hours=5))))
+
+    result = asyncio.run(repo.latest(underlying="NIFTY", expiry=date(2026, 9, 24), as_of=base + timedelta(hours=1)))
+
+    assert result is not None
+    assert result.freshness.data_timestamp == base
+
+
+def test_chain_fast_path_handles_an_underlying_needing_json_escaping(tmp_path: Path) -> None:
+    """Real underlyings contain `|` and spaces (`NSE_INDEX|Nifty 50`).
+    The pre-filter builds its token with `json.dumps`, so it must match
+    exactly what `model_dump_json()` wrote."""
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    underlying = 'NSE_INDEX|Nifty 50 "odd"'
+    asyncio.run(repo.save(_chain(base, underlying=underlying)))
+
+    result = asyncio.run(repo.latest(underlying=underlying, expiry=date(2026, 9, 24), as_of=base + timedelta(hours=1)))
+
+    assert result is not None
+    assert result.underlying == underlying
+
+
+def test_chain_query_range_fast_path_matches_a_naive_full_scan(tmp_path: Path) -> None:
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    for index in range(6):
+        asyncio.run(repo.save(_chain(base + timedelta(minutes=index), underlying="NIFTY")))
+        asyncio.run(repo.save(_chain(base + timedelta(minutes=index), underlying="BANKNIFTY")))
+
+    results = asyncio.run(repo.query_range(
+        underlying="NIFTY", expiry=date(2026, 9, 24),
+        start=base + timedelta(minutes=1), end=base + timedelta(minutes=4), as_of=base + timedelta(days=1),
+    ))
+
+    assert [r.freshness.data_timestamp for r in results] == [
+        base + timedelta(minutes=m) for m in (1, 2, 3, 4)
+    ]
+    assert all(r.underlying == "NIFTY" for r in results)
