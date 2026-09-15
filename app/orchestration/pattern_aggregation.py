@@ -33,6 +33,7 @@ from app.domain.audit.research_models import (
 from app.domain.market.models import Candle
 from app.orchestration.outcome_horizons import (
     ConfirmationOutcome,
+    InvalidationOutcome,
     OutcomeHorizonLabel,
     compute_price_path_outcome,
     horizon_target_timestamp,
@@ -103,6 +104,62 @@ def aggregate_by_pattern(
     return results
 
 
+def aggregate_by_pattern_segmented(
+    observations: list[ResearchObservation], outcomes: dict[str, ResearchOutcomeStatus], *,
+    segment_by: Callable[[ResearchObservation], str],
+) -> dict[str, list[PatternAggregate]]:
+    """Final 95% sprint (Section 8) -- the SAME counting as
+    `aggregate_by_pattern()`, split first by a caller-supplied segment
+    key, then by pattern within each segment. Purely a partition step:
+    every count inside each segment is produced by `aggregate_by_pattern()`
+    itself, never a second counting implementation, so segmenting can
+    never disagree with the unsegmented total (`sum` of a segment's
+    counts for a pattern, across all segments, always equals that
+    pattern's own `aggregate_by_pattern()` total). Still purely
+    descriptive -- Section 9's "never a rate/probability/confidence"
+    applies identically inside a segment as it does overall.
+
+    Segmented ONLY by fields genuinely present and structured on
+    `ResearchObservation` today (`segment_by_direction`/
+    `segment_by_timing_stage`/`segment_by_evidence_completeness` below) --
+    market regime (would need a real index/breadth classification
+    threaded onto the observation, not just `market_context`'s free
+    text) and sector (would need a real symbol->sector join, not
+    currently stored on the observation) are deliberately NOT segmented
+    here rather than guessed from an unstructured field (Section 8:
+    "segment... where data allows" -- not where it doesn't).
+    """
+    by_segment: dict[str, list[ResearchObservation]] = {}
+    for obs in observations:
+        by_segment.setdefault(segment_by(obs), []).append(obs)
+    return {segment: aggregate_by_pattern(obs_list, outcomes) for segment, obs_list in sorted(by_segment.items())}
+
+
+def segment_by_direction(observation: ResearchObservation) -> str:
+    """BULLISH / BEARISH -- the real thesis direction already recorded."""
+    return observation.direction
+
+
+def segment_by_timing_stage(observation: ResearchObservation) -> str:
+    """The real, already-computed early-stage/timing classification
+    (RANGE_BOUND / EARLY_DIRECTIONAL_BUILD / ... for a live, contract-based
+    observation; the price-only `response.research_state` vocabulary --
+    EARLY_SETUP / WATCH / ... -- for a replay observation; see
+    `build_research_observation()`/`build_price_only_observation()`'s own
+    docstrings for exactly which). Never re-derived here -- this function
+    only reads the field."""
+    return observation.early_stage_state
+
+
+def segment_by_evidence_completeness(observation: ResearchObservation) -> str:
+    """Whether real historical derivatives evidence (option chain/futures)
+    was available for this observation -- the honest
+    PRICE_HISTORY_AVAILABLE-vs-DERIVATIVES_HISTORY_AVAILABLE distinction
+    (Section 25), read directly from the already-recorded
+    `derivatives_evidence_available` flag, never re-derived."""
+    return "DERIVATIVES_EVIDENCE_AVAILABLE" if observation.derivatives_evidence_available else "PRICE_ONLY_EVIDENCE"
+
+
 async def outcome_for_live_observation(
     observation: ResearchObservation, *, outcome_repository: ResearchOutcomeRepository, as_of: datetime,
 ) -> ResearchOutcomeStatus:
@@ -134,24 +191,34 @@ def outcome_for_replay_observation(observation: ResearchObservation, candles: li
       target instant is still ahead of `as_of`, else
       `INSUFFICIENT_OUTCOME_DATA` (the target instant has passed but the
       local candle store doesn't reach that far).
-    - the observation's own recorded confirmation (contractual expiry
-      breakeven reached, OR the recorded opposing level broken through --
-      see `outcome_horizons._opposing_level_broken_through()`'s own
-      docstring for the Sprint 1 correctness fix this relies on) was
+    - the observation's own recorded INVALIDATION-side supporting level
+      was broken through (final 95% sprint, Section 6 -- genuinely
+      tracked ONLY for `PRE_BREAKOUT_COMPRESSION` observations; see
+      `ResearchObservation.invalidation_level_kind`'s own docstring) ->
+      `FAILED_SETUP`. Checked FIRST: a window that touched both this and
+      the confirmation level (a real whipsaw) is reported as the failed
+      setup it structurally was, never overstated as a success.
+    - otherwise, the observation's own recorded confirmation (contractual
+      expiry breakeven reached, OR the recorded opposing level broken
+      through -- see `outcome_horizons._opposing_level_broken_through()`'s
+      own docstring for the Sprint 1 correctness fix this relies on) was
       reached -> `FOLLOW_THROUGH_OBSERVED`.
-    - reached the horizon without it -> `NO_FOLLOW_THROUGH`.
+    - reached the horizon without either -> `NO_FOLLOW_THROUGH`.
 
-    `FAILED_SETUP` is never assigned here: this architecture does not yet
-    track a genuine, separate invalidation-side level (see
-    `outcome_horizons.py`'s own documented limitation) -- fabricating a
-    "failed" verdict from an unrelated fact would be exactly the kind of
-    guess Section 7 forbids ("Otherwise: UNKNOWN. Never guess."). A real,
-    named follow-up once that level exists.
+    For every observation that does NOT carry a genuine invalidation
+    level (every pattern besides `PRE_BREAKOUT_COMPRESSION`, and every
+    observation written before that field existed),
+    `outcome.invalidation_outcome` is honestly `UNKNOWN` (never guessed --
+    Section 7: "Otherwise: UNKNOWN. Never guess."), so `FAILED_SETUP` is
+    simply never reached for those -- the same conservative behavior this
+    function had before the Section 6 fix.
     """
     outcome = compute_price_path_outcome(observation, _REPLAY_REFERENCE_HORIZON, candles, as_of=as_of)
     if not outcome.data_sufficient:
         target = horizon_target_timestamp(observation, _REPLAY_REFERENCE_HORIZON)
         return ResearchOutcomeStatus.PENDING if target > as_of else ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
+    if outcome.invalidation_outcome == InvalidationOutcome.INVALIDATED:
+        return ResearchOutcomeStatus.FAILED_SETUP
     if outcome.confirmation_outcome == ConfirmationOutcome.CONFIRMED:
         return ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
     return ResearchOutcomeStatus.NO_FOLLOW_THROUGH

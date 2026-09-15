@@ -15,7 +15,11 @@ from app.domain.market.freshness import DataFreshness
 from app.domain.market.models import Candle, Timeframe
 from app.orchestration.pattern_aggregation import (
     aggregate_by_pattern,
+    aggregate_by_pattern_segmented,
     outcome_for_replay_observation,
+    segment_by_direction,
+    segment_by_evidence_completeness,
+    segment_by_timing_stage,
 )
 
 _T0 = datetime(2026, 8, 25, 3, 45, tzinfo=UTC)  # 09:15 IST
@@ -25,14 +29,18 @@ def _observation(
     obs_id: str, *, pattern: str | None, symbol: str = "RELIANCE", direction: str = "BULLISH",
     spot: str = "1000", breakeven: str | None = "1020", nearest_level_kind: str | None = "resistance",
     nearest_level_value: str | None = "1030",
+    invalidation_level_kind: str | None = None, invalidation_level_value: str | None = None,
+    early_stage_state: str = "EARLY_SETUP", derivatives_evidence_available: bool = False,
 ) -> ResearchObservation:
     return ResearchObservation(
         observation_id=obs_id, run_id="run1", audit_id=None, generated_at=_T0, symbol=symbol, direction=direction,
-        selected_right=None, selected_strike=None, early_stage_state="EARLY_SETUP", research_confidence="WEAK",
+        selected_right=None, selected_strike=None, early_stage_state=early_stage_state, research_confidence="WEAK",
         actionability="WATCH", spot_at_observation=spot, contractual_expiry_breakeven=breakeven,
-        nearest_level_kind=nearest_level_kind, nearest_level_value=nearest_level_value, market_context=None,
+        nearest_level_kind=nearest_level_kind, nearest_level_value=nearest_level_value,
+        invalidation_level_kind=invalidation_level_kind, invalidation_level_value=invalidation_level_value,
+        market_context=None,
         participation_note=None, coverage_classification="REPLAY", thesis="test", source="REPLAY",
-        derivatives_evidence_available=False, pattern=pattern,
+        derivatives_evidence_available=derivatives_evidence_available, pattern=pattern,
     )
 
 
@@ -104,6 +112,79 @@ def test_symbols_are_deduplicated_and_sorted() -> None:
 
 
 # ============================================================
+# aggregate_by_pattern_segmented -- final 95% sprint (Section 8)
+# ============================================================
+
+
+def test_segmented_by_direction_partitions_before_counting_by_pattern() -> None:
+    observations = [
+        _observation("a", pattern="PRE_BREAKOUT_COMPRESSION", direction="BULLISH"),
+        _observation("b", pattern="PRE_BREAKOUT_COMPRESSION", direction="BEARISH"),
+        _observation("c", pattern="PRE_BREAKOUT_COMPRESSION", direction="BULLISH"),
+    ]
+    outcomes = {
+        "a": ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED, "b": ResearchOutcomeStatus.NO_FOLLOW_THROUGH,
+        "c": ResearchOutcomeStatus.PENDING,
+    }
+    result = aggregate_by_pattern_segmented(observations, outcomes, segment_by=segment_by_direction)
+    assert set(result) == {"BULLISH", "BEARISH"}
+    assert result["BULLISH"][0].observations == 2
+    assert result["BULLISH"][0].follow_through_observed == 1
+    assert result["BULLISH"][0].pending == 1
+    assert result["BEARISH"][0].observations == 1
+    assert result["BEARISH"][0].no_follow_through == 1
+
+
+def test_segmented_counts_sum_back_to_the_unsegmented_total() -> None:
+    """Never a second, independent counting path -- summing a pattern's
+    counts across every segment must exactly reproduce
+    `aggregate_by_pattern()`'s own unsegmented total for that pattern."""
+    observations = [
+        _observation("a", pattern="RELATIVE_STRENGTH", direction="BULLISH"),
+        _observation("b", pattern="RELATIVE_STRENGTH", direction="BEARISH"),
+        _observation("c", pattern="RELATIVE_STRENGTH", direction="BULLISH"),
+    ]
+    outcomes = {
+        "a": ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED, "b": ResearchOutcomeStatus.FAILED_SETUP,
+        "c": ResearchOutcomeStatus.NO_FOLLOW_THROUGH,
+    }
+    unsegmented = aggregate_by_pattern(observations, outcomes)[0]
+    segmented = aggregate_by_pattern_segmented(observations, outcomes, segment_by=segment_by_direction)
+    total_observations = sum(agg.observations for aggs in segmented.values() for agg in aggs if agg.pattern == "RELATIVE_STRENGTH")
+    total_follow_through = sum(agg.follow_through_observed for aggs in segmented.values() for agg in aggs if agg.pattern == "RELATIVE_STRENGTH")
+    assert total_observations == unsegmented.observations
+    assert total_follow_through == unsegmented.follow_through_observed
+
+
+def test_segmented_by_timing_stage() -> None:
+    observations = [
+        _observation("a", pattern="PRE_BREAKOUT_COMPRESSION", early_stage_state="EARLY_SETUP"),
+        _observation("b", pattern="PRE_BREAKOUT_COMPRESSION", early_stage_state="WATCH"),
+    ]
+    result = aggregate_by_pattern_segmented(observations, outcomes={}, segment_by=segment_by_timing_stage)
+    assert set(result) == {"EARLY_SETUP", "WATCH"}
+    assert result["EARLY_SETUP"][0].observations == 1
+    assert result["WATCH"][0].observations == 1
+
+
+def test_segmented_by_evidence_completeness() -> None:
+    observations = [
+        _observation("a", pattern="PRE_BREAKOUT_COMPRESSION", derivatives_evidence_available=True),
+        _observation("b", pattern="PRE_BREAKOUT_COMPRESSION", derivatives_evidence_available=False),
+    ]
+    result = aggregate_by_pattern_segmented(observations, outcomes={}, segment_by=segment_by_evidence_completeness)
+    assert set(result) == {"DERIVATIVES_EVIDENCE_AVAILABLE", "PRICE_ONLY_EVIDENCE"}
+    assert result["DERIVATIVES_EVIDENCE_AVAILABLE"][0].observations == 1
+    assert result["PRICE_ONLY_EVIDENCE"][0].observations == 1
+
+
+def test_segmented_excludes_no_named_pattern_same_as_unsegmented() -> None:
+    observations = [_observation("a", pattern="NONE", direction="BULLISH")]
+    result = aggregate_by_pattern_segmented(observations, outcomes={}, segment_by=segment_by_direction)
+    assert result == {"BULLISH": []}
+
+
+# ============================================================
 # outcome_for_replay_observation -- deterministic translation from
 # outcome_horizons.py's own already-computed facts
 # ============================================================
@@ -123,11 +204,13 @@ def test_insufficient_outcome_data_when_target_passed_but_no_local_candles() -> 
     assert result == ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
 
 
-def test_no_failed_setup_bucket_is_ever_produced_for_replay() -> None:
-    """95% sprint, Sprint 1 correctness fix: no genuine invalidation-side
-    level is tracked, so `outcome_for_replay_observation()` never
-    fabricates FAILED_SETUP -- even a price move well below spot, against
-    a BULLISH thesis, is honestly NO_FOLLOW_THROUGH (not confirmed),
+def test_no_failed_setup_when_no_invalidation_level_is_recorded() -> None:
+    """Every pattern besides PRE_BREAKOUT_COMPRESSION, and every
+    observation written before `invalidation_level_kind` existed, carries
+    no genuine invalidation-side level -- `outcome_for_replay_observation()`
+    must never fabricate FAILED_SETUP from an unrelated fact (here, a
+    price move well below spot against a BULLISH thesis, with only the
+    CONFIRMATION-relevant resistance recorded): honestly NO_FOLLOW_THROUGH,
     never a guessed "failed" verdict. Realistic price-only fixture:
     `breakeven=None` (a real price-only observation never has one)."""
     obs = _observation(
@@ -141,6 +224,44 @@ def test_no_failed_setup_bucket_is_ever_produced_for_replay() -> None:
     ]
     result = outcome_for_replay_observation(obs, candles, as_of=target_session + timedelta(hours=7))
     assert result == ResearchOutcomeStatus.NO_FOLLOW_THROUGH
+
+
+def test_failed_setup_when_a_genuine_invalidation_level_is_broken() -> None:
+    """Final 95% sprint (Section 6): once a genuine invalidation-side
+    supporting level IS recorded (PRE_BREAKOUT_COMPRESSION only), a real
+    breach of it now correctly yields FAILED_SETUP -- no longer
+    permanently unreachable."""
+    obs = _observation(
+        "a", pattern="PRE_BREAKOUT_COMPRESSION", breakeven=None,
+        nearest_level_kind="resistance", nearest_level_value="1030",
+        invalidation_level_kind="support", invalidation_level_value="990",
+    )
+    target_session = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    candles = [
+        _candle(timestamp=_T0, close="1000"),
+        _candle(timestamp=target_session, close="985", high="1005", low="985"),
+    ]
+    result = outcome_for_replay_observation(obs, candles, as_of=target_session + timedelta(hours=7))
+    assert result == ResearchOutcomeStatus.FAILED_SETUP
+
+
+def test_invalidation_takes_precedence_over_a_simultaneous_confirmation_touch() -> None:
+    """A real whipsaw -- the window touches BOTH the confirmation-relevant
+    resistance and the invalidation-relevant support -- is reported as
+    the failed setup it structurally was, never overstated as a
+    confirmed success."""
+    obs = _observation(
+        "a", pattern="PRE_BREAKOUT_COMPRESSION", breakeven=None,
+        nearest_level_kind="resistance", nearest_level_value="1010",
+        invalidation_level_kind="support", invalidation_level_value="990",
+    )
+    target_session = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    candles = [
+        _candle(timestamp=_T0, close="1000"),
+        _candle(timestamp=target_session, close="995", high="1015", low="985"),
+    ]
+    result = outcome_for_replay_observation(obs, candles, as_of=target_session + timedelta(hours=7))
+    assert result == ResearchOutcomeStatus.FAILED_SETUP
 
 
 def test_follow_through_observed_when_the_opposing_level_is_broken_by_plus5() -> None:

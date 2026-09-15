@@ -243,6 +243,19 @@
       <button id="history-btn">LOAD HISTORY</button>
     </div>
     <div id="history-results"></div>
+
+    <!-- Final 95% sprint (Sections 8/9/25) -- PATTERN HISTORY: "when this
+         named pattern appeared historically, what actually happened
+         afterward?" Descriptive counts only. Every number here is an
+         exact tally the backend already computed; this view never
+         derives a rate, and the sample-size disclaimer is rendered
+         FIRST, above any count, so the operator reads how little the
+         sample proves before they read the numbers. -->
+    <h2 class="section-label" style="margin-top:14px">PATTERN HISTORY <span class="note">what happened after this type of observation -- descriptive counts over real observations, never a win rate, probability, or prediction</span></h2>
+    <div class="search-row">
+      <button id="patterns-btn" class="secondary">LOAD PATTERN HISTORY</button>
+    </div>
+    <div id="patterns-results"></div>
   </section>
 
   <div class="search-row" id="symbol-research">
@@ -1205,7 +1218,11 @@ async function runResearchHistory() {
       el("td", { text: o.generated_at }),
       el("td", { text: o.symbol }),
       el("td", { text: o.direction }),
-      el("td", { text: o.selected_right + " " + o.selected_strike }),
+      // A price-only (replay) observation genuinely has no selected
+      // contract -- both fields are null. Rendering that as the string
+      // "null null" would read as corrupt data rather than as the honest
+      // "no contract was evaluated" this actually is.
+      el("td", { text: (o.selected_right && o.selected_strike) ? (o.selected_right + " " + o.selected_strike) : "no contract (price-only)" }),
       el("td", { text: o.early_stage_state }),
       el("td", { text: o.research_confidence }),
       el("td", { text: o.actionability }),
@@ -1224,6 +1241,102 @@ async function runResearchHistory() {
   results.appendChild(explain);
 }
 document.getElementById("history-btn").addEventListener("click", runResearchHistory);
+
+// Final 95% sprint (Sections 8/9/25) -- PATTERN HISTORY via
+// GET /api/research/patterns. Purely a renderer: every count comes from
+// the backend's own aggregation, and nothing here divides, averages, or
+// sorts by "best". The sample-size disclaimer is drawn BEFORE the table
+// deliberately -- a count like "3 observed" is misleading until the
+// reader knows it was drawn from a 41-observation store of which 38 had
+// no named pattern.
+function patternCountsTable(patterns) {
+  const table = el("table", { class: "checkpoint-table" });
+  table.appendChild(el("thead", {}, [el("tr", {}, [
+    "Pattern", "Observed", "Follow-through", "No follow-through", "Failed setup", "Pending", "Insufficient data", "Symbols",
+  ].map((h) => el("th", { text: h })))]));
+  const tbody = el("tbody");
+  (patterns || []).forEach((p) => {
+    tbody.appendChild(el("tr", {}, [
+      el("td", { text: p.pattern }),
+      el("td", { text: String(p.observations) }),
+      el("td", { text: String(p.follow_through_observed) }),
+      el("td", { text: String(p.no_follow_through) }),
+      el("td", { text: String(p.failed_setup) }),
+      el("td", { text: String(p.pending) }),
+      el("td", { text: String(p.insufficient_outcome_data) }),
+      el("td", { text: (p.symbols && p.symbols.length) ? p.symbols.join(", ") : "n/a" }),
+    ]));
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
+async function runPatternAggregation() {
+  const btn = document.getElementById("patterns-btn");
+  const results = document.getElementById("patterns-results");
+  btn.disabled = true;
+  results.innerHTML = "";
+  results.appendChild(el("p", { class: "hint", text: "loading pattern history…" }));
+
+  let data = null;
+  try {
+    const resp = await fetch(apiUrl("/api/research/patterns"));
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail ? JSON.stringify(body.detail) : ("request failed (" + resp.status + ")"));
+    }
+    data = await resp.json();
+  } catch (err) {
+    results.innerHTML = "";
+    results.appendChild(el("p", { class: "hint", text: "PATTERN HISTORY FAILED: " + err.message }));
+    btn.disabled = false;
+    return;
+  }
+  btn.disabled = false;
+  results.innerHTML = "";
+
+  // Sample size FIRST -- before any count.
+  const honesty = el("div", { class: "list-block", style: "margin-bottom:10px" });
+  honesty.appendChild(el("p", { style: "font-weight:600;margin-top:0", text: data.sample_size_note }));
+  const covRow = el("div", { style: "margin:4px 0" });
+  covRow.appendChild(badge("PRICE HISTORY", data.price_history));
+  covRow.appendChild(badge("DERIVATIVES HISTORY", data.derivatives_history));
+  honesty.appendChild(covRow);
+  honesty.appendChild(el("p", {
+    class: "chart-hint",
+    text: "Persisted observations: " + data.total_observations +
+      "  ·  with a named pattern: " + data.observations_with_named_pattern +
+      "  ·  without a named pattern (excluded): " + data.observations_without_named_pattern +
+      "  ·  on real derivatives evidence: " + data.derivatives_evidence_observations +
+      "  ·  price-only: " + data.price_only_observations,
+  }));
+  results.appendChild(honesty);
+
+  if (!data.patterns || !data.patterns.length) {
+    results.appendChild(el("p", { class: "hint", text: "No named-pattern history to aggregate yet. This is an honest empty result, not a claim that no patterns occur." }));
+    return;
+  }
+
+  results.appendChild(patternCountsTable(data.patterns));
+
+  // Segments are secondary detail -- an already-small sample split
+  // further is smaller still, so this stays collapsed by default.
+  (data.segments || []).forEach((dim) => {
+    const det = el("details", { style: "margin-top:8px" });
+    det.appendChild(el("summary", { text: "Segmented by " + dim.dimension.replace(/_/g, " ").toLowerCase() + " (each segment is a subset of the counts above -- smaller sample still)" }));
+    (dim.segments || []).forEach((seg) => {
+      det.appendChild(el("p", { class: "chart-hint", style: "margin:6px 0 2px", text: seg.segment }));
+      det.appendChild(patternCountsTable(seg.patterns));
+    });
+    results.appendChild(det);
+  });
+
+  results.appendChild(el("p", {
+    class: "hint", style: "margin-top:8px",
+    text: "These are counts of what already happened, not a forecast. TIRE does not compute a win rate, probability, confidence score, or expected return from them, and this history never influences today's shortlist.",
+  }));
+}
+document.getElementById("patterns-btn").addEventListener("click", runPatternAggregation);
 
 async function runWatchlist() {
   const raw = document.getElementById("watchlist-query").value.trim();

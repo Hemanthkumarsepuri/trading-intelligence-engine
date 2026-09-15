@@ -66,3 +66,9 @@ build/
 # Local UAT and debug artifacts
 .scratch_uat/
 _tmp_debug_daily/
+
+# Raw whole-market scan dumps written during validation runs. The scan
+# METRICS that matter are recorded in docs/FINAL_95_PRODUCT_COMPLETION_REPORT.md;
+# the 100KB+ raw job payload itself is a debug artifact, never committed
+# (final 95% sprint, Section 37).
+docs/_whole_market_scan_*.json

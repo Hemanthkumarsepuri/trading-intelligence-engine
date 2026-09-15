@@ -88,6 +88,10 @@ from app.orchestration.journal_views import (
     build_outcome_tracking,
 )
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
+from app.orchestration.pattern_views import (
+    PatternAggregationView,
+    build_live_pattern_aggregation,
+)
 from app.orchestration.query_context import (
     ContextState,
     FollowupKind,
@@ -864,6 +868,31 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
         return await build_research_history(
             outcome_repository, as_of=utc_now(), symbol=symbol, day=parsed_day, direction=direction, outcome_status=outcome_status,
         )
+
+    @app.get("/api/research/patterns", response_model=PatternAggregationView)
+    async def research_patterns() -> PatternAggregationView:
+        """Final 95% sprint (Sections 8/9/25) -- deterministic historical
+        PATTERN AGGREGATION: "when this named pattern appeared
+        historically, what actually happened afterward?"
+
+        Read-only and purely DESCRIPTIVE. Every number is an exact count
+        over real persisted observations whose outcomes were already
+        determined by their own outcome mechanism -- never a win rate,
+        probability, confidence score, expected return, or prediction
+        (there is no float field in the response model at all). The
+        response leads with `sample_size_note`, which states the real
+        sample size and its limitations BEFORE any count, and reports
+        `DERIVATIVES_HISTORY_UNAVAILABLE` honestly rather than implying
+        an absence of options activity.
+
+        Registered BEFORE `/api/research/{observation_id}/outcome` so the
+        literal path segment `patterns` is never captured as an
+        observation id by that route's path parameter.
+        """
+        outcome_repository: JsonlResearchOutcomeRepository | None = getattr(app.state, "outcome_repository", None)
+        if outcome_repository is None:
+            raise HTTPException(status_code=503, detail="research outcome tracking is not configured")
+        return await build_live_pattern_aggregation(outcome_repository, as_of=utc_now())
 
     @app.get("/api/research/{observation_id}/outcome", response_model=ResearchOutcomeDetailView)
     async def research_observation_outcome(observation_id: str) -> ResearchOutcomeDetailView:

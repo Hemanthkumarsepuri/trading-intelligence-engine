@@ -556,7 +556,10 @@ def test_dashboard_html_netlify_readiness_api_base() -> None:
     # Sprint 5 -- +1 for RESEARCH HISTORY. Early-opportunity pass -- +1
     # for POST /api/journal/personal (LOAD builds apiUrl() into a local
     # `url` then fetch(url), so it does not increment this exact count).
-    assert html.count('fetch(apiUrl(') == 15
+    # Final 95% sprint -- +1 for GET /api/research/patterns (PATTERN
+    # HISTORY); this guard caught it correctly and it does route through
+    # apiUrl(), which is the property actually under test here.
+    assert html.count('fetch(apiUrl(') == 16
 
 
 def test_dashboard_html_includes_the_sprint6_ce_pe_and_chart_sections() -> None:
