@@ -72,3 +72,7 @@ _tmp_debug_daily/
 # the 100KB+ raw job payload itself is a debug artifact, never committed
 # (final 95% sprint, Section 37).
 docs/_whole_market_scan_*.json
+
+# Raw provider probe dumps (debug artifacts, never committed)
+news_probe_output.txt
+*_probe_output.txt
