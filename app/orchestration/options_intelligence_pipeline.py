@@ -593,10 +593,29 @@ async def analyze_symbol(
         end=as_of - timedelta(microseconds=1), as_of=as_of - timedelta(microseconds=1),
     )
     snapshot: OptionChainSnapshot | None
+    # Final release gate (Section 7) -- retry ONLY a provider that claims
+    # to serve this stream. A provider declaring
+    # `historical_option_chain=False` (i.e. `HistoricalReplayProvider`)
+    # raises `ProviderUnavailable` unconditionally and by design: there is
+    # no historical option-chain endpoint to be transiently unavailable,
+    # so every retry is a guaranteed failure bought with a real backoff
+    # sleep. Measured on a real replay session: 3 attempts x 2 expiries of
+    # linear backoff cost ~6.2 s per bar, which WAS essentially the entire
+    # replay runtime (profiling showed 18.1 s of 19.6 s across 3 bars was
+    # the event loop sleeping, against ~0.34 s of actual provider work).
+    # The graceful "provider itself declares it never had this data" path
+    # immediately below is unchanged and still handles the failure --
+    # this only stops paying for retries that cannot succeed.
+    #
+    # The LIVE path is untouched: `UpstoxProvider` declares
+    # `historical_option_chain=True`, so it still gets the full
+    # `chain_fetch_attempts`/`chain_fetch_backoff_seconds` treatment for
+    # the genuinely transient failures that helper exists for.
+    chain_attempts = config.chain_fetch_attempts if provider.capabilities.historical_option_chain else 1
     try:
         raw_chain = await _retry(
             lambda: provider.get_chain(underlying=ref.instrument_key, expiry=expiry_info.expiry, as_of=as_of),
-            attempts=config.chain_fetch_attempts, backoff_seconds=config.chain_fetch_backoff_seconds,
+            attempts=chain_attempts, backoff_seconds=config.chain_fetch_backoff_seconds,
         )
     except ProviderError as exc:
         _measure("option_chain", t)
@@ -884,9 +903,15 @@ async def analyze_symbol(
                 chain_for_summary = snapshot
             else:
                 try:
+                    # Same capability-aware retry as stage 8 above, and
+                    # for the same reason: a provider that declares it has
+                    # no historical option chain cannot transiently
+                    # succeed on a second attempt, so the backoff is pure
+                    # waste. Reuses stage 8's own `chain_attempts` rather
+                    # than recomputing the same condition.
                     raw_other = await _retry(
                         _fetch_other_chain(info.expiry),
-                        attempts=config.chain_fetch_attempts, backoff_seconds=config.chain_fetch_backoff_seconds,
+                        attempts=chain_attempts, backoff_seconds=config.chain_fetch_backoff_seconds,
                     )
                 except ProviderError as exc:
                     report.data_warnings.append(f"term structure: chain fetch failed for expiry {info.expiry.isoformat()}: {exc}")
@@ -927,9 +952,19 @@ async def analyze_symbol(
             # (a data_warning, never a failed symbol) -- the retry can
             # only recover more real futures context, never make this
             # path riskier.
+            # Final release gate (Section 7) -- capability-aware, exactly
+            # as for the option chain above: a provider declaring
+            # `historical_futures=False` has no historical futures stream
+            # that could come back on a retry, so the backoff buys a
+            # guaranteed second failure. The graceful `data_warning` path
+            # below is unchanged; the live provider
+            # (`historical_futures=True`) keeps its full retry budget.
+            futures_attempts = (
+                config.underlying_quote_fetch_attempts if provider.capabilities.historical_futures else 1
+            )
             fut_quotes = await _retry(
                 functools.partial(provider.get_quotes, [fut_key]),
-                attempts=config.underlying_quote_fetch_attempts, backoff_seconds=config.underlying_quote_fetch_backoff_seconds,
+                attempts=futures_attempts, backoff_seconds=config.underlying_quote_fetch_backoff_seconds,
             )
         except ProviderError as exc:
             report.data_warnings.append(f"futures quote fetch failed: {exc}")

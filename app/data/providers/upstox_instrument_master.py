@@ -30,6 +30,7 @@ import httpx
 from pydantic import BaseModel
 
 from app.data.providers.exceptions import ProviderMalformedResponse, ProviderUnavailable
+from app.data.providers.instrument_master_index import index_for
 
 NSE_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
@@ -139,11 +140,17 @@ def resolve_symbol(
     `"INDEX"`) resolves exactly as before.
     """
     canonical = _SYMBOL_ALIASES.get(symbol.strip().upper(), symbol.strip().upper())
+    # Final release gate (Section 7) -- the equality on `trading_symbol`
+    # is now served from a memoized index instead of re-scanning all
+    # ~29,713 master rows on every call (measured 0.307 s/call; see
+    # `instrument_master_index`). The remaining predicates below are
+    # UNCHANGED and still applied per candidate, and the index preserves
+    # the master's own row order, so the `EQ` tie-break underneath
+    # resolves identically to the old linear scan.
     matches = [
         entry
-        for entry in master
-        if str(entry.get("trading_symbol", "")).strip().upper() == canonical
-        and (segment is None or entry.get("segment") == segment)
+        for entry in index_for(master).by_trading_symbol().get(canonical, ())
+        if (segment is None or entry.get("segment") == segment)
         and isinstance(entry.get("instrument_key"), str)
     ]
     if not matches:

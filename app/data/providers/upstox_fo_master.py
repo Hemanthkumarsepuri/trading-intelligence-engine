@@ -19,6 +19,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
+from app.data.providers.instrument_master_index import index_for
+
 
 @dataclass(frozen=True)
 class ExpiryInfo:
@@ -33,9 +35,11 @@ def is_fo_eligible(master: Sequence[dict[str, object]], underlying_symbol: str) 
     underlying merely existing in `NSE_EQ`/`NSE_INDEX`.
     """
     canonical = underlying_symbol.strip().upper()
-    return any(
-        entry.get("segment") == "NSE_FO" and _underlying(entry) == canonical for entry in master
-    )
+    # Final release gate (Section 7) -- served from a memoized index
+    # rather than scanning all ~29,713 rows per call. The index applies
+    # the SAME two conditions this expression did (segment == NSE_FO and
+    # a canonical underlying match), so the answer is unchanged.
+    return bool(index_for(master).fo_by_underlying().get(canonical))
 
 
 def list_expiries(master: Sequence[dict[str, object]], underlying_symbol: str) -> list[ExpiryInfo]:
@@ -45,9 +49,10 @@ def list_expiries(master: Sequence[dict[str, object]], underlying_symbol: str) -
     """
     canonical = underlying_symbol.strip().upper()
     seen: dict[date, bool] = {}
-    for entry in master:
-        if entry.get("segment") != "NSE_FO" or _underlying(entry) != canonical:
-            continue
+    # Final release gate (Section 7) -- the segment/underlying filter is
+    # now the index lookup (same two conditions, same row order); the
+    # expiry/weekly logic below is UNCHANGED.
+    for entry in index_for(master).fo_by_underlying().get(canonical, ()):
         expiry_date = _expiry_date(entry)
         if expiry_date is None:
             continue
@@ -103,9 +108,10 @@ def lot_size(master: Sequence[dict[str, object]], underlying_symbol: str) -> int
     never a guessed default.
     """
     canonical = underlying_symbol.strip().upper()
-    for entry in master:
-        if entry.get("segment") != "NSE_FO" or _underlying(entry) != canonical:
-            continue
+    # Section 7 -- index lookup replaces the full scan; same segment/
+    # underlying conditions, same row order, so the FIRST valid lot size
+    # found is the same one as before.
+    for entry in index_for(master).fo_by_underlying().get(canonical, ()):
         size = entry.get("lot_size")
         if isinstance(size, int | float) and not isinstance(size, bool):
             return int(size)
@@ -119,10 +125,11 @@ def futures_instrument_key(master: Sequence[dict[str, object]], underlying_symbo
     segment at all).
     """
     canonical = underlying_symbol.strip().upper()
-    for entry in master:
-        if entry.get("segment") != "NSE_FO" or entry.get("instrument_type") != "FUT":
-            continue
-        if _underlying(entry) != canonical:
+    # Section 7 -- index lookup replaces the segment/underlying scan; the
+    # FUT and expiry conditions below are UNCHANGED, and row order is
+    # preserved so the first match is the same one as before.
+    for entry in index_for(master).fo_by_underlying().get(canonical, ()):
+        if entry.get("instrument_type") != "FUT":
             continue
         if _expiry_date(entry) != expiry:
             continue
