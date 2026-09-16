@@ -48,6 +48,7 @@ from pydantic import BaseModel, Field
 from app.data.normalization.base import _MAX_CLOCK_SKEW_TOLERANCE
 from app.data.providers.base import BatchedQuoteProvider, RawQuote
 from app.data.providers.exceptions import ProviderError
+from app.data.providers.request_budget import UPSTOX_REQUEST_LEDGER, RequestLedger
 from app.data.providers.scan_snapshot_cache import ScanSnapshotCache
 from app.data.providers.upstox_fo_master import nearest_expiry
 from app.data.providers.upstox_instrument_master import resolve_symbol
@@ -222,6 +223,15 @@ class ScreeningConfig:
     # never padded -- and whatever still exceeds it is reported honestly
     # as STAGE_2_DEFERRED_CAPACITY rather than hidden.
     survivor_cap: int = 80
+    # Release gate (Section 8) -- no longer the BINDING limit for the
+    # default whole-market scan. After the Stage-2 CPU fixes (journal and
+    # option-chain offset indexes, instrument-master index) a live scan
+    # deep-analyzed 193/193 Stage-1 candidates in 103.7 s at the SAME
+    # concurrency of 6, so `run_daily_research()` passes
+    # `DEFAULT_WHOLE_MARKET_SURVIVOR_CAP` and lets the provider's measured
+    # per-API 30-minute request budget decide real capacity
+    # (`request_budget.RequestLedger.stage_two_capacity()`). This default
+    # remains for callers that construct a config explicitly.
 
     # Sprint 1 -- real live defect found 2026-08-31: ~100/210 symbols lost
     # to a real batched `/v2/market-quote/quotes` timeout, with ZERO retry
@@ -309,6 +319,34 @@ class StageOneResult:
     truncated_count: int = 0
     survivor_cap_applied: bool = False
     index_relative_strength_available: bool = False
+    # Release gate (Sections 5/6/8) -- which limit actually cut the Stage-2
+    # list, and every Stage-1 candidate's movement stage and matched
+    # observations, so the per-symbol pipeline record can be built without
+    # re-deriving anything.
+    stage_two_limit_reason: str = "NONE"
+    candidate_movement_stage: dict[str, str] = field(default_factory=dict)
+    candidate_observations: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+# Release gate (Section 5) -- which limit, if any, deferred Stage-1
+# candidates from Stage 2 this run.
+STAGE_2_LIMIT_NONE = "NONE"
+STAGE_2_LIMIT_CONFIGURED_CAP = "CONFIGURED_CAP"
+STAGE_2_LIMIT_RATE_BUDGET = "PROVIDER_RATE_BUDGET"
+# Above any real F&O universe: whole-market coverage is budget-bound, not cap-bound.
+DEFAULT_WHOLE_MARKET_SURVIVOR_CAP = 1000
+
+# Release gate (Section 6) -- deterministic movement stage of a Stage-1
+# candidate, from today's own quote only. DEVELOPING: the day's move is
+# inside the developing-momentum band (or quieter) AND price is still near
+# the day's own VWAP. ADVANCED: the move already ran beyond that band or
+# away from VWAP without being excluded as extended. When capacity is
+# short, ADVANCED candidates yield Stage-2 capacity first -- a 5% mover
+# must not crowd out a quiet name whose structure is still forming. This
+# only ORDERS candidates that already matched a real bucket; it is never
+# shown as a score and carries no predictive meaning.
+MOVEMENT_STAGE_DEVELOPING = "DEVELOPING"
+MOVEMENT_STAGE_ADVANCED = "ADVANCED"
 
 
 @dataclass(frozen=True)
@@ -350,6 +388,14 @@ def _quote_metrics(raw: RawQuote) -> _QuoteMetrics:
         position_in_day_range=position_in_day_range, buy_sell_ratio=buy_sell_ratio,
         session_range_pct=session_range_pct,
     )
+
+
+def _movement_stage(m: _QuoteMetrics, cfg: ScreeningConfig) -> str:
+    if m.day_change_pct is not None and abs(m.day_change_pct) > cfg.momentum_max_day_change_pct:
+        return MOVEMENT_STAGE_ADVANCED
+    if m.vwap_distance_pct is not None and abs(m.vwap_distance_pct) > cfg.momentum_max_vwap_distance_pct:
+        return MOVEMENT_STAGE_ADVANCED
+    return MOVEMENT_STAGE_DEVELOPING
 
 
 def _already_extended_intraday(m: _QuoteMetrics, cfg: ScreeningConfig) -> bool:
@@ -421,6 +467,7 @@ async def screen_universe(
     symbols: Sequence[str], *, provider: BatchedQuoteProvider, instrument_master: Sequence[dict[str, object]],
     as_of: datetime, exchange_status: ExchangeStatus = ExchangeStatus.UNKNOWN, config: ScreeningConfig | None = None,
     on_progress: Callable[[dict[str, object]], Awaitable[None]] | None = None,
+    stage_two_budget_capacity: int | None = None,
 ) -> StageOneResult:
     """Real, cheap, batched EARLY-STAGE discovery -- see the module-level
     HONESTY NOTE above for exactly which dimensions this can and cannot
@@ -646,29 +693,49 @@ async def screen_universe(
     def _fair_tiebreak(symbol: str) -> str:
         return hashlib.sha256(f"{session_date}|{symbol}".encode()).hexdigest()
 
+    # Release gate (Section 6) -- movement stage is the PRIMARY key: a
+    # DEVELOPING candidate always outranks an ADVANCED one, so a capacity
+    # shortfall defers names that already moved before names whose
+    # situation is still forming. The keys beneath it are unchanged.
+    movement_stage = {symbol: _movement_stage(metrics_by_symbol[symbol], cfg) for symbol, _ in matched}
     ordered = sorted(
         matched,
         key=lambda item: (
+            movement_stage[item[0]] != MOVEMENT_STAGE_DEVELOPING,
             -len(independent_dimensions(item[1])),
             -len(item[1]),
             _fair_tiebreak(item[0]),
         ),
     )
-    survivors = [symbol for symbol, _ in ordered[: cfg.survivor_cap]]
+    effective_cap = cfg.survivor_cap
+    limit_reason = STAGE_2_LIMIT_CONFIGURED_CAP
+    if stage_two_budget_capacity is not None and stage_two_budget_capacity < cfg.survivor_cap:
+        effective_cap = max(0, stage_two_budget_capacity)
+        limit_reason = STAGE_2_LIMIT_RATE_BUDGET
+    survivors = [symbol for symbol, _ in ordered[:effective_cap]]
     survivor_set = set(survivors)
     truncated_count = 0
     for symbol, buckets in ordered:
         if symbol not in survivor_set:
             truncated_count += 1
-            rejected.append(RejectionRecord(
-                symbol=symbol,
-                reason=(
-                    f"STAGE_2_SKIPPED_CAPACITY: matched {', '.join(buckets)} "
-                    f"({len(independent_dimensions(buckets))} independent evidence dimension(s)) and remains a real "
-                    f"Stage-1 candidate, but Stage-2 capacity is {cfg.survivor_cap} analyses per run. Deferred for "
-                    f"capacity only -- NOT a finding that this name is uninteresting, and not a rejection of its evidence."
-                ),
-            ))
+            evidence = (
+                f"matched {', '.join(buckets)} ({len(independent_dimensions(buckets))} independent evidence "
+                f"dimension(s), movement stage {movement_stage[symbol]}) and remains a real Stage-1 candidate"
+            )
+            if limit_reason == STAGE_2_LIMIT_RATE_BUDGET:
+                reason = (
+                    f"STAGE_2_DEFERRED_RATE_BUDGET: {evidence}, but only {effective_cap} further deep analyses fit "
+                    "inside the provider's per-API 30-minute request limit after this process's recent usage. "
+                    "Deferred to protect the provider budget -- NOT a finding about this name. Re-run once the "
+                    "window rolls."
+                )
+            else:
+                reason = (
+                    f"STAGE_2_SKIPPED_CAPACITY: {evidence}, but Stage-2 capacity is {cfg.survivor_cap} analyses "
+                    "per run. Deferred for capacity only -- NOT a finding that this name is uninteresting, and "
+                    "not a rejection of its evidence."
+                )
+            rejected.append(RejectionRecord(symbol=symbol, reason=reason))
 
     survivor_buy_sell_ratio: dict[str, Decimal] = {}
     survivor_observations: dict[str, tuple[str, ...]] = {}
@@ -685,6 +752,9 @@ async def screen_universe(
         truncated_count=truncated_count,
         survivor_cap_applied=truncated_count > 0,
         index_relative_strength_available=index_day_change_pct is not None,
+        stage_two_limit_reason=limit_reason if truncated_count > 0 else STAGE_2_LIMIT_NONE,
+        candidate_movement_stage=movement_stage,
+        candidate_observations={symbol: tuple(buckets) for symbol, buckets in matched},
     )
 
 
@@ -751,6 +821,9 @@ class DailyResearchResult:
     stage1_truncated_count: int = 0
     stage1_cap_applied: bool = False
     index_relative_strength_available: bool = False
+    symbol_pipeline: list[SymbolPipelineRecord] = field(default_factory=list)
+    stage_two_limit_reason: str = STAGE_2_LIMIT_NONE
+    stage_two_budget_capacity: int | None = None
 
     @property
     def rejected_as_extended_count(self) -> int:
@@ -759,6 +832,101 @@ class DailyResearchResult:
     @property
     def rejected_insufficient_evidence_count(self) -> int:
         return self.rejection_summary.get("INSUFFICIENT_EARLY_STAGE_EVIDENCE", 0)
+
+
+# ============================================================
+# Release gate (Section 5) -- the explicit Stage-1 -> Stage-2 contract
+# ============================================================
+STAGE_1_ANALYZED = "STAGE_1_ANALYZED"
+STAGE_1_FAILED = "STAGE_1_FAILED"
+STAGE_1_SKIPPED = "STAGE_1_SKIPPED"  # explicit-symbols query: Stage 1 deliberately not run
+STAGE_1_CANDIDATE = "STAGE_1_CANDIDATE"
+STAGE_1_REJECTED = "STAGE_1_REJECTED"
+STAGE_2_ANALYZED = "STAGE_2_ANALYZED"
+STAGE_2_FAILED = "STAGE_2_FAILED"
+STAGE_2_SKIPPED_CAPACITY = "STAGE_2_SKIPPED_CAPACITY"
+STAGE_2_DEFERRED_RATE_BUDGET = "STAGE_2_DEFERRED_RATE_BUDGET"
+STAGE_2_NOT_REACHED = "STAGE_2_NOT_REACHED"
+NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class SymbolPipelineRecord(BaseModel):
+    """Exactly what happened to ONE universe symbol in one scan. Every
+    universe symbol gets exactly one record -- nothing can fall out of the
+    report between Stage 1 and Stage 2. `outcome` is the real category the
+    existing rejection/shortlist logic already produced, never a new
+    judgement."""
+
+    symbol: str
+    stage_1: str
+    stage_1_result: str
+    stage_2: str
+    outcome: str
+    movement_stage: str | None = None
+    stage_1_observations: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
+def build_symbol_pipeline(
+    *,
+    universe: Sequence[str],
+    stage_one_ran: bool,
+    stage_one_rejected: Sequence[RejectionRecord],
+    stage_one_movement_stage: dict[str, str],
+    stage_one_candidate_observations: dict[str, tuple[str, ...]],
+    stage_two_universe: Sequence[str],
+    responses: dict[str, AnalyzeResponse],
+    stage_two_rejected: Sequence[RejectionRecord],
+    shortlisted: Sequence[str],
+) -> list[SymbolPipelineRecord]:
+    """Pure: one `SymbolPipelineRecord` per universe symbol, in universe
+    order, derived only from records the scan already produced."""
+    s1_reason = {r.symbol: r.reason for r in stage_one_rejected}
+    s2_reason = {r.symbol: r.reason for r in stage_two_rejected}
+    shortlisted_set = set(shortlisted)
+    stage_two_set = set(stage_two_universe)
+    records: list[SymbolPipelineRecord] = []
+    for symbol in universe:
+        observations = list(stage_one_candidate_observations.get(symbol, ()))
+        movement = stage_one_movement_stage.get(symbol)
+        if symbol in stage_two_set:
+            stage_1 = STAGE_1_ANALYZED if stage_one_ran else STAGE_1_SKIPPED
+            stage_1_result = STAGE_1_CANDIDATE if stage_one_ran else NOT_APPLICABLE
+            response = responses.get(symbol)
+            reason = s2_reason.get(symbol)
+            category = categorize_rejection(reason) if reason is not None else None
+            if response is None or category in _RELIABILITY_FAILURE_CATEGORIES:
+                stage_2 = STAGE_2_FAILED
+                outcome = category or "ANALYSIS_ERROR"
+            else:
+                stage_2 = STAGE_2_ANALYZED
+                if symbol in shortlisted_set:
+                    outcome = "SHORTLISTED"
+                elif category is not None:
+                    outcome = category
+                else:
+                    outcome = f"ANALYZED ({response.research_state or response.decision or 'no research state'})"
+            detail = reason or (response.error if response is not None and response.error else "")
+            records.append(SymbolPipelineRecord(
+                symbol=symbol, stage_1=stage_1, stage_1_result=stage_1_result, stage_2=stage_2, outcome=outcome,
+                movement_stage=movement, stage_1_observations=observations, detail=detail or "",
+            ))
+            continue
+        reason = s1_reason.get(symbol, "")
+        category = categorize_rejection(reason) if reason else "OTHER"
+        if category.startswith("STAGE_2_DEFERRED_RATE_BUDGET"):
+            stage_1, stage_1_result, stage_2 = STAGE_1_ANALYZED, STAGE_1_CANDIDATE, STAGE_2_DEFERRED_RATE_BUDGET
+        elif category.startswith("STAGE_2_DEFERRED_CAPACITY"):
+            stage_1, stage_1_result, stage_2 = STAGE_1_ANALYZED, STAGE_1_CANDIDATE, STAGE_2_SKIPPED_CAPACITY
+        elif category in ("ALREADY_EXTENDED", "INSUFFICIENT_EARLY_STAGE_EVIDENCE"):
+            stage_1, stage_1_result, stage_2 = STAGE_1_ANALYZED, STAGE_1_REJECTED, STAGE_2_NOT_REACHED
+        else:
+            stage_1, stage_1_result, stage_2 = STAGE_1_FAILED, NOT_APPLICABLE, STAGE_2_NOT_REACHED
+        records.append(SymbolPipelineRecord(
+            symbol=symbol, stage_1=stage_1, stage_1_result=stage_1_result, stage_2=stage_2, outcome=category,
+            movement_stage=movement, stage_1_observations=observations, detail=reason,
+        ))
+    return records
 
 
 # Objective 7 -- a deterministic categorization of each REAL rejection
@@ -774,6 +942,10 @@ _REJECTION_CATEGORY_RULES: list[tuple[str, str]] = [
     # evidence-based rejection -- the category name has to say so, since
     # calling this "screened out" understated what it is.
     ("stage_2_skipped_capacity", "STAGE_2_DEFERRED_CAPACITY (a real Stage-1 candidate, not deep-analyzed this run)"),
+    (
+        "stage_2_deferred_rate_budget",
+        "STAGE_2_DEFERRED_RATE_BUDGET (a real Stage-1 candidate, deferred to respect provider rate limits)",
+    ),
     # Pre-Section-5 wording, kept so historical persisted runs still
     # categorize correctly rather than falling through to OTHER.
     ("screened out at stage 1", "STAGE_2_DEFERRED_CAPACITY (a real Stage-1 candidate, not deep-analyzed this run)"),
@@ -1245,6 +1417,7 @@ async def run_daily_research(
     delivery_cache_dir: Path | None = None,
     stage_two_concurrency: int = 6,
     on_progress: Callable[[dict[str, object]], Awaitable[None]] | None = None,
+    request_ledger: RequestLedger | None = None,
 ) -> DailyResearchResult:
     """When `symbols` is explicit (a caller's own list, or the old
     `DEFAULT_RESEARCH_UNIVERSE` fast/manual override), Stage 1 is skipped
@@ -1280,6 +1453,10 @@ async def run_daily_research(
     universe_source = UNIVERSE_SOURCE_UPSTOX_NSE_FO_EQUITY
     universe_discovery_seconds = 0.0
     stage1_seconds = 0.0
+    stage_two_limit_reason = STAGE_2_LIMIT_NONE
+    stage_two_budget_capacity: int | None = None
+    stage_one_movement: dict[str, str] = {}
+    stage_one_candidates: dict[str, tuple[str, ...]] = {}
     if symbols is not None:
         # Explicit override -- Stage 1 correctly skipped; `full_universe`
         # and the Stage-2 input are the same list, exactly as before this
@@ -1300,10 +1477,22 @@ async def run_daily_research(
             exchange_status = await provider.get_market_status(exchange="NSE")
         except ProviderError:
             exchange_status = ExchangeStatus.UNKNOWN
+        # Release gate (Section 8) -- the default whole-market scan is no
+        # longer cut at a fixed survivor count: every Stage-1 candidate is
+        # deep-analyzed unless the provider's measured per-API 30-minute
+        # budget cannot cover it, in which case the excess is deferred
+        # VISIBLY (STAGE_2_DEFERRED_RATE_BUDGET). An explicit
+        # `screening_config` keeps its own cap.
+        stage_two_budget_capacity = (request_ledger or UPSTOX_REQUEST_LEDGER).stage_two_capacity()
         stage_one = await screen_universe(
             full_universe, provider=provider, instrument_master=instrument_master, as_of=as_of,
-            exchange_status=exchange_status, config=screening_config, on_progress=on_progress,
+            exchange_status=exchange_status,
+            config=screening_config or ScreeningConfig(survivor_cap=DEFAULT_WHOLE_MARKET_SURVIVOR_CAP),
+            on_progress=on_progress, stage_two_budget_capacity=stage_two_budget_capacity,
         )
+        stage_two_limit_reason = stage_one.stage_two_limit_reason
+        stage_one_movement = stage_one.candidate_movement_stage
+        stage_one_candidates = stage_one.candidate_observations
         stage1_seconds = (utc_now() - stage1_started).total_seconds()
         stage_two_universe = stage_one.survivors
         stage_one_survivor_count = len(stage_one.survivors)
@@ -1481,6 +1670,14 @@ async def run_daily_research(
         stage1_truncated_count=stage1_truncated_count,
         stage1_cap_applied=stage1_cap_applied,
         index_relative_strength_available=index_rs_available,
+        symbol_pipeline=build_symbol_pipeline(
+            universe=full_universe, stage_one_ran=symbols is None, stage_one_rejected=stage_one_rejected,
+            stage_one_movement_stage=stage_one_movement, stage_one_candidate_observations=stage_one_candidates,
+            stage_two_universe=stage_two_universe, responses=responses, stage_two_rejected=stage_two_rejected,
+            shortlisted=[c.symbol for c in shortlist],
+        ),
+        stage_two_limit_reason=stage_two_limit_reason,
+        stage_two_budget_capacity=stage_two_budget_capacity,
     )
 
     run_id = new_run_id()
@@ -2754,6 +2951,9 @@ class DailyResearchView(BaseModel):
     stage1_truncated_count: int = 0
     stage1_cap_applied: bool = False
     index_relative_strength_available: bool = False
+    symbol_pipeline: list[SymbolPipelineRecord] = Field(default_factory=list)
+    stage_two_limit_reason: str = STAGE_2_LIMIT_NONE
+    stage_two_budget_capacity: int | None = None
 
 
 _DEVELOPING_BUCKET_ORDER = {
@@ -2823,4 +3023,7 @@ def build_daily_research_view(result: DailyResearchResult) -> DailyResearchView:
         stage1_truncated_count=result.stage1_truncated_count,
         stage1_cap_applied=result.stage1_cap_applied,
         index_relative_strength_available=result.index_relative_strength_available,
+        symbol_pipeline=result.symbol_pipeline,
+        stage_two_limit_reason=result.stage_two_limit_reason,
+        stage_two_budget_capacity=result.stage_two_budget_capacity,
     )

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 from app.domain.audit.research_models import (
     RankingRationale,
@@ -607,3 +610,96 @@ def test_chain_query_range_fast_path_matches_a_naive_full_scan(tmp_path: Path) -
         base + timedelta(minutes=m) for m in (1, 2, 3, 4)
     ]
     assert all(r.underlying == "NIFTY" for r in results)
+
+
+# ============================================================
+# Release gate (Section 7) -- the append-aware offset index behind the
+# option-chain fast path. Must stay an EQUIVALENCE under appends from any
+# writer, half-written trailing lines, non-ASCII tokens and file rewrites.
+# ============================================================
+
+
+def test_chain_index_sees_lines_appended_after_it_was_built_by_any_writer(tmp_path: Path) -> None:
+    path = tmp_path / "chains.jsonl"
+    reader = JsonlOptionChainRepository(path)
+    other_writer = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    expiry = date(2026, 9, 24)
+    as_of = base + timedelta(days=1)
+
+    asyncio.run(reader.save(_chain(base)))
+    first = asyncio.run(reader.latest(underlying="NIFTY", expiry=expiry, as_of=as_of))
+    assert first is not None and first.freshness.data_timestamp == base
+
+    asyncio.run(other_writer.save(_chain(base + timedelta(minutes=5))))
+    second = asyncio.run(reader.latest(underlying="NIFTY", expiry=expiry, as_of=as_of))
+    assert second is not None and second.freshness.data_timestamp == base + timedelta(minutes=5)
+
+
+def test_chain_index_defers_a_half_written_trailing_line_until_it_is_complete(tmp_path: Path) -> None:
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    expiry = date(2026, 9, 24)
+    as_of = base + timedelta(days=1)
+    asyncio.run(repo.save(_chain(base)))
+
+    line = _chain(base + timedelta(minutes=9)).model_dump_json()
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line[: len(line) // 2])
+    partial = asyncio.run(repo.latest(underlying="NIFTY", expiry=expiry, as_of=as_of))
+    assert partial is not None and partial.freshness.data_timestamp == base
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line[len(line) // 2 :] + "\n")
+    completed = asyncio.run(repo.latest(underlying="NIFTY", expiry=expiry, as_of=as_of))
+    assert completed is not None and completed.freshness.data_timestamp == base + timedelta(minutes=9)
+
+
+def test_chain_index_matches_non_ascii_and_escaped_underlyings(tmp_path: Path) -> None:
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    for underlying in ("NSE_EQ|M&M", "NSE_INDEX|Nifty ₹ 50", r'A\\B"C'):
+        asyncio.run(repo.save(_chain(base, underlying=underlying)))
+        found = asyncio.run(repo.latest(underlying=underlying, expiry=date(2026, 9, 24), as_of=base + timedelta(hours=1)))
+        assert found is not None and found.underlying == underlying
+
+
+def test_chain_index_rebuilds_when_the_file_is_replaced(tmp_path: Path) -> None:
+    path = tmp_path / "chains.jsonl"
+    repo = JsonlOptionChainRepository(path)
+    base = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)
+    expiry = date(2026, 9, 24)
+    as_of = base + timedelta(days=1)
+    for minute in range(3):
+        asyncio.run(repo.save(_chain(base + timedelta(minutes=minute), underlying="NIFTY")))
+    assert asyncio.run(repo.latest(underlying="NIFTY", expiry=expiry, as_of=as_of)) is not None
+
+    path.write_text(_chain(base, underlying="BANKNIFTY").model_dump_json() + "\n", encoding="utf-8")
+    assert asyncio.run(repo.latest(underlying="NIFTY", expiry=expiry, as_of=as_of)) is None
+    assert asyncio.run(repo.latest(underlying="BANKNIFTY", expiry=expiry, as_of=as_of)) is not None
+
+
+_REAL_CHAIN_STORE = Path("data/persistence/option_chains.jsonl")
+
+
+@pytest.mark.skipif(not _REAL_CHAIN_STORE.exists(), reason="real option-chain store not present locally")
+def test_chain_index_matches_a_naive_full_scan_on_the_real_store() -> None:
+    headers: list[tuple[str, date]] = []
+    seen: set[tuple[str, date]] = set()
+    with _REAL_CHAIN_STORE.open(encoding="utf-8") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            head = json.loads(raw[: raw.index(',"legs"')] + "}") if ',"legs"' in raw else json.loads(raw)
+            pair = (head["underlying"], date.fromisoformat(head["expiry"]))
+            if pair not in seen:
+                seen.add(pair)
+                headers.append(pair)
+    repo = JsonlOptionChainRepository(_REAL_CHAIN_STORE)
+    as_of = datetime(2100, 1, 1, tzinfo=UTC)
+    for underlying, expiry in [*headers[:: max(1, len(headers) // 3)], ("NSE_EQ|NOT_REAL", date(2026, 9, 24))]:
+        fast = asyncio.run(repo.latest(underlying=underlying, expiry=expiry, as_of=as_of))
+        oracle = _naive_latest(_REAL_CHAIN_STORE, underlying=underlying, expiry=expiry, as_of=as_of)
+        assert (fast.model_dump_json() if fast else None) == (oracle.model_dump_json() if oracle else None)

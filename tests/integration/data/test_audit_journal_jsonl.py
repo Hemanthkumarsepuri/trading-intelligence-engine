@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.domain.audit.models import (
     AdversarialSection,
     AnalysisSnapshot,
@@ -189,3 +191,27 @@ def test_query_unresolved_uses_the_latest_reconciliation_not_an_earlier_one(tmp_
     asyncio.run(repo.save_reconciliation(_reconciliation(audit_id="a1", computed_at=GENERATED_AT + timedelta(hours=1), is_final=True)))
     results = asyncio.run(repo.query_unresolved())
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Release gate (Section 7) -- the pre-filtered lookups must return exactly
+# what a naive full parse returns.
+# ---------------------------------------------------------------------------
+
+_REAL_JOURNAL_DIR = Path("data/persistence/audit_journal")
+
+
+@pytest.mark.skipif(
+    not (_REAL_JOURNAL_DIR / "analysis_snapshots.jsonl").exists(), reason="real audit journal not present locally",
+)
+def test_prefiltered_symbol_and_audit_id_lookups_match_a_full_parse_on_the_real_journal() -> None:
+    repo = JsonlAuditJournalRepository(_REAL_JOURNAL_DIR)
+    everything = repo._all_analyses()
+    symbols = sorted({s.identity.symbol for s in everything})
+    for symbol in [*symbols[:: max(1, len(symbols) // 8)], "NOT_A_SYMBOL"]:
+        expected = [s.identity.audit_id for s in everything if s.identity.symbol == symbol]
+        assert [s.identity.audit_id for s in asyncio.run(repo.query_by_symbol(symbol))] == expected
+    for snapshot in everything[:: max(1, len(everything) // 25)]:
+        found = asyncio.run(repo.get_analysis(snapshot.identity.audit_id))
+        assert found is not None and found.identity.audit_id == snapshot.identity.audit_id
+    assert asyncio.run(repo.get_analysis("0" * 32)) is None

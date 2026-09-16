@@ -527,6 +527,66 @@ function apiUrl(path) {
 // ============================================================
 
 function num(x) { return (x === null || x === undefined) ? null : Number(x); }
+// Release gate (Section 5) -- every universe symbol's real Stage-1 and
+// Stage-2 state, so nothing that was deferred, rejected or failed can be
+// hidden behind an aggregate count. Collapsed by default; filterable.
+const PIPELINE_FILTERS = [
+  ["ALL", "All symbols"],
+  ["STAGE_2_ANALYZED", "Stage 2 analyzed"],
+  ["DEFERRED", "Stage 2 deferred"],
+  ["STAGE_2_FAILED", "Stage 2 failed"],
+  ["STAGE_1_REJECTED", "Stage 1 rejected"],
+  ["STAGE_1_FAILED", "Stage 1 failed"],
+];
+function pipelineMatches(r, f) {
+  if (f === "ALL") return true;
+  if (f === "DEFERRED") return r.stage_2 === "STAGE_2_SKIPPED_CAPACITY" || r.stage_2 === "STAGE_2_DEFERRED_RATE_BUDGET";
+  if (f === "STAGE_1_REJECTED") return r.stage_1_result === "STAGE_1_REJECTED";
+  if (f === "STAGE_1_FAILED") return r.stage_1 === "STAGE_1_FAILED";
+  return r.stage_2 === f;
+}
+function renderSymbolPipeline(records) {
+  const wrap = el("details", { style: "margin-top:6px" });
+  const rows = Array.isArray(records) ? records.filter((r) => r && typeof r === "object") : [];
+  wrap.appendChild(el("summary", { text: "Per-symbol pipeline (" + rows.length + " symbols) -- what happened to every name" }));
+  if (!rows.length) {
+    wrap.appendChild(el("p", { class: "hint", text: "Unavailable -- this scan did not report per-symbol pipeline states." }));
+    return wrap;
+  }
+  const counts = {};
+  PIPELINE_FILTERS.forEach(([key]) => { counts[key] = rows.filter((r) => pipelineMatches(r, key)).length; });
+  const select = el("select", { "aria-label": "Filter pipeline states", style: "margin:6px 0;max-width:100%" });
+  PIPELINE_FILTERS.forEach(([key, label]) => select.appendChild(el("option", { value: key, text: label + " (" + counts[key] + ")" })));
+  wrap.appendChild(select);
+  const scroller = el("div", { class: "table-scroll", style: "overflow-x:auto;max-height:420px;overflow-y:auto" });
+  const table = el("table", { class: "checkpoint-table" });
+  const head = el("tr");
+  ["Symbol", "Stage 1", "Stage 2", "Outcome", "Movement", "Stage-1 observations"].forEach((h) => head.appendChild(el("th", { text: h })));
+  table.appendChild(el("thead", {}, [head]));
+  const body = el("tbody");
+  table.appendChild(body);
+  const draw = () => {
+    body.innerHTML = "";
+    rows.filter((r) => pipelineMatches(r, select.value)).forEach((r) => {
+      const tr = el("tr", { title: r.detail || "" });
+      tr.appendChild(el("td", { text: r.symbol || "Unknown" }));
+      tr.appendChild(el("td", { text: (r.stage_1 || "Unknown") + (r.stage_1_result && r.stage_1_result !== "NOT_APPLICABLE" ? " / " + r.stage_1_result : "") }));
+      tr.appendChild(el("td", { text: r.stage_2 || "Unknown" }));
+      tr.appendChild(el("td", { text: r.outcome || "Unknown" }));
+      tr.appendChild(el("td", { text: r.movement_stage || "--" }));
+      const obs = Array.isArray(r.stage_1_observations) ? r.stage_1_observations : [];
+      tr.appendChild(el("td", { text: obs.length ? obs.join(", ") : "--" }));
+      body.appendChild(tr);
+    });
+  };
+  select.addEventListener("change", draw);
+  draw();
+  scroller.appendChild(table);
+  wrap.appendChild(scroller);
+  wrap.appendChild(el("p", { class: "hint", text: "Hover a row for the exact recorded reason. Movement stage only orders candidates when capacity is short; it is not a score or a prediction." }));
+  return wrap;
+}
+
 function fmt(x, digits) { const n = num(x); return n === null ? "n/a" : n.toFixed(digits === undefined ? 2 : digits); }
 function fmtPct(x, digits) { const n = num(x); return n === null ? "n/a" : (n >= 0 ? "+" : "") + n.toFixed(digits === undefined ? 2 : digits) + "%"; }
 function fmtInt(x) { const n = num(x); return n === null ? "n/a" : Math.round(n).toLocaleString(); }
@@ -832,14 +892,20 @@ function renderDiscoverResults(data) {
       ul.appendChild(el("li", { text: candidates + " Stage 1 candidates (matched a real discovery bucket)" }));
       ul.appendChild(el("li", { text: cov.stage2_successful + " Stage 2 analyzed" + (cov.stage2_failed ? "  ·  " + cov.stage2_failed + " Stage 2 failed" : "") }));
       if (deferred) {
+        const budgetBound = data.stage_two_limit_reason === "PROVIDER_RATE_BUDGET";
         ul.appendChild(el("li", {
-          text: deferred + " Stage 2 DEFERRED for capacity -- real candidates that were not deep-analyzed this run. " +
-            "Deferred is not rejected: this is a provider-safety limit on how many deep analyses one run performs, " +
-            "never a finding that these names were uninteresting.",
+          text: deferred + " Stage 2 DEFERRED -- real candidates that were not deep-analyzed this run. " +
+            (budgetBound
+              ? "Reason: the provider's per-API 30-minute request limit (recent scans already used most of it). Re-run later to analyze them. "
+              : "Reason: a configured Stage-2 capacity limit. ") +
+            "Deferred is not rejected: it is never a finding that these names were uninteresting.",
         }));
+      } else {
+        ul.appendChild(el("li", { text: "0 deferred -- every Stage 1 candidate was deep-analyzed this run." }));
       }
       pipeline.appendChild(ul);
       covBlock.appendChild(pipeline);
+      covBlock.appendChild(renderSymbolPipeline(data.symbol_pipeline));
     } else {
       covBlock.appendChild(el("p", { class: "chart-hint", text: "Stage 2: " + cov.stage2_successful + " / " + cov.stage2_attempted + " evaluated" }));
     }

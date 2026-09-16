@@ -47,6 +47,7 @@ from app.data.providers.exceptions import (
     ProviderUnavailable,
 )
 from app.data.providers.health import ProviderHealth, ProviderHealthTracker
+from app.data.providers.request_budget import UPSTOX_REQUEST_LEDGER
 from app.domain.market.models import ExchangeSegment, OptionRight, Timeframe
 from app.utils.time import ensure_utc, utc_now
 
@@ -119,6 +120,9 @@ class UpstoxProvider:
     async def _get(self, path: str, *, params: dict[str, str] | None = None) -> object:
         at = utc_now()
         started = time.monotonic()
+        # Counted BEFORE sending, success or not -- the provider's own
+        # per-API budget counts attempts (see `request_budget`).
+        UPSTOX_REQUEST_LEDGER.record(path)
         try:
             response = await self._client.get(
                 f"{self._base_url}{path}", headers=self._headers(), params=params, timeout=self._timeout

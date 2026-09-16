@@ -152,10 +152,12 @@ def nearest_futures_instrument_key(
     """
     canonical = underlying_symbol.strip().upper()
     candidates: list[tuple[date, str]] = []
-    for entry in master:
+    # Release gate (Section 7) -- the segment/underlying filter is served
+    # from the memoized index (same two conditions, master row order); the
+    # segment is compared as `str()` there, so a row whose segment is
+    # absent can never collide with a real segment name.
+    for entry in index_for(master).by_segment_underlying().get((segment, canonical), ()):
         if entry.get("segment") != segment or entry.get("instrument_type") != "FUT":
-            continue
-        if _underlying(entry) != canonical:
             continue
         expiry_date = _expiry_date(entry)
         if expiry_date is None or expiry_date < as_of:

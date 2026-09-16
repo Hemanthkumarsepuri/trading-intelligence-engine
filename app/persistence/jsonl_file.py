@@ -23,6 +23,8 @@ firehose); revisit if that changes.
 from __future__ import annotations
 
 import json
+import re
+import threading
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -107,6 +109,85 @@ class _JsonlStore:
                     yield stripped
 
 
+class _FieldTokenIndex:
+    """Append-aware byte-offset index of ONE store's lines by every
+    serialised `"<field>":"<json string>"` token each line contains.
+
+    Release gate (Section 7) -- measured with cProfile on a real live scan:
+    after the substring pre-filter, `JsonlOptionChainRepository.latest()`
+    and `query_range()` still streamed the whole 110 MB
+    `option_chains.jsonl` (~0.85 s CPU each) once per Stage-2 symbol --
+    ~136 s of an 80-symbol scan, all of it synchronous and so stalling
+    every concurrent provider call on the same event loop.
+
+    Equivalence: a line is registered under EVERY distinct token of the
+    field it contains (option legs repeat `"underlying"`, so this is a
+    superset, never a subset). A candidate line is then re-read from disk
+    by offset, must still contain every required substring, and is still
+    fully validated and re-checked by the caller's ORIGINAL predicate. A
+    line that lacks the token cannot contain it as a substring, so nothing
+    a full scan would return can be missed.
+
+    Freshness: the store is append-only. Each lookup stats the file; bytes
+    appended since the last lookup (by this process or any other) are
+    indexed before answering, and only complete newline-terminated lines
+    are indexed, so a concurrently half-written line is picked up on the
+    next call rather than mis-indexed. A file that shrank or whose leading
+    bytes changed is re-indexed from scratch.
+    """
+
+    _HEAD_BYTES = 256
+
+    def __init__(self, path: Path, field: str) -> None:
+        self._path = path
+        self._pattern = re.compile(rb'"' + re.escape(field.encode()) + rb'":("(?:[^"\\]|\\.)*")')
+        self._offsets: dict[bytes, list[tuple[int, int]]] = {}
+        self._indexed_to = 0
+        self._head = b""
+        self._lock = threading.Lock()
+
+    def _reset(self) -> None:
+        self._offsets = {}
+        self._indexed_to = 0
+        self._head = b""
+
+    def _refresh(self) -> None:
+        if not self._path.exists():
+            self._reset()
+            return
+        size = self._path.stat().st_size
+        with self._path.open("rb") as f:
+            head = f.read(self._HEAD_BYTES)
+            if size < self._indexed_to or head[: len(self._head)] != self._head:
+                self._reset()
+            if size == self._indexed_to:
+                return
+            f.seek(self._indexed_to)
+            offset = self._indexed_to
+            for raw in f:
+                if not raw.endswith(b"\n"):
+                    break  # a line still being written -- index it next call
+                for token in set(self._pattern.findall(raw)):
+                    self._offsets.setdefault(token, []).append((offset, len(raw)))
+                offset += len(raw)
+            self._indexed_to = offset
+            self._head = head[: min(len(head), offset)]
+
+    def lines_with(self, value: str, *required: str) -> Iterator[str]:
+        token = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        with self._lock:
+            self._refresh()
+            spans = list(self._offsets.get(token, ()))
+        if not spans:
+            return
+        with self._path.open("rb") as f:
+            for offset, length in spans:
+                f.seek(offset)
+                stripped = f.read(length).decode("utf-8").strip()
+                if stripped and all(part in stripped for part in required):
+                    yield stripped
+
+
 class JsonlCandleRepository:
     def __init__(self, path: Path) -> None:
         self._store = _JsonlStore(path)
@@ -152,6 +233,7 @@ class JsonlQuoteRepository:
 class JsonlOptionChainRepository:
     def __init__(self, path: Path) -> None:
         self._store = _JsonlStore(path)
+        self._underlying_index = _FieldTokenIndex(path, "underlying")
 
     async def save(self, snapshot: OptionChainSnapshot) -> None:
         self._store.append_line(snapshot.model_dump_json())
@@ -165,14 +247,14 @@ class JsonlOptionChainRepository:
         a result. `json.dumps` (not an f-string) so any character needing
         JSON escaping is encoded exactly as `model_dump_json()` wrote
         it."""
-        return f'"underlying":{json.dumps(underlying)}', f'"expiry":"{expiry.isoformat()}"'
+        return f'"underlying":{json.dumps(underlying, ensure_ascii=False)}', f'"expiry":"{expiry.isoformat()}"'
 
     async def latest(self, *, underlying: str, expiry: date, as_of: datetime) -> OptionChainSnapshot | None:
         # Predicate below is UNCHANGED -- `iter_lines_containing()` only
         # skips lines that provably cannot satisfy it.
         candidates = [
             s
-            for line in self._store.iter_lines_containing(*self._header_tokens(underlying, expiry))
+            for line in self._underlying_index.lines_with(underlying, *self._header_tokens(underlying, expiry))
             if (s := OptionChainSnapshot.model_validate_json(line)).underlying == underlying
             and s.expiry == expiry
             and s.freshness.data_timestamp <= as_of
@@ -186,7 +268,7 @@ class JsonlOptionChainRepository:
     ) -> list[OptionChainSnapshot]:
         results = [
             s
-            for line in self._store.iter_lines_containing(*self._header_tokens(underlying, expiry))
+            for line in self._underlying_index.lines_with(underlying, *self._header_tokens(underlying, expiry))
             if (s := OptionChainSnapshot.model_validate_json(line)).underlying == underlying
             and s.expiry == expiry
             and start <= s.freshness.data_timestamp <= end
@@ -225,6 +307,9 @@ class JsonlAuditJournalRepository:
         self._analyses = _JsonlStore(directory / "analysis_snapshots.jsonl")
         self._checkpoints = _JsonlStore(directory / "outcome_checkpoints.jsonl")
         self._reconciliations = _JsonlStore(directory / "reconciliation_results.jsonl")
+        self._analysis_indexes = {
+            field: _FieldTokenIndex(directory / "analysis_snapshots.jsonl", field) for field in ("symbol", "audit_id")
+        }
 
     async def save_analysis(self, snapshot: AnalysisSnapshot) -> None:
         self._analyses.append_line(snapshot.model_dump_json())
@@ -244,8 +329,33 @@ class JsonlAuditJournalRepository:
     def _all_reconciliations(self) -> list[ReconciliationResult]:
         return [ReconciliationResult.model_validate_json(line) for line in self._reconciliations.read_lines()]
 
+    def _analyses_containing(self, field: str, value: str) -> Iterator[AnalysisSnapshot]:
+        """Validate only the snapshot lines that can possibly match
+        `field == value`.
+
+        Release gate (Section 7) -- measured on a real 80-symbol scan:
+        `query_by_symbol()` cost **2.05 s per call, 164 s of a 297 s
+        scan**, because `run_analysis()` calls it once per Stage-2 symbol
+        (to find the prior snapshot for "what changed") and it validated
+        all ~1,500 snapshots in the 29 MB journal every time. The work is
+        synchronous, so it also stalled the event loop that every
+        concurrent provider call shares.
+
+        Same equivalence argument as `_JsonlStore.iter_lines_containing()`:
+        the token is the exact serialised form (`json.dumps` with
+        `ensure_ascii=False`, matching `model_dump_json()`'s raw UTF-8
+        output), a line lacking it cannot match, and every candidate is
+        still fully validated and re-checked by the caller's unchanged
+        predicate -- a false positive costs time, never correctness."""
+        # The substring pre-filter alone still streamed the whole journal
+        # (0.40 s/call re-measured); the offset index reads only lines that
+        # contain the serialised token -- see `_FieldTokenIndex`.
+        token = f'"{field}":{json.dumps(value, ensure_ascii=False)}'
+        for line in self._analysis_indexes[field].lines_with(value, token):
+            yield AnalysisSnapshot.model_validate_json(line)
+
     async def get_analysis(self, audit_id: str) -> AnalysisSnapshot | None:
-        return next((s for s in self._all_analyses() if s.identity.audit_id == audit_id), None)
+        return next((s for s in self._analyses_containing("audit_id", audit_id) if s.identity.audit_id == audit_id), None)
 
     async def get_outcomes(self, audit_id: str) -> list[OutcomeCheckpoint]:
         matches = [c for c in self._all_checkpoints() if c.audit_id == audit_id]
@@ -258,7 +368,7 @@ class JsonlAuditJournalRepository:
         return max(matches, key=lambda r: r.computed_at)
 
     async def query_by_symbol(self, symbol: str) -> list[AnalysisSnapshot]:
-        return [s for s in self._all_analyses() if s.identity.symbol == symbol]
+        return [s for s in self._analyses_containing("symbol", symbol) if s.identity.symbol == symbol]
 
     async def query_by_date_range(self, start: datetime, end: datetime) -> list[AnalysisSnapshot]:
         return [s for s in self._all_analyses() if start <= s.identity.generated_at <= end]
