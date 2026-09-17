@@ -13,6 +13,7 @@ from pathlib import Path
 from app.domain.audit.research_models import ResearchObservation, ResearchOutcomeStatus
 from app.domain.market.freshness import DataFreshness
 from app.domain.market.models import Candle, Timeframe
+from app.orchestration.outcome_horizons import OutcomeHorizonLabel, compute_price_path_outcome
 from app.orchestration.pattern_aggregation import (
     aggregate_by_pattern,
     aggregate_by_pattern_segmented,
@@ -245,23 +246,54 @@ def test_failed_setup_when_a_genuine_invalidation_level_is_broken() -> None:
     assert result == ResearchOutcomeStatus.FAILED_SETUP
 
 
-def test_invalidation_takes_precedence_over_a_simultaneous_confirmation_touch() -> None:
-    """A real whipsaw -- the window touches BOTH the confirmation-relevant
-    resistance and the invalidation-relevant support -- is reported as
-    the failed setup it structurally was, never overstated as a
-    confirmed success."""
-    obs = _observation(
+def _both_levels_obs() -> ResearchObservation:
+    return _observation(
         "a", pattern="PRE_BREAKOUT_COMPRESSION", breakeven=None,
         nearest_level_kind="resistance", nearest_level_value="1010",
         invalidation_level_kind="support", invalidation_level_value="990",
     )
+
+
+def test_both_levels_crossed_in_the_same_bar_is_not_resolvable() -> None:
+    """A single M15 bar that spans BOTH levels cannot say which was crossed
+    first -- honestly INSUFFICIENT_OUTCOME_DATA, never a guess either way."""
     target_session = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
     candles = [
         _candle(timestamp=_T0, close="1000"),
         _candle(timestamp=target_session, close="995", high="1015", low="985"),
     ]
-    result = outcome_for_replay_observation(obs, candles, as_of=target_session + timedelta(hours=7))
+    result = outcome_for_replay_observation(_both_levels_obs(), candles, as_of=target_session + timedelta(hours=7))
+    assert result == ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
+
+
+def test_invalidation_crossed_before_confirmation_is_a_failed_setup() -> None:
+    target_session = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    candles = [
+        _candle(timestamp=_T0, close="1000"),
+        _candle(timestamp=_T0 + timedelta(days=1), close="985", high="1000", low="985"),
+        _candle(timestamp=target_session, close="1015", high="1015", low="1000"),
+    ]
+    result = outcome_for_replay_observation(_both_levels_obs(), candles, as_of=target_session + timedelta(hours=7))
     assert result == ResearchOutcomeStatus.FAILED_SETUP
+
+
+def test_confirmation_crossed_before_a_later_retrace_stays_follow_through() -> None:
+    """Release gate correctness fix: a breakout on day 1 that later retraces
+    through the old floor is not rewritten as FAILED -- the later crossing
+    stays visible via `first_invalidation_at`."""
+    target_session = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    early = _T0 + timedelta(days=1)
+    candles = [
+        _candle(timestamp=_T0, close="1000"),
+        _candle(timestamp=early, close="1015", high="1015", low="1000"),
+        _candle(timestamp=target_session, close="985", high="1000", low="985"),
+    ]
+    obs = _both_levels_obs()
+    as_of = target_session + timedelta(hours=7)
+    assert outcome_for_replay_observation(obs, candles, as_of=as_of) == ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
+    facts = compute_price_path_outcome(obs, OutcomeHorizonLabel.PLUS_5D, candles, as_of=as_of)
+    assert facts.first_confirmation_at == early
+    assert facts.first_invalidation_at == target_session
 
 
 def test_follow_through_observed_when_the_opposing_level_is_broken_by_plus5() -> None:

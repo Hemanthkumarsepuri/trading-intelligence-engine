@@ -192,17 +192,26 @@ def outcome_for_replay_observation(observation: ResearchObservation, candles: li
       `INSUFFICIENT_OUTCOME_DATA` (the target instant has passed but the
       local candle store doesn't reach that far).
     - the observation's own recorded INVALIDATION-side supporting level
-      was broken through (final 95% sprint, Section 6 -- genuinely
-      tracked ONLY for `PRE_BREAKOUT_COMPRESSION` observations; see
-      `ResearchObservation.invalidation_level_kind`'s own docstring) ->
-      `FAILED_SETUP`. Checked FIRST: a window that touched both this and
-      the confirmation level (a real whipsaw) is reported as the failed
-      setup it structurally was, never overstated as a success.
-    - otherwise, the observation's own recorded confirmation (contractual
-      expiry breakeven reached, OR the recorded opposing level broken
-      through -- see `outcome_horizons._opposing_level_broken_through()`'s
-      own docstring for the Sprint 1 correctness fix this relies on) was
-      reached -> `FOLLOW_THROUGH_OBSERVED`.
+      (final 95% sprint, Section 6 -- genuinely tracked ONLY for
+      `PRE_BREAKOUT_COMPRESSION` observations; see
+      `ResearchObservation.invalidation_level_kind`'s own docstring) and
+      its recorded CONFIRMATION (contractual expiry breakeven reached, OR
+      the recorded opposing level broken through -- see
+      `outcome_horizons._opposing_level_broken_through()`) are resolved
+      by WHICH WAS CROSSED FIRST:
+        - invalidation crossed, and confirmation never or later ->
+          `FAILED_SETUP`;
+        - confirmation crossed, and invalidation never or later ->
+          `FOLLOW_THROUGH_OBSERVED` (a later reversal stays visible in
+          the per-horizon facts; it does not rewrite what happened first);
+        - both crossed inside the SAME M15 bar -> the order is not
+          knowable from M15 data -> `INSUFFICIENT_OUTCOME_DATA`, never a
+          guess in either direction.
+      Release gate (Section 12) correctness fix: this previously checked
+      invalidation first over the WHOLE +5-session window, so a setup that
+      broke out on day 1 and retraced through its old floor on day 4 was
+      counted as FAILED. On the real 15-symbol replay dataset that rule
+      labelled 661 of 894 determined episodes FAILED for crossing both.
     - reached the horizon without either -> `NO_FOLLOW_THROUGH`.
 
     For every observation that does NOT carry a genuine invalidation
@@ -217,9 +226,15 @@ def outcome_for_replay_observation(observation: ResearchObservation, candles: li
     if not outcome.data_sufficient:
         target = horizon_target_timestamp(observation, _REPLAY_REFERENCE_HORIZON)
         return ResearchOutcomeStatus.PENDING if target > as_of else ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
-    if outcome.invalidation_outcome == InvalidationOutcome.INVALIDATED:
+    invalidated_at = outcome.first_invalidation_at if outcome.invalidation_outcome == InvalidationOutcome.INVALIDATED else None
+    confirmed_at = outcome.first_confirmation_at if outcome.confirmation_outcome == ConfirmationOutcome.CONFIRMED else None
+    if invalidated_at is not None and confirmed_at is not None:
+        if invalidated_at == confirmed_at:
+            return ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
+        return ResearchOutcomeStatus.FAILED_SETUP if invalidated_at < confirmed_at else ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
+    if invalidated_at is not None:
         return ResearchOutcomeStatus.FAILED_SETUP
-    if outcome.confirmation_outcome == ConfirmationOutcome.CONFIRMED:
+    if confirmed_at is not None:
         return ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
     return ResearchOutcomeStatus.NO_FOLLOW_THROUGH
 

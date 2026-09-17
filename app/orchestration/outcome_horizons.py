@@ -113,6 +113,13 @@ class PricePathOutcome:
     confirmation_outcome: ConfirmationOutcome = ConfirmationOutcome.UNKNOWN
     invalidation_outcome: InvalidationOutcome = InvalidationOutcome.UNKNOWN
     note: str | None = None
+    # Release gate (Section 12) -- the timestamp of the FIRST M15 bar in the
+    # window whose range crossed each level, or `None` when it was never
+    # crossed (or cannot be evaluated). Two separate facts, so a reader can
+    # tell "confirmed, later invalidated" from "invalidated, never
+    # confirmed" -- and so can `outcome_for_replay_observation()`.
+    first_confirmation_at: datetime | None = None
+    first_invalidation_at: datetime | None = None
 
 
 def horizon_target_timestamp(observation: ResearchObservation, horizon: OutcomeHorizonLabel) -> datetime:
@@ -296,7 +303,41 @@ def compute_price_path_outcome(
         subsequent_high=window_high, subsequent_low=window_low, subsequent_close=subsequent_close,
         max_favorable_move_pct=favorable, max_adverse_move_pct=adverse,
         confirmation_outcome=confirmation, invalidation_outcome=invalidation,
+        first_confirmation_at=_first_bar_crossing(window, observation, confirmation=True)
+        if confirmation == ConfirmationOutcome.CONFIRMED else None,
+        first_invalidation_at=_first_bar_crossing(window, observation, confirmation=False)
+        if invalidation == InvalidationOutcome.INVALIDATED else None,
     )
+
+
+def _first_bar_crossing(window: list[Candle], observation: ResearchObservation, *, confirmation: bool) -> datetime | None:
+    """The first bar (window is time-ordered) whose OWN high/low crossed
+    the confirmation-side (breakeven or opposing level) or the
+    invalidation-side level -- the same predicates as the whole-window
+    determination above, applied bar by bar, so the two can never
+    disagree about WHETHER a crossing happened, only add WHEN."""
+    for candle in window:
+        if confirmation:
+            crossed = bool(
+                _breakeven_reached(
+                    breakeven=observation.contractual_expiry_breakeven, right=observation.selected_right,
+                    window_high=candle.high, window_low=candle.low,
+                )
+                or _opposing_level_broken_through(
+                    kind=observation.nearest_level_kind, value=observation.nearest_level_value,
+                    direction=observation.direction, window_high=candle.high, window_low=candle.low,
+                )
+            )
+        else:
+            crossed = bool(
+                _supporting_level_broken_through(
+                    kind=observation.invalidation_level_kind, value=observation.invalidation_level_value,
+                    direction=observation.direction, window_high=candle.high, window_low=candle.low,
+                )
+            )
+        if crossed:
+            return candle.freshness.data_timestamp
+    return None
 
 
 def compute_all_horizons(observation: ResearchObservation, candles: list[Candle], *, as_of: datetime) -> list[PricePathOutcome]:
