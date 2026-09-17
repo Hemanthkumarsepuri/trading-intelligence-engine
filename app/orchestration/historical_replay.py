@@ -41,7 +41,7 @@ their own turn) -- the exact same structure already proven by
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -57,7 +57,7 @@ from app.orchestration.daily_research import (
     build_research_thesis,
     collect_gated_candidates,
 )
-from app.orchestration.dashboard_service import run_analysis
+from app.orchestration.dashboard_service import AnalyzeResponse, run_analysis
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
 from app.persistence.caching import CachedCandleRepository
 from app.persistence.interfaces import CandleRepository
@@ -96,6 +96,12 @@ COVERAGE_CLASSIFICATION_REPLAY = "REPLAY"
 # finding that out. A caller-supplied `config` always overrides this.
 _DEFAULT_REPLAY_CONFIG = PipelineConfig(chain_fetch_attempts=1, underlying_quote_fetch_attempts=1)
 
+# Release gate (Section 10) -- optional read-only observer, called with each
+# observation AND the unmodified response it was built from, so a dataset
+# builder can record "what TIRE knew then" verbatim (evidence rows, the
+# pattern's own confirm/invalidate text) without re-running any analysis.
+ObservationObserver = Callable[[ResearchObservation, AnalyzeResponse], None]
+
 
 @dataclass(frozen=True)
 class ReplaySessionResult:
@@ -126,6 +132,7 @@ async def replay_symbol_session(
     config: PipelineConfig | None = None,
     mcx_instrument_master: Sequence[dict[str, object]] | None = None,
     run_id: str | None = None,
+    on_observation: ObservationObserver | None = None,
 ) -> ReplaySessionResult:
     """Section 14/15 -- single-symbol, single-session replay: walk
     `session_date`'s own real, locally persisted M15 bars one at a time
@@ -189,13 +196,18 @@ async def replay_symbol_session(
             observation = build_research_observation(
                 candidate, thesis, run_id=run_id, coverage_classification=COVERAGE_CLASSIFICATION_REPLAY,
             )
-            observations.append(observation.model_copy(update={"source": "REPLAY"}))
+            replay_observation = observation.model_copy(update={"source": "REPLAY"})
+            observations.append(replay_observation)
+            if on_observation is not None:
+                on_observation(replay_observation, response)
             continue
         price_only = build_price_only_observation(
             symbol, response, run_id=run_id, coverage_classification=COVERAGE_CLASSIFICATION_REPLAY,
         )
         if price_only is not None:
             observations.append(price_only)
+            if on_observation is not None:
+                on_observation(price_only, response)
 
     return ReplaySessionResult(
         symbol=symbol, session_date=session_date, run_id=run_id, bars_evaluated=len(session_bars), observations=observations,
@@ -223,6 +235,7 @@ async def replay_symbol_window(
     config: PipelineConfig | None = None,
     mcx_instrument_master: Sequence[dict[str, object]] | None = None,
     run_id: str | None = None,
+    on_observation: ObservationObserver | None = None,
 ) -> ReplayWindowResult:
     """Section 15 -- "selected historical window" mode: `replay_symbol_session()`
     once per real trading session in `[start_date, end_date]`, inclusive.
@@ -248,7 +261,7 @@ async def replay_symbol_window(
         await replay_symbol_session(
             symbol, session_date, candle_repository=candle_repository, instrument_master=instrument_master,
             repositories=repositories, strategy=strategy, config=config, mcx_instrument_master=mcx_instrument_master,
-            run_id=run_id,
+            run_id=run_id, on_observation=on_observation,
         )
         for session_date in sessions
     ]

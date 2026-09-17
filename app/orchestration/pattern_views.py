@@ -30,7 +30,10 @@ rest on real derivatives evidence versus price evidence alone
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +48,7 @@ from app.orchestration.pattern_aggregation import (
     segment_by_timing_stage,
 )
 from app.persistence.interfaces import ResearchOutcomeRepository
+from app.persistence.jsonl_file import JsonlResearchOutcomeRepository
 
 # The real segment dimensions Section 8 asks for, restricted to the ones
 # genuinely present and STRUCTURED on `ResearchObservation` today. Market
@@ -150,13 +154,24 @@ def _sample_size_note(*, total: int, named: int, determined: int, derivatives: i
             "claim that no patterns occur."
         )
     excluded = total - named
-    parts = [
-        (
+    if determined < _DESCRIPTIVE_SAMPLE_MIN_DETERMINED:
+        lead = (
             f"SMALL SAMPLE -- {named} observation(s) carry a named pattern, of which {determined} have a "
             "determined outcome so far. This is descriptive history, not a validated edge, a win rate, or a "
             "probability; it is far too small to support any claim about what will happen next."
         )
-    ]
+    else:
+        # Release gate (Section 9) -- a larger sample earns a different
+        # sentence, never a stronger claim. The caveats that remain true
+        # at any size are stated explicitly.
+        lead = (
+            f"DESCRIPTIVE SAMPLE -- {named} observation(s) carry a named pattern, of which {determined} have a "
+            "determined outcome. Counts describe what happened after past observations; they are not a "
+            "probability, a win rate, or a validated edge. No significance test has been run, observations "
+            "within a pattern share market periods and are not independent trials, and a per-pattern or "
+            "per-segment count can still be small even when this total is not."
+        )
+    parts = [lead]
     if excluded > 0:
         parts.append(
             f"{excluded} further persisted observation(s) are excluded because they carry no named pattern "
@@ -171,8 +186,16 @@ def _sample_size_note(*, total: int, named: int, determined: int, derivatives: i
     return " ".join(parts)
 
 
+# Below this many determined outcomes the note calls the sample SMALL. A
+# plain reporting cutoff, not a statistical threshold -- see the note text.
+_DESCRIPTIVE_SAMPLE_MIN_DETERMINED = 30
+
+SegmentFn = Callable[[ResearchObservation], str]
+
+
 def build_pattern_aggregation(
     observations: list[ResearchObservation], outcomes: dict[str, ResearchOutcomeStatus], *, as_of: datetime, source: str,
+    extra_dimensions: dict[str, SegmentFn] | None = None, provenance_note: str | None = None,
 ) -> PatternAggregationView:
     """Pure, deterministic, no I/O -- the same shape for a live store or a
     replay store, so both aggregation paths share one surface rather than
@@ -198,7 +221,7 @@ def build_pattern_aggregation(
                 if segment_aggregates
             ],
         )
-        for dimension, segment_by in _SEGMENT_DIMENSIONS.items()
+        for dimension, segment_by in {**_SEGMENT_DIMENSIONS, **(extra_dimensions or {})}.items()
     ]
     return PatternAggregationView(
         generated_at=as_of,
@@ -213,7 +236,7 @@ def build_pattern_aggregation(
         ),
         sample_size_note=_sample_size_note(
             total=len(observations), named=named, determined=determined, derivatives=derivatives,
-        ),
+        ) + (f" {provenance_note}" if provenance_note else ""),
         patterns=views,
         segments=[s for s in segments if s.segments],
     )
@@ -235,3 +258,108 @@ async def build_live_pattern_aggregation(
         for observation in observations
     }
     return build_pattern_aggregation(observations, outcomes, as_of=as_of, source="LIVE")
+
+
+class ReplayDatasetUnavailable(RuntimeError):
+    """The historical replay dataset has not been built on this machine."""
+
+
+async def build_replay_pattern_aggregation(
+    *, dataset_path: Path, summary_path: Path, observation_dir: Path, as_of: datetime,
+) -> PatternAggregationView:
+    """Release gate (Sections 9-11) -- the REPLAY-dataset entry point.
+
+    Reads what `scripts.build_replay_dataset` already persisted: the
+    representative observation of each EPISODE (never per-bar duplicates)
+    and, per observation, the +5-session reference status computed when the
+    dataset was built. Nothing is re-evaluated here, so this view can never
+    disagree with the dataset rows a reader can inspect directly.
+
+    Adds two segment dimensions that only replay rows carry in structured
+    form: MARKET_CONTEXT (NIFTY_UP / NIFTY_DOWN / NIFTY_FLAT / UNKNOWN, an
+    as-of bounded fact) and SECTOR (the static NSE industry classification).
+    """
+    if not dataset_path.exists() or not observation_dir.exists():
+        raise ReplayDatasetUnavailable(
+            "historical replay dataset not built -- run `python -m scripts.build_replay_dataset`"
+        )
+    outcomes: dict[str, ResearchOutcomeStatus] = {}
+    sectors: dict[str, str] = {}
+    with dataset_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            observation_id = str(row["observation_id"])
+            outcomes[observation_id] = ResearchOutcomeStatus(row["happened_after"]["reference_status_plus_5d"])
+            sectors[observation_id] = str(row["knew_then"].get("sector_context") or "UNKNOWN")
+    observations = [
+        o for o in await JsonlResearchOutcomeRepository(observation_dir).query_all_observations()
+        if o.observation_id in outcomes
+    ]
+    note = None
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        note = (
+            f"Source: real Upstox M15 price history replayed through the unmodified engine -- "
+            f"{summary.get('symbols')} symbols, {summary.get('sessions')} sessions, {summary.get('bars_evaluated')} bars, "
+            f"{summary.get('raw_bar_observations')} per-bar observations collapsed into {summary.get('episodes')} episodes "
+            f"(contiguous bars of one setup count once). Data ends {str(summary.get('dataset_as_of', ''))[:10]}; "
+            "outcomes are read at +5 trading sessions, so the most recent observations are still PENDING."
+        )
+    return build_pattern_aggregation(
+        observations, outcomes, as_of=as_of, source="REPLAY",
+        extra_dimensions={
+            "MARKET_CONTEXT": lambda o: o.market_context or "UNKNOWN",
+            "SECTOR": lambda o: sectors.get(o.observation_id, "UNKNOWN"),
+        },
+        provenance_note=note,
+    )
+
+
+class ReplayDatasetRowsView(BaseModel):
+    """Release gate (Sections 10/21) -- individual historical observations
+    from the replay dataset, for comparison. Each row keeps the dataset's
+    own two halves apart: `knew_then` (recorded at the observation instant)
+    and `happened_after` (outcome horizons). Rows are returned in dataset
+    order (symbol, then time) -- never ranked by outcome."""
+
+    total_rows: int
+    matched_rows: int
+    returned_rows: int
+    rows: list[dict[str, object]] = Field(default_factory=list)
+
+
+def read_replay_dataset_rows(
+    dataset_path: Path, *, symbol: str | None = None, status: str | None = None, direction: str | None = None,
+    limit: int = 50,
+) -> ReplayDatasetRowsView:
+    """Pure filter over the persisted dataset file -- no recomputation, so
+    a row here is byte-for-byte what the dataset recorded."""
+    if not dataset_path.exists():
+        raise ReplayDatasetUnavailable(
+            "historical replay dataset not built -- run `python -m scripts.build_replay_dataset`"
+        )
+    wanted_symbol = symbol.strip().upper() if symbol else None
+    wanted_status = status.strip().upper() if status else None
+    wanted_direction = direction.strip().upper() if direction else None
+    total = 0
+    matched: list[dict[str, object]] = []
+    matched_count = 0
+    with dataset_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            total += 1
+            row = json.loads(line)
+            knew_then = row["knew_then"]
+            if wanted_symbol and str(knew_then.get("symbol", "")).upper() != wanted_symbol:
+                continue
+            if wanted_direction and str(knew_then.get("direction", "")).upper() != wanted_direction:
+                continue
+            if wanted_status and str(row["happened_after"].get("reference_status_plus_5d", "")).upper() != wanted_status:
+                continue
+            matched_count += 1
+            if len(matched) < max(0, limit):
+                matched.append(row)
+    return ReplayDatasetRowsView(total_rows=total, matched_rows=matched_count, returned_rows=len(matched), rows=matched)
