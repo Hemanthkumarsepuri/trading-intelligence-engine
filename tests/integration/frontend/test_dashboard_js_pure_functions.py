@@ -267,3 +267,33 @@ def test_research_card_headline_watch_and_event_cannot_display_as_developing(js_
         ("researchCardHeadlineState", [{"research_bucket": "ALREADY_MOVED", "developing_pattern": "OI_MIGRATION"}]),
     ])
     assert results == ["EVENT", "WATCH", "WATCH", "DEVELOPING", "ALREADY_MOVED"]
+
+
+def test_render_section_isolates_a_failing_panel_and_names_it(js_source: str, node_available: bool) -> None:
+    """Release gate (Section 19): one panel throwing on a missing field
+    must not stop the panels after it, and must be reported as
+    unavailable by name. Runs the REAL `renderSection` and `fmt` under Node
+    with a minimal fake `document`."""
+    if not node_available:
+        pytest.skip("node not on PATH")
+    script = "\n".join([
+        _extract_function(js_source, "num"),
+        _extract_function(js_source, "fmt"),
+        _extract_function(js_source, "renderSection"),
+        "const box = { textContent: '', style: { display: 'none' } };",
+        "globalThis.document = { getElementById: () => box };",
+        "console.error = () => {};",
+        "const ran = [];",
+        "renderSection('renderUnderlyingSummary', () => ran.push('first'));",
+        "renderSection('renderPriceChart', () => { const snap = {}; return snap.duration_seconds.toFixed(1); });",
+        "renderSection('renderNews', () => ran.push('after'));",
+        "renderSection('renderQuality', () => { throw new Error('x'); });",
+        "console.log(JSON.stringify({ ran, box: box.textContent, display: box.style.display, fmtNull: fmt(null, 1), fmtUndef: fmt(undefined, 1) }));",
+    ])
+    completed = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30, check=True)
+    result = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert result["ran"] == ["first", "after"]
+    assert result["display"] == "block"
+    assert "PANEL UNAVAILABLE: Price Chart" in result["box"]
+    assert "PANEL UNAVAILABLE: Quality" in result["box"]
+    assert result["fmtNull"] == "n/a" and result["fmtUndef"] == "n/a"

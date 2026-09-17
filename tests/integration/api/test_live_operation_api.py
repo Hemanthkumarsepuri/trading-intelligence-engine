@@ -559,7 +559,9 @@ def test_dashboard_html_netlify_readiness_api_base() -> None:
     # Final 95% sprint -- +1 for GET /api/research/patterns (PATTERN
     # HISTORY); this guard caught it correctly and it does route through
     # apiUrl(), which is the property actually under test here.
-    assert html.count('fetch(apiUrl(') == 16
+    # Release gate -- +1 for GET /api/research/replay-dataset (COMPARE
+    # HISTORICAL OBSERVATIONS), which also routes through apiUrl().
+    assert html.count('fetch(apiUrl(') == 17
 
 
 def test_dashboard_html_includes_the_sprint6_ce_pe_and_chart_sections() -> None:
@@ -636,7 +638,13 @@ def test_explain_simply_is_disabled_until_research_then_falls_back() -> None:
     assert render.index("enableExplainSimply()") < render.index("renderUnderlyingSummary")
     assert "requestAiExplain(data)" not in render
     explain = html.split("async function requestAiExplain(data) {", 1)[1].split("\nfunction ", 1)[0]
-    assert "AI explanation unavailable — showing TIRE's evidence summary." in explain
+    # Release gate (Section 17): the two provenance labels are explicit, and
+    # the deterministic fallback is never labelled as AI output.
+    assert "Qwen unavailable — deterministic explanation shown" in explain
+    assert "Simplified by local Qwen 2.5" in explain
+    assert "no AI was used for this explanation" in explain
+    assert "It did not find this setup" in explain
+    assert "AI explanation based on TIRE evidence" not in explain
     assert "In simple terms" in explain
     assert "Why it matters" in explain
     assert "What's missing" in explain

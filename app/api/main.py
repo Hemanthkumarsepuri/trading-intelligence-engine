@@ -90,7 +90,11 @@ from app.orchestration.journal_views import (
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
 from app.orchestration.pattern_views import (
     PatternAggregationView,
+    ReplayDatasetRowsView,
+    ReplayDatasetUnavailable,
     build_live_pattern_aggregation,
+    build_replay_pattern_aggregation,
+    read_replay_dataset_rows,
 )
 from app.orchestration.query_context import (
     ContextState,
@@ -135,6 +139,8 @@ _IPO_JOURNAL_DIR = Path("data/persistence/ipo_audit_journal")
 _RESEARCH_JOURNAL_DIR = Path("data/persistence/research_journal")
 _RESEARCH_OUTCOME_DIR = Path("data/persistence/research_outcomes")
 _PERSONAL_JOURNAL_DIR = Path("data/persistence/personal_journal")
+_REPLAY_DATASET_DIR = Path("data/research_dataset")
+_REPLAY_OUTCOME_DIR = Path("data/persistence/replay_research_outcomes")
 
 
 @asynccontextmanager
@@ -870,7 +876,7 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
         )
 
     @app.get("/api/research/patterns", response_model=PatternAggregationView)
-    async def research_patterns() -> PatternAggregationView:
+    async def research_patterns(source: str = "live") -> PatternAggregationView:
         """Final 95% sprint (Sections 8/9/25) -- deterministic historical
         PATTERN AGGREGATION: "when this named pattern appeared
         historically, what actually happened afterward?"
@@ -889,10 +895,40 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
         literal path segment `patterns` is never captured as an
         observation id by that route's path parameter.
         """
+        # Release gate (Section 11) -- `?source=replay` reads the historical
+        # replay DATASET (episodes over real price history) instead of the
+        # live store. The two are never merged into one count.
+        if source.lower() == "replay":
+            try:
+                return await build_replay_pattern_aggregation(
+                    dataset_path=_REPLAY_DATASET_DIR / "replay_dataset.jsonl",
+                    summary_path=_REPLAY_DATASET_DIR / "replay_dataset_summary.json",
+                    observation_dir=_REPLAY_OUTCOME_DIR, as_of=utc_now(),
+                )
+            except ReplayDatasetUnavailable as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if source.lower() != "live":
+            raise HTTPException(status_code=422, detail="source must be 'live' or 'replay'")
         outcome_repository: JsonlResearchOutcomeRepository | None = getattr(app.state, "outcome_repository", None)
         if outcome_repository is None:
             raise HTTPException(status_code=503, detail="research outcome tracking is not configured")
         return await build_live_pattern_aggregation(outcome_repository, as_of=utc_now())
+
+    @app.get("/api/research/replay-dataset", response_model=ReplayDatasetRowsView)
+    async def research_replay_dataset(
+        symbol: str | None = None, status: str | None = None, direction: str | None = None, limit: int = 50,
+    ) -> ReplayDatasetRowsView:
+        """Release gate (Sections 10/21) -- read-only browse of individual
+        historical replay observations, "what TIRE knew then" kept apart
+        from "what happened after". Registered before the
+        `{observation_id}` route for the same reason as `/patterns`."""
+        try:
+            return read_replay_dataset_rows(
+                _REPLAY_DATASET_DIR / "replay_dataset.jsonl", symbol=symbol, status=status, direction=direction,
+                limit=max(1, min(limit, 200)),
+            )
+        except ReplayDatasetUnavailable as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/research/{observation_id}/outcome", response_model=ResearchOutcomeDetailView)
     async def research_observation_outcome(observation_id: str) -> ResearchOutcomeDetailView:

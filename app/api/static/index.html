@@ -55,7 +55,13 @@
 
   main { max-width: 1400px; margin: 0 auto; padding: 16px 20px 60px; }
 
-  .search-row { display: flex; gap: 8px; margin-bottom: 6px; }
+  /* Release gate (Section 18) -- measured at a real 390px-wide viewport:
+     without `flex-wrap`, a filter row (symbol + date + two selects +
+     button) laid out to 711px against a 387px viewport, so the page
+     scrolled sideways and LOAD HISTORY sat off-screen entirely. Wrapping
+     is also correct on desktop, where these rows already fit on one line. */
+  .search-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .table-scroll { overflow-x: auto; max-width: 100%; }
   #query { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; font-family: inherit; font-size: 13px; border-radius: 4px; }
   #query:focus { outline: 1px solid var(--accent); }
   button { background: var(--accent); color: #04101f; border: none; padding: 9px 16px; font-family: inherit; font-weight: 600; font-size: 12px; border-radius: 4px; cursor: pointer; }
@@ -94,6 +100,24 @@
   .panel h2 .note { text-transform: none; color: var(--muted); font-weight: 400; font-size: 10px; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+  /* Phone widths: inputs share a wrapped row instead of forcing the page
+     wider, and any wide table scrolls inside its own container. */
+  @media (max-width: 560px) {
+    main { padding: 12px 12px 48px; }
+    .search-row > input, .search-row > select { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+    .search-row > button { flex: 0 0 auto; }
+    /* Every wide table scrolls inside itself rather than widening the
+       page. Measured at a real 387px viewport: RESEARCH HISTORY's 9-column
+       table pushed the document to 839px before this rule, and to nothing
+       beyond the viewport after it, with headers and rows intact. This
+       covers the tables that are not individually wrapped in
+       `.table-scroll`. */
+    table { display: block; overflow-x: auto; max-width: 100%; font-size: 11px; }
+    pre, .mono-block { overflow-x: auto; }
+    /* Touch targets: the quick-fill and filter chips render 21-22px tall
+       at desktop sizing, which is small for a finger. */
+    button { min-height: 32px; }
+  }
 
   table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
   table.chain th, table.chain td { padding: 3px 6px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -253,9 +277,29 @@
          sample proves before they read the numbers. -->
     <h2 class="section-label" style="margin-top:14px">PATTERN HISTORY <span class="note">what happened after this type of observation -- descriptive counts over real observations, never a win rate, probability, or prediction</span></h2>
     <div class="search-row">
+      <select id="patterns-source" aria-label="Pattern history source">
+        <option value="replay">Historical replay dataset (real price history)</option>
+        <option value="live">Live research journal (this system's own scans)</option>
+      </select>
       <button id="patterns-btn" class="secondary">LOAD PATTERN HISTORY</button>
     </div>
     <div id="patterns-results"></div>
+    <div id="replay-rows-panel" style="display:none">
+      <h2 class="section-label" style="margin-top:14px">COMPARE HISTORICAL OBSERVATIONS <span class="note">individual replay observations -- what TIRE knew at the time, kept separate from what happened after</span></h2>
+      <div class="search-row">
+        <input id="replay-rows-symbol" type="text" placeholder="symbol (optional), e.g. SBIN" autocomplete="off">
+        <select id="replay-rows-status" aria-label="Outcome filter">
+          <option value="">any outcome</option>
+          <option value="FOLLOW_THROUGH_OBSERVED">FOLLOW-THROUGH OBSERVED</option>
+          <option value="NO_FOLLOW_THROUGH">NO FOLLOW-THROUGH</option>
+          <option value="FAILED_SETUP">FAILED SETUP</option>
+          <option value="INSUFFICIENT_OUTCOME_DATA">INSUFFICIENT OUTCOME DATA</option>
+          <option value="PENDING">PENDING</option>
+        </select>
+        <button id="replay-rows-btn" class="secondary">SHOW OBSERVATIONS</button>
+      </div>
+      <div id="replay-rows-results"></div>
+    </div>
   </section>
 
   <div class="search-row" id="symbol-research">
@@ -934,18 +978,18 @@ function renderDiscoverResults(data) {
   // for the whole run.
   if (data.scan_snapshot) {
     const snap = data.scan_snapshot;
-    const completedAgoSec = Math.max(0, Math.round((Date.now() - new Date(snap.completed_at).getTime()) / 1000));
+    const completedAgoSec = snap.completed_at ? Math.max(0, Math.round((Date.now() - new Date(snap.completed_at).getTime()) / 1000)) : "n/a ";
     const snapBlock = el("div", { class: "list-block", style: "margin-bottom:10px" });
     snapBlock.appendChild(el("p", {
       class: "chart-hint",
-      text: "Scan completed " + completedAgoSec + "s ago, took " + snap.duration_seconds.toFixed(1) + "s -- " +
+      text: "Scan completed " + completedAgoSec + "s ago, took " + fmt(snap.duration_seconds, 1) + "s -- " +
         snap.successful_symbols + "/" + snap.requested_symbols + " symbols successfully analyzed" +
         (snap.failed_symbols ? " (" + snap.failed_symbols + " unavailable)" : ""),
     }));
     snapBlock.appendChild(el("p", {
       class: "chart-hint",
-      text: "Timing -- Stage 1: " + (snap.stage1_seconds || 0).toFixed(1) + "s  ·  Stage 2: " + (snap.stage2_seconds || 0).toFixed(1) +
-        "s  ·  avg Stage 2 latency: " + (snap.avg_stage2_latency_seconds || 0).toFixed(1) + "s  ·  " + (snap.news_timing_note || ""),
+      text: "Timing -- Stage 1: " + fmt(snap.stage1_seconds, 1) + "s  ·  Stage 2: " + fmt(snap.stage2_seconds, 1) +
+        "s  ·  avg Stage 2 latency: " + fmt(snap.avg_stage2_latency_seconds, 1) + "s  ·  " + (snap.news_timing_note || ""),
     }));
     results.appendChild(snapBlock);
   }
@@ -1335,6 +1379,11 @@ document.getElementById("history-btn").addEventListener("click", runResearchHist
 // reader knows it was drawn from a 41-observation store of which 38 had
 // no named pattern.
 function patternCountsTable(patterns) {
+  // Release gate (Section 18) -- a 9-column count table cannot fit a 390px
+  // viewport; measured at a real 387px viewport it pushed the PAGE to
+  // 636px. It scrolls inside its own container instead, so the page never
+  // scrolls sideways and the table stays usable.
+  const scroller = el("div", { class: "table-scroll", style: "overflow-x:auto;max-width:100%" });
   const table = el("table", { class: "checkpoint-table" });
   table.appendChild(el("thead", {}, [el("tr", {}, [
     "Pattern", "Observed", "Follow-through", "No follow-through", "Failed setup", "Pending", "Insufficient data", "Symbols",
@@ -1353,7 +1402,8 @@ function patternCountsTable(patterns) {
     ]));
   });
   table.appendChild(tbody);
-  return table;
+  scroller.appendChild(table);
+  return scroller;
 }
 
 async function runPatternAggregation() {
@@ -1365,7 +1415,9 @@ async function runPatternAggregation() {
 
   let data = null;
   try {
-    const resp = await fetch(apiUrl("/api/research/patterns"));
+    const source = (document.getElementById("patterns-source") || {}).value || "live";
+    document.getElementById("replay-rows-panel").style.display = source === "replay" ? "block" : "none";
+    const resp = await fetch(apiUrl("/api/research/patterns") + "?source=" + encodeURIComponent(source));
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
       throw new Error(body.detail ? JSON.stringify(body.detail) : ("request failed (" + resp.status + ")"));
@@ -1422,6 +1474,74 @@ async function runPatternAggregation() {
   }));
 }
 document.getElementById("patterns-btn").addEventListener("click", runPatternAggregation);
+
+// Release gate (Sections 10/21) -- one horizon's two separate facts as a
+// short readable cell: whether the confirmation level and the invalidation
+// level were crossed, and when first.
+function replayHorizonText(h) {
+  if (!h) return "Unavailable";
+  if (!h.data_sufficient) return "Insufficient data";
+  const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
+  const conf = h.confirmation === "CONFIRMED" ? "confirmed " + when(h.first_confirmation_at) : (h.confirmation || "UNKNOWN").replace(/_/g, " ").toLowerCase();
+  const inv = h.invalidation === "INVALIDATED" ? "invalidated " + when(h.first_invalidation_at) : (h.invalidation || "UNKNOWN").replace(/_/g, " ").toLowerCase();
+  return conf + " · " + inv;
+}
+
+async function runReplayRows() {
+  const results = document.getElementById("replay-rows-results");
+  const params = new URLSearchParams({ limit: "50" });
+  const symbol = document.getElementById("replay-rows-symbol").value.trim();
+  const status = document.getElementById("replay-rows-status").value;
+  if (symbol) params.set("symbol", symbol);
+  if (status) params.set("status", status);
+  results.innerHTML = "";
+  results.appendChild(el("p", { class: "hint", text: "loading observations…" }));
+  let data = null;
+  try {
+    const resp = await fetch(apiUrl("/api/research/replay-dataset") + "?" + params.toString());
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail ? JSON.stringify(body.detail) : ("request failed (" + resp.status + ")"));
+    }
+    data = await resp.json();
+  } catch (err) {
+    results.innerHTML = "";
+    results.appendChild(el("p", { class: "hint", text: "OBSERVATIONS UNAVAILABLE: " + err.message }));
+    return;
+  }
+  results.innerHTML = "";
+  results.appendChild(el("p", { class: "chart-hint", text: "Showing " + data.returned_rows + " of " + data.matched_rows + " matching observation(s) (" + data.total_rows + " in the dataset), in dataset order -- not ranked by outcome." }));
+  if (!data.rows || !data.rows.length) return;
+  const scroller = el("div", { class: "table-scroll", style: "overflow-x:auto;max-height:520px;overflow-y:auto" });
+  const table = el("table", { class: "checkpoint-table" });
+  table.appendChild(el("thead", {}, [el("tr", {}, [
+    "Symbol", "Observed at", "Pattern / direction", "Market / sector", "KNEW THEN: confirm level", "KNEW THEN: invalidation level",
+    "AFTER +1 session", "AFTER +5 sessions", "Reference outcome (+5)",
+  ].map((h) => el("th", { text: h })))]));
+  const tbody = el("tbody");
+  data.rows.forEach((row) => {
+    const k = row.knew_then || {};
+    const a = row.happened_after || {};
+    const conf = k.confirmation || {};
+    const inv = k.invalidation || {};
+    tbody.appendChild(el("tr", { title: [k.confirmation && conf.rule ? "Confirm if: " + conf.rule : "", inv.rule ? "Invalidate if: " + inv.rule : "", (k.supporting_evidence || []).length ? "Supporting: " + k.supporting_evidence.join(" | ") : ""].filter(Boolean).join("\n") }, [
+      el("td", { text: k.symbol || "n/a" }),
+      el("td", { text: k.timestamp ? new Date(k.timestamp).toLocaleString() : "Unknown" }),
+      el("td", { text: (k.pattern || "n/a") + " / " + (k.direction || "n/a") }),
+      el("td", { text: (k.market_context || "UNKNOWN") + " / " + (k.sector_context || "UNKNOWN") }),
+      el("td", { text: conf.level_value ? (conf.level_kind || "level") + " " + fmt(conf.level_value, 2) : "Unknown" }),
+      el("td", { text: inv.level_value ? (inv.level_kind || "level") + " " + fmt(inv.level_value, 2) : "Unknown" }),
+      el("td", { text: replayHorizonText(a.outcome_1d) }),
+      el("td", { text: replayHorizonText(a.outcome_5d) }),
+      el("td", { text: String(a.reference_status_plus_5d || "Unknown").replace(/_/g, " ") }),
+    ]));
+  });
+  table.appendChild(tbody);
+  scroller.appendChild(table);
+  results.appendChild(scroller);
+  results.appendChild(el("p", { class: "hint", text: "Hover a row for the recorded confirmation/invalidation rules and supporting evidence. Price-only replay: no historical option-chain or futures evidence existed for these instants." }));
+}
+document.getElementById("replay-rows-btn").addEventListener("click", runReplayRows);
 
 async function runWatchlist() {
   const raw = document.getElementById("watchlist-query").value.trim();
@@ -1589,7 +1709,7 @@ function renderIpoAnalysisResult(data) {
   ].forEach(([k, v]) => { identityBox.appendChild(el("div", { class: "k", text: k })); identityBox.appendChild(el("div", { text: String(v) })); });
   result.appendChild(identityBox);
 
-  if (i.listing_price !== null && i.price_band_high !== null) {
+  if (num(i.listing_price) !== null && num(i.price_band_high)) {
     const issuePrice = num(i.price_band_high), listingPrice = num(i.listing_price);
     const gainPct = ((listingPrice - issuePrice) / issuePrice) * 100;
     result.appendChild(el("p", { class: "hint", text: "Real listing outcome: issue price ₹" + fmt(i.price_band_high, 2) + " -> real listing price ₹" + fmt(i.listing_price, 2) + " (" + (gainPct >= 0 ? "+" : "") + gainPct.toFixed(1) + "%). This already happened -- not a forecast." }));
@@ -1828,7 +1948,7 @@ async function requestAiExplain(data) {
   };
   const fallback = function (note) {
     body.innerHTML = "";
-    body.appendChild(el("p", { class: "chart-hint", text: note || "AI explanation unavailable — showing TIRE's evidence summary." }));
+    body.appendChild(el("p", { class: "chart-hint", style: "font-weight:700", text: note || "Qwen unavailable — deterministic explanation shown" }));
     body.appendChild(el("p", { style: "font-weight:700", text: "In simple terms" }));
     body.appendChild(el("p", { text: facts.observation }));
     body.appendChild(el("p", { style: "font-weight:700", text: "Why it matters" }));
@@ -1839,7 +1959,7 @@ async function requestAiExplain(data) {
     body.appendChild(el("p", { text: facts.confirmation || "n/a" }));
     body.appendChild(el("p", { style: "font-weight:700", text: "What invalidates it" }));
     body.appendChild(el("p", { text: facts.invalidation || "n/a" }));
-    body.appendChild(el("p", { class: "chart-hint", text: "AI explanation based on TIRE evidence. The deterministic engine is the authority." }));
+    body.appendChild(el("p", { class: "chart-hint", text: "Written directly from TIRE's deterministic evidence -- no AI was used for this explanation." }));
     if (btn) { enableExplainSimply(); body.appendChild(btn); }
   };
   try {
@@ -1850,11 +1970,14 @@ async function requestAiExplain(data) {
     });
     const out = await resp.json();
     if (!out.ok || !out.explanation) {
-      fallback("AI explanation unavailable — showing TIRE's evidence summary.");
+      // Release gate (Section 17) -- say plainly that the text below is
+      // deterministic, and why Qwen did not produce it.
+      fallback("Qwen unavailable — deterministic explanation shown (" + String(out.status || "UNAVAILABLE").replace(/_/g, " ").toLowerCase() + ")");
       return;
     }
     const x = out.explanation;
     body.innerHTML = "";
+    body.appendChild(el("p", { class: "chart-hint", style: "font-weight:700", text: "Simplified by local Qwen 2.5 (" + (out.model || "qwen2.5") + ")" }));
     body.appendChild(el("p", { style: "font-weight:700", text: "In simple terms" }));
     body.appendChild(el("p", { text: x.summary || "" }));
     body.appendChild(el("p", { style: "font-weight:700", text: "Why it matters" }));
@@ -1866,10 +1989,10 @@ async function requestAiExplain(data) {
     body.appendChild(el("p", { style: "font-weight:700", text: "What invalidates it" }));
     body.appendChild(el("p", { text: x.invalidation_condition || facts.invalidation || "n/a" }));
     if (x.data_quality_note) body.appendChild(el("p", { class: "chart-hint", text: x.data_quality_note }));
-    body.appendChild(el("p", { class: "chart-hint", text: "AI explanation based on TIRE evidence." }));
+    body.appendChild(el("p", { class: "chart-hint", text: "Qwen only re-worded TIRE's existing evidence. It did not find this setup, and TIRE's deterministic research state above is the authority." }));
     if (btn) { enableExplainSimply(); body.appendChild(btn); }
   } catch (e) {
-    fallback("AI explanation unavailable — showing TIRE's evidence summary.");
+    fallback("Qwen unavailable — deterministic explanation shown");
   }
 }
 
@@ -1898,43 +2021,59 @@ function renderDashboard(data) {
   enableExplainSimply();
   document.getElementById("report").style.display = "block";
 
-  renderUnderlyingSummary(data);
-  renderResearchContext(data);
-  renderFinalAssessment(data);
-  renderQuickCePe(data);
-  renderQuickEvidence(data);
-  renderWatchNext(data.watch_next);
-  renderPriceChart(v ? v.price_chart : null);
-  renderOptionChain(v ? v.option_chain : null);
-  renderOI(v ? v.option_chain : null);
-  renderIV(v);
-  renderGlobalContext(data, v ? v.global_context : null, v ? v.futures : null);
-  renderOiMigration(v ? v.ce_oi_migration : null, v ? v.pe_oi_migration : null);
-  renderVolatilityRegime(v ? v.volatility_regime : null);
-  renderMacroRegime(v ? v.macro_regime : null);
-  renderTransmission(v ? v.transmission_notes : null);
-  renderNews(v ? v.news : null);
-  renderDirectionComparison(v ? v.direction_comparison : null);
-  renderRequestedContract(v ? v.requested_contract : null);
-  renderAlternatives(v ? v.requested_contract : null, extractSpot(v));
-  renderDecay(v ? v.requested_contract : null);
-  renderSupportResistance(v ? v.support_resistance : null);
-  renderEvidence(v ? v.evidence : [], v ? v.convergence : null);
-  renderAdversarial(v ? v.adversarial : null);
-  renderWhatChanged(data.what_changed);
-  renderQuality(v ? v.quality : null);
+  renderSection("renderUnderlyingSummary", () => renderUnderlyingSummary(data));
+  renderSection("renderResearchContext", () => renderResearchContext(data));
+  renderSection("renderFinalAssessment", () => renderFinalAssessment(data));
+  renderSection("renderQuickCePe", () => renderQuickCePe(data));
+  renderSection("renderQuickEvidence", () => renderQuickEvidence(data));
+  renderSection("renderWatchNext", () => renderWatchNext(data.watch_next));
+  renderSection("renderPriceChart", () => renderPriceChart(v ? v.price_chart : null));
+  renderSection("renderOptionChain", () => renderOptionChain(v ? v.option_chain : null));
+  renderSection("renderOI", () => renderOI(v ? v.option_chain : null));
+  renderSection("renderIV", () => renderIV(v));
+  renderSection("renderGlobalContext", () => renderGlobalContext(data, v ? v.global_context : null, v ? v.futures : null));
+  renderSection("renderOiMigration", () => renderOiMigration(v ? v.ce_oi_migration : null, v ? v.pe_oi_migration : null));
+  renderSection("renderVolatilityRegime", () => renderVolatilityRegime(v ? v.volatility_regime : null));
+  renderSection("renderMacroRegime", () => renderMacroRegime(v ? v.macro_regime : null));
+  renderSection("renderTransmission", () => renderTransmission(v ? v.transmission_notes : null));
+  renderSection("renderNews", () => renderNews(v ? v.news : null));
+  renderSection("renderDirectionComparison", () => renderDirectionComparison(v ? v.direction_comparison : null));
+  renderSection("renderRequestedContract", () => renderRequestedContract(v ? v.requested_contract : null));
+  renderSection("renderAlternatives", () => renderAlternatives(v ? v.requested_contract : null, extractSpot(v)));
+  renderSection("renderDecay", () => renderDecay(v ? v.requested_contract : null));
+  renderSection("renderSupportResistance", () => renderSupportResistance(v ? v.support_resistance : null));
+  renderSection("renderEvidence", () => renderEvidence(v ? v.evidence : [], v ? v.convergence : null));
+  renderSection("renderAdversarial", () => renderAdversarial(v ? v.adversarial : null));
+  renderSection("renderWhatChanged", () => renderWhatChanged(data.what_changed));
+  renderSection("renderQuality", () => renderQuality(v ? v.quality : null));
 
   document.getElementById("compact-text").textContent = data.compact_report || "NOT AVAILABLE";
   document.getElementById("detailed-text").textContent = data.detailed_report || "NOT AVAILABLE";
   document.getElementById("meta-line").textContent =
-    "symbol=" + (data.symbol || "n/a") + "  generated_at=" + (data.generated_at || "n/a") + "  latency=" + (data.latency_seconds || 0).toFixed(2) + "s" +
+    "symbol=" + (data.symbol || "n/a") + "  generated_at=" + (data.generated_at || "n/a") + "  latency=" + fmt(data.latency_seconds, 2) + "s" +
     (data.audit_id ? "  audit_id=" + data.audit_id : "") + "  journal=" + (data.journal_status || "n/a");
 
-  renderQueryIdentity(data);
+  renderSection("renderQueryIdentity", () => renderQueryIdentity(data));
   renderOutcomeTracking(data);
   refreshJournalStatus();
 
   scheduleRefresh();
+}
+
+// Release gate (Section 19) -- one panel's missing/unexpected field must
+// never blank the panels after it (or stop auto-refresh). A failing panel
+// is reported, by name, as unavailable; every other panel still renders.
+function renderSection(name, fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error("[TIRE] panel " + name + " failed to render:", err);
+    const box = document.getElementById("warnings-box");
+    const label = name.replace(/^render/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+    const line = "PANEL UNAVAILABLE: " + label + " -- this response was missing data the panel needs; other panels are unaffected.";
+    box.textContent = box.style.display === "block" && box.textContent ? box.textContent + "\n" + line : line;
+    box.style.display = "block";
+  }
 }
 
 function renderHeaderBadges(data) {
@@ -3015,7 +3154,7 @@ PriceChart.prototype._drawLevel = function (svg, lv, color, lo, hi) {
   const y = this._yScale(price, lo, hi);
   svg.appendChild(svgEl("line", { x1: this.padLeft, x2: this.width - this.padRight, y1: y, y2: y, stroke: color, "stroke-width": 1, "stroke-dasharray": "5,3", opacity: 0.6 }));
   const t = svgEl("text", { x: this.padLeft + 4, y: y - 3, fill: color, "font-size": 9 });
-  t.textContent = lv.kind.toUpperCase() + " " + price.toFixed(1) + " (" + lv.stability + ")";
+  t.textContent = String(lv.kind || "level").toUpperCase() + " " + price.toFixed(1) + " (" + (lv.stability || "stability unknown") + ")";
   svg.appendChild(t);
 };
 
