@@ -105,3 +105,36 @@ async def test_adapter_rejects_hallucinated_buy_field() -> None:
         result = await adapter.explain(client, facts={"pattern": "OI_MIGRATION"}, source_evidence_ids=("e",))
     assert result.ok is False
     assert "buy" in (result.detail or "")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "This is a strong buy signal on RELIANCE.",
+        "Expected return over the week is meaningful.",
+        "There is a high probability of a breakout.",
+        "The model predicts continuation.",
+        "Smart money is positioning here.",
+        "Institutions are accumulating the stock.",
+        "Price will likely rally past resistance.",
+        "A price target near 1500 applies.",
+        "Traders want to push this higher.",
+        "You should buy before the open.",
+    ],
+)
+def test_validate_rejects_forbidden_claims_in_prose_under_allowed_keys(text: str) -> None:
+    assert validate_qwen_payload({"summary": text}) in {"prohibited claim", "unsupported claim"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Order flow shows a buy/sell quantity imbalance of 1.4, which is not directional by itself.",
+        "Research confidence is WEAK because chain evidence is missing.",
+        "Confirmation would be price holding beyond the nearby resistance level.",
+        "Invalidation would be a break below the recorded support.",
+        "Historically this pattern showed follow-through in 40 of 120 determined observations; this is not a forecast.",
+    ],
+)
+def test_validate_accepts_factual_paraphrase_of_deterministic_evidence(text: str) -> None:
+    assert validate_qwen_payload({"summary": text}) is None

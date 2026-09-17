@@ -36,6 +36,29 @@ _CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Release gate (Section 16) -- forbidden CLAIMS in otherwise well-formed
+# prose. `_CLAIM_RE` alone let "expected return", "predicts", "smart money",
+# "a buy signal" or "will rally" through under allowed keys. Patterns are
+# phrase-shaped, not bare words, because the deterministic facts Qwen must
+# paraphrase legitimately contain "buy/sell quantity" and
+# "research confidence WEAK"; rejecting those would only force fallback.
+_FORBIDDEN_PROSE_RE = re.compile(
+    r"\b("
+    r"(strong\s+)?(buy|sell|accumulate)\s+(signal|call|recommendation|rating|opportunity)"
+    r"|(you|traders?|investors?)\s+(should|could|may\s+want\s+to)\s+(buy|sell|enter|exit|short|go\s+long)"
+    r"|expected\s+(return|gain|profit|upside)s?"
+    r"|probabilit(y|ies)|likelihood|\d{1,3}\s*%\s*(chance|likely)"
+    r"|confidence\s+(level|score|percentage|of\s+\d)"
+    r"|predict(s|ed|ion|ions)?"
+    r"|will\s+(likely\s+)?(rise|fall|rally|surge|drop|go\s+up|go\s+down|break\s*out|reach|hit)"
+    r"|price\s+target|target\s+(of|at|level|zone)"
+    r"|smart\s+money|operators?\s+(are|is)"
+    r"|institutions?\s+(are|is)\s+(buying|selling|accumulating|loading)"
+    r"|(traders?|institutions?|big\s+players?)\s+(intend|intends|want|wants|plan|plans)\s+to"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _SYSTEM_PROMPT = (
     "You explain already-validated market-research facts supplied as E1, E2, ... "
     "Return JSON only with keys: summary, developing_observation, supporting_evidence, "
@@ -167,6 +190,8 @@ def validate_qwen_payload(payload: dict[str, Any]) -> str | None:
     blob = _payload_text_blob(payload)
     if _CLAIM_RE.search(blob):
         return "unsupported claim"
+    if _FORBIDDEN_PROSE_RE.search(blob):
+        return "prohibited claim"
     return None
 
 
