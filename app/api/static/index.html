@@ -115,8 +115,13 @@
     table { display: block; overflow-x: auto; max-width: 100%; font-size: 11px; }
     pre, .mono-block { overflow-x: auto; }
     /* Touch targets: the quick-fill and filter chips render 21-22px tall
-       at desktop sizing, which is small for a finger. */
-    button { min-height: 32px; }
+       at desktop sizing, which is small for a finger. Inputs and selects
+       were missed the first time this was fixed -- measured at a real
+       390px viewport, 17 of them were still 18-22px tall (every symbol
+       box, every filter dropdown, the whole IPO form), while every button
+       was already compliant. A dropdown a finger cannot reliably hit is
+       the same defect as a button a finger cannot reliably hit. */
+    button, input, select { min-height: 32px; }
   }
 
   table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
