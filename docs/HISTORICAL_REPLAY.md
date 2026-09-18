@@ -441,11 +441,14 @@ checkpoints; `outcome_for_replay_observation()` over
 None`, populated verbatim from `ResearchThesisView.developing_pattern`
 (live) / `DevelopmentNarrativeView.pattern` (replay) -- the one field
 this aggregation groups by, never parsed from `thesis` free text.
-`FAILED_SETUP` is never produced for replay observations (Section 6's
-own `InvalidationOutcome` limitation -- no genuine invalidation-side
-level exists yet to justify it). Never a probability, win rate, or
-confidence -- exact counts only (`tests/unit/orchestration
-/test_pattern_aggregation.py`).
+`FAILED_SETUP` is reachable only for an observation that carries a real
+recorded invalidation-side level; for every other pattern
+`InvalidationOutcome` stays honestly `UNKNOWN` and `FAILED_SETUP` is
+never produced (Section 6). Two patterns carry such a level today:
+`PRE_BREAKOUT_COMPRESSION` (its own supporting structure) and, since
+18 Sep 2026, `FAILED_BREAKDOWN_RECLAIM` (the reclaimed level itself --
+Section 13). Never a probability, win rate, or confidence -- exact counts
+only (`tests/unit/orchestration/test_pattern_aggregation.py`).
 
 ## 11. Replay caching layer -- 95% sprint, Sprint 2b
 
@@ -477,5 +480,8 @@ dropped):
   mechanism is proven at the orchestration layer; wiring
   `POST /api/research/replay` / a pattern-aggregation endpoint is a
   small, separate follow-up once a UI consumer is actually wanted).
+  **Superseded:** the PATTERN HISTORY and COMPARE HISTORICAL
+  OBSERVATIONS views were built in the 17 Sep 2026 session and are
+  reachable from the HISTORY nav.
 - 5paisa. ML of any kind. Any change to Qwen (untouched, unused by any
   code in this phase).

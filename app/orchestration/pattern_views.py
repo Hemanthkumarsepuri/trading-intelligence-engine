@@ -43,6 +43,7 @@ from app.orchestration.pattern_aggregation import (
     aggregate_by_pattern,
     aggregate_by_pattern_segmented,
     outcome_for_live_observation,
+    segment_by_calendar_quarter,
     segment_by_direction,
     segment_by_evidence_completeness,
     segment_by_timing_stage,
@@ -312,6 +313,9 @@ async def build_replay_pattern_aggregation(
         extra_dimensions={
             "MARKET_CONTEXT": lambda o: o.market_context or "UNKNOWN",
             "SECTOR": lambda o: sectors.get(o.observation_id, "UNKNOWN"),
+            # Only the replay view carries enough elapsed time for this to
+            # say anything -- the live journal spans days, not quarters.
+            "TIME_WINDOW": segment_by_calendar_quarter,
         },
         provenance_note=note,
     )

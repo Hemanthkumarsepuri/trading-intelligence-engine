@@ -11,7 +11,7 @@ which exercises the real pipeline/repository, not a hand-built fixture).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from app.orchestration.daily_research import build_price_only_observation
@@ -24,6 +24,7 @@ from app.orchestration.visual_data import (
     NewsVisual,
     OptionChainVisual,
     PriceChartData,
+    StructuralReclaimView,
     SupportResistanceVisual,
     TechnicalLevelView,
     VisualData,
@@ -44,6 +45,7 @@ def _response(
     research_state: str | None = "EARLY_SETUP",
     visual_present: bool = True,
     technical_only: list[TechnicalLevelView] | None = None,
+    structural_reclaim: StructuralReclaimView | None = None,
 ) -> AnalyzeResponse:
     development = (
         DevelopmentNarrativeView(
@@ -70,7 +72,7 @@ def _response(
         support_resistance=SupportResistanceVisual(support=[], resistance=[], technical_only=technical_only or []),
         term_structure=None,
         freshness=FreshnessVisual(market_state=market_state, freshness_label=None, data_age_seconds=1.0, generated_at=_AS_OF),
-        research_state=research_state, development=development,
+        research_state=research_state, development=development, structural_reclaim=structural_reclaim,
     ) if visual_present else None
     return AnalyzeResponse(
         query="RELIANCE", parsed_symbol="RELIANCE", parsed_strike=None, parsed_right=None, parsed_expiry_hint=None,
@@ -304,3 +306,59 @@ def test_pre_breakout_compression_with_no_supporting_technical_level_stays_none(
     assert obs is not None
     assert obs.invalidation_level_kind is None
     assert obs.invalidation_level_value is None
+
+
+# ============================================================
+# FAILED_BREAKDOWN_RECLAIM -- the reclaimed level is the invalidation
+# ============================================================
+
+
+def _reclaim(direction: str = "BULLISH", status: str = "OK") -> StructuralReclaimView:
+    return StructuralReclaimView(
+        status=status, direction=direction, level_kind="support" if direction == "BULLISH" else "resistance",
+        level=Decimal("970"), broken_on=date(2026, 8, 20), reclaimed_on=date(2026, 8, 21),
+        break_depth_pct=Decimal("1.2"), sessions_since_reclaim=1, detail="970 was broken below and reclaimed",
+    )
+
+
+def test_reclaim_observation_records_the_reclaimed_level_as_its_invalidation() -> None:
+    """Before this, every pattern except PRE_BREAKOUT_COMPRESSION carried
+    no invalidation level at all, so `InvalidationOutcome` could only ever
+    be UNKNOWN for it. The reclaimed level is the pattern's own
+    `invalidate_if` ("price loses the reclaimed level again") as a number."""
+    response = _response(pattern="FAILED_BREAKDOWN_RECLAIM", structural_reclaim=_reclaim())
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.pattern == "FAILED_BREAKDOWN_RECLAIM"
+    assert obs.invalidation_level_kind == "support"
+    assert obs.invalidation_level_value == "970"
+
+
+def test_a_reclaim_from_the_opposite_side_is_never_attached_to_this_thesis() -> None:
+    """A BEARISH-side reclaim must not become a BULLISH thesis's
+    invalidation level -- that would record a real number on the wrong
+    side of the trade, which is worse than recording nothing."""
+    response = _response(pattern="FAILED_BREAKDOWN_RECLAIM", structural_reclaim=_reclaim(direction="BEARISH"))
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.invalidation_level_kind is None
+    assert obs.invalidation_level_value is None
+
+
+def test_a_non_ok_reclaim_status_contributes_no_level() -> None:
+    for status in ("NONE", "CONFLICTING", "INSUFFICIENT_HISTORY"):
+        response = _response(pattern="FAILED_BREAKDOWN_RECLAIM", structural_reclaim=_reclaim(status=status))
+        obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+        assert obs is not None
+        assert obs.invalidation_level_value is None, status
+
+
+def test_compression_still_uses_its_own_supporting_technical_level() -> None:
+    """The reclaim level must not leak into another pattern's record."""
+    response = _response(
+        pattern="PRE_BREAKOUT_COMPRESSION", structural_reclaim=_reclaim(),
+        technical_only=[TechnicalLevelView(kind="support", price=Decimal("990"), evidence="swing low")],
+    )
+    obs = build_price_only_observation("RELIANCE", response, run_id="run1", coverage_classification="REPLAY")
+    assert obs is not None
+    assert obs.invalidation_level_value == "990"

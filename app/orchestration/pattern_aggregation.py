@@ -40,6 +40,7 @@ from app.orchestration.outcome_horizons import (
 )
 from app.orchestration.research_outcome import summarize_research_outcome
 from app.persistence.interfaces import ResearchOutcomeRepository
+from app.utils.time import to_ist
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,27 @@ def segment_by_timing_stage(observation: ResearchObservation) -> str:
     docstrings for exactly which). Never re-derived here -- this function
     only reads the field."""
     return observation.early_stage_state
+
+
+def segment_by_calendar_quarter(observation: ResearchObservation) -> str:
+    """The real IST calendar quarter the observation was made in --
+    `2026-Q2`, `2026-Q3`, and so on.
+
+    Section 30's "more independent time windows" made inspectable rather
+    than asserted. A sample drawn from one continuous stretch of market
+    can look consistent purely because it is one regime wearing many
+    dates; splitting the SAME counts by the period they came from lets a
+    reader see whether a pattern's history is spread across the sample or
+    concentrated in one quarter of it. Calendar quarters are used rather
+    than "halves of whatever was collected" so the boundaries do not move
+    when the dataset grows, and so two builds of different sizes remain
+    comparable.
+
+    Still purely descriptive: this partitions existing counts, it never
+    compares quarters, ranks them, or computes a rate within one.
+    """
+    ist = to_ist(observation.generated_at)
+    return f"{ist.year}-Q{(ist.month - 1) // 3 + 1}"
 
 
 def segment_by_evidence_completeness(observation: ResearchObservation) -> str:

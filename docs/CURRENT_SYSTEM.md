@@ -83,9 +83,64 @@ Named patterns only (`PRE_BREAKOUT_COMPRESSION`, `FAILED_BREAKDOWN_RECLAIM`,
 `FUTURES_STRUCTURE`). WATCH + pattern NONE is never a developing setup.
 Fresh news without a named pattern is `EVENT_DRIVEN` (Events to Monitor).
 
+`FAILED_BREAKDOWN_RECLAIM` became **reachable on 18 Sep 2026**. Before
+that, `classify_development()`'s `failed_breakdown_reclaim` parameter had
+no production caller and defaulted to `False`, so this file listed a
+pattern that neither the live path nor replay could ever emit. The fact
+behind it is now computed by `app.domain.options.structural_reclaim`
+from the same already-fetched M15 candles, the same IST session
+aggregation and the same `as_of` boundary as `historical_structure`:
+prior structure broken by at least 0.30%, closed back inside within 3
+completed sessions, held since, and still held by current spot. A series
+qualifying on both sides reports `CONFLICTING` and no level; too little
+history reports `INSUFFICIENT_HISTORY`, never `NONE`. The pipeline offers
+the pattern to `classify_development()` only when the detected direction
+matches the matrix's own convergence bias — a gate that can withhold the
+pattern, never create one. The reclaimed level is recorded as the
+observation's invalidation level, making this the second pattern (after
+`PRE_BREAKOUT_COMPRESSION`) whose replay outcomes can reach a genuine
+INVALIDATED/NOT_INVALIDATED determination rather than a permanent
+`UNKNOWN`. It is surfaced in the UI as the BREAK AND RECLAIM block, which
+states the real level, the break and reclaim dates, the break depth, and
+which of the four statuses applies.
+
 Timing / move context: EARLY / DEVELOPING / MATURE / EXTENDED / ALREADY_MOVED.
 The ±6% day-change bar still marks EXTENDED; ATR multiples and session range
 also apply when those facts exist. See `classify_move_context()` docstring.
+
+## M15 DIRECTION — CORRECTED 18 SEP 2026
+
+`EMAAlignmentState` labels a numeric sequence in period order, not a
+trend: with `[9, 21, 50]`, `ASCENDING` means EMA9 < EMA21 < EMA50 — the
+faster averages BELOW the slower ones, the ordering a FALLING series
+produces. `ema_alignment.py`'s own docstring said so and warned callers
+not to read the label as a direction. All three callers did anyway, and
+read it backwards: `row_m15_trend()` reported a falling series as
+BULLISH evidence, `classify_market_regime()` called it
+`TRENDING_BULLISH`, and `EMAVWAPAlignmentStrategy` produced a BULLISH
+setup from it.
+
+Measured over 1,404 real M15 samples from the local 45-symbol candle
+store: price had FALLEN over the trailing 50 bars in 90.2% of
+`ASCENDING` samples (mean −1.68%) and RISEN in 89.3% of `DESCENDING`
+samples (mean +1.96%).
+
+The mapping is now: faster-above-slower → BULLISH, faster-below-slower →
+BEARISH, and each row states the geometry in words rather than repeating
+the ambiguous sequence label. Because the M15 trend row and the VWAP row
+share the `UNDERLYING_PRICE_STRUCTURE` group, the inverted row
+permanently contradicted the VWAP row computed from the same candles, so
+a genuine trend usually sent the group to CONFLICT and it voted nothing.
+Two existing tests passed only because of that — both were rewritten
+around the invariant they were meant to prove. Regression protection is
+in `tests/research_truth/test_ema_direction_truth.py`, which asserts
+against real price movement in the repository's own RELIANCE series
+rather than against the enum, and is verified to fail against the
+pre-fix mapping.
+
+Every historical observation generated before this date carries
+directions from the inverted mapping. The replay dataset was rebuilt
+after the fix; see `docs/HISTORICAL_REPLAY.md`.
 
 ## PROVIDER CAPABILITIES
 

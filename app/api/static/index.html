@@ -2552,6 +2552,35 @@ function renderResearchContext(data) {
     }
   }
 
+  // The dated break-and-reclaim fact behind FAILED_BREAKDOWN_RECLAIM.
+  // Shown whenever it was computed, including when the answer is "no"
+  // — "we looked and found nothing", "we could not look" and "the tape
+  // reads both ways" are three different answers and each is stated.
+  const rc = v.structural_reclaim;
+  if (rc) {
+    body.appendChild(el("p", { style: "font-weight:700;margin-top:10px", text: "BREAK AND RECLAIM" }));
+    if (rc.status === "OK") {
+      const side = rc.direction === "BULLISH" ? "broken below and reclaimed" : "broken above and rejected";
+      body.appendChild(el("p", {
+        text: "Level " + rc.level + " was " + side + " — broken " + (rc.broken_on || "n/a") +
+          ", reclaimed " + (rc.reclaimed_on || "n/a") + ", held " + (rc.sessions_since_reclaim === null || rc.sessions_since_reclaim === undefined ? "n/a" : rc.sessions_since_reclaim) +
+          " completed session(s) since.",
+      }));
+      body.appendChild(el("p", {
+        class: "chart-hint",
+        text: "Break depth " + fmtPct(rc.break_depth_pct) + ". This level is what the pattern's invalidation refers to: " +
+          "losing it again is the invalidation, not a nearby swing.",
+      }));
+    } else if (rc.status === "CONFLICTING") {
+      body.appendChild(el("p", { text: "The same series reads as both a reclaimed breakdown and a reclaimed breakout. Neither is reported." }));
+    } else if (rc.status === "INSUFFICIENT_HISTORY") {
+      body.appendChild(el("p", { class: "chart-hint", text: "Not enough completed sessions to identify a break and a reclaim." }));
+    } else {
+      body.appendChild(el("p", { class: "chart-hint", text: "No recent break of prior structure was reclaimed and held." }));
+    }
+    body.appendChild(el("p", { class: "chart-hint", text: rc.detail || "" }));
+  }
+
   if (streams.length) {
     const ul = el("ul", { class: "hint" });
     streams.forEach((s) => {

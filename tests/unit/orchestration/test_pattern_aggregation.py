@@ -18,6 +18,7 @@ from app.orchestration.pattern_aggregation import (
     aggregate_by_pattern,
     aggregate_by_pattern_segmented,
     outcome_for_replay_observation,
+    segment_by_calendar_quarter,
     segment_by_direction,
     segment_by_evidence_completeness,
     segment_by_timing_stage,
@@ -362,3 +363,53 @@ def test_build_pattern_aggregation_for_replay_end_to_end(tmp_path: Path) -> None
     assert result[0].pattern == "PRE_BREAKOUT_COMPRESSION"
     assert result[0].observations == 1
     assert result[0].follow_through_observed == 1
+
+
+# -- Section 30: independent time windows --------------------------------
+
+
+def test_calendar_quarter_segmentation_uses_the_real_ist_quarter() -> None:
+    q2 = _observation("a", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+        update={"generated_at": datetime(2026, 5, 14, 5, 0, tzinfo=UTC)}
+    )
+    q3 = _observation("b", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+        update={"generated_at": datetime(2026, 8, 25, 5, 0, tzinfo=UTC)}
+    )
+    # 31 Mar 2026, 21:00 UTC is already 1 Apr IST -- the quarter must follow
+    # the trading calendar's own timezone, not UTC.
+    boundary = _observation("c", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+        update={"generated_at": datetime(2026, 3, 31, 21, 0, tzinfo=UTC)}
+    )
+    assert segment_by_calendar_quarter(q2) == "2026-Q2"
+    assert segment_by_calendar_quarter(q3) == "2026-Q3"
+    assert segment_by_calendar_quarter(boundary) == "2026-Q2"
+
+
+def test_quarter_segments_partition_the_same_counts_without_changing_them() -> None:
+    """A segmentation must only PARTITION: every pattern's per-quarter
+    counts must sum back to its unsegmented total, or the split is
+    inventing or losing observations."""
+    observations = [
+        _observation("a", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+            update={"generated_at": datetime(2026, 5, 14, 5, 0, tzinfo=UTC)}
+        ),
+        _observation("b", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+            update={"generated_at": datetime(2026, 8, 25, 5, 0, tzinfo=UTC)}
+        ),
+        _observation("c", pattern="FAILED_BREAKDOWN_RECLAIM").model_copy(
+            update={"generated_at": datetime(2026, 8, 26, 5, 0, tzinfo=UTC)}
+        ),
+    ]
+    outcomes = {
+        "a": ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED,
+        "b": ResearchOutcomeStatus.FAILED_SETUP,
+        "c": ResearchOutcomeStatus.NO_FOLLOW_THROUGH,
+    }
+    overall = {a.pattern: a.observations for a in aggregate_by_pattern(observations, outcomes)}
+    segmented = aggregate_by_pattern_segmented(observations, outcomes, segment_by=segment_by_calendar_quarter)
+    assert sorted(segmented) == ["2026-Q2", "2026-Q3"]
+    summed: dict[str, int] = {}
+    for aggregates in segmented.values():
+        for aggregate in aggregates:
+            summed[aggregate.pattern] = summed.get(aggregate.pattern, 0) + aggregate.observations
+    assert summed == overall
