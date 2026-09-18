@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -243,6 +243,30 @@ def build_pattern_aggregation(
     )
 
 
+# The instant the inverted M15 sequence-label mapping was corrected (see
+# `app.domain.technical.ema_alignment`'s own docstring). Live observations
+# recorded BEFORE this carry a direction produced by the old mapping,
+# which read a falling EMA ordering as bullish evidence. They are real
+# records of what TIRE said at the time and are never rewritten -- but a
+# reader comparing them with today's behaviour has to be told, on the
+# surface that aggregates them, that the two were not produced by the
+# same rule.
+M15_DIRECTION_FIX_AT = datetime(2026, 9, 18, tzinfo=UTC)
+
+
+def _pre_direction_fix_note(observations: list[ResearchObservation]) -> str | None:
+    affected = sum(1 for o in observations if o.generated_at < M15_DIRECTION_FIX_AT)
+    if affected == 0:
+        return None
+    return (
+        f"PROVENANCE: {affected} of these {len(observations)} observation(s) were recorded before "
+        f"{M15_DIRECTION_FIX_AT.date().isoformat()}, when the M15 trend evidence row had its direction "
+        "mapping inverted (a falling EMA ordering was reported as bullish). Their recorded directions and "
+        "patterns are what TIRE actually said at the time and are kept unchanged, but they were not produced "
+        "by the rule running today and should not be pooled with newer observations as if they were."
+    )
+
+
 async def build_live_pattern_aggregation(
     outcome_repository: ResearchOutcomeRepository, *, as_of: datetime,
 ) -> PatternAggregationView:
@@ -258,7 +282,10 @@ async def build_live_pattern_aggregation(
         )
         for observation in observations
     }
-    return build_pattern_aggregation(observations, outcomes, as_of=as_of, source="LIVE")
+    return build_pattern_aggregation(
+        observations, outcomes, as_of=as_of, source="LIVE",
+        provenance_note=_pre_direction_fix_note(observations),
+    )
 
 
 class ReplayDatasetUnavailable(RuntimeError):

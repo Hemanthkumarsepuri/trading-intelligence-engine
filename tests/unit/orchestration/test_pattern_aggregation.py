@@ -413,3 +413,24 @@ def test_quarter_segments_partition_the_same_counts_without_changing_them() -> N
         for aggregate in aggregates:
             summed[aggregate.pattern] = summed.get(aggregate.pattern, 0) + aggregate.observations
     assert summed == overall
+
+
+def test_pre_fix_live_observations_are_flagged_not_silently_pooled() -> None:
+    """Observations recorded before the M15 direction mapping was
+    corrected carry directions the current rule would not produce. They
+    are never rewritten -- but the surface that aggregates them has to
+    say so, or a reader pools two different rules into one count."""
+    from app.orchestration.pattern_views import M15_DIRECTION_FIX_AT, _pre_direction_fix_note
+
+    before = _observation("a", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+        update={"generated_at": M15_DIRECTION_FIX_AT - timedelta(days=1)}
+    )
+    after = _observation("b", pattern="PRE_BREAKOUT_COMPRESSION").model_copy(
+        update={"generated_at": M15_DIRECTION_FIX_AT + timedelta(days=1)}
+    )
+    note = _pre_direction_fix_note([before, after])
+    assert note is not None
+    assert "1 of these 2 observation(s)" in note
+    assert "inverted" in note
+    assert _pre_direction_fix_note([after]) is None
+    assert _pre_direction_fix_note([]) is None
