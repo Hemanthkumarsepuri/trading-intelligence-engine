@@ -171,10 +171,10 @@ def test_a_whipsaw_qualifying_on_both_sides_is_reported_as_conflicting() -> None
         (days[2], 100.0, 103.0, 99.0, 101.0),
         (days[3], 101.0, 103.0, 99.0, 100.5),
         (days[4], 100.5, 103.0, 99.0, 101.0),
-        (days[5], 101.0, 105.0, 96.0, 100.0),   # breaks BOTH the 99.0 floor and the 103.0 ceiling
-        (days[6], 100.0, 102.0, 99.5, 101.0),   # closes back inside both
-        (days[7], 101.0, 102.0, 99.5, 101.0),
-        (days[8], 101.0, 102.0, 99.5, 101.0),
+        (days[5], 100.0, 101.0, 96.0, 97.0),     # closes BELOW the 99.0 floor
+        (days[6], 101.0, 105.0, 100.0, 104.0),   # reclaims the floor AND closes above the 103.0 ceiling
+        (days[7], 104.0, 104.5, 100.5, 101.0),   # rejected back below the ceiling
+        (days[8], 101.0, 102.0, 100.0, 101.0),   # holds inside both
     ]
     result = _detect(sessions, spot=101.0)
     assert result.status == StructuralReclaimStatus.CONFLICTING
@@ -221,4 +221,20 @@ def test_future_candles_never_participate() -> None:
         _candles(sessions), instrument_id=_KEY, timeframe=Timeframe.M15,
         as_of=_as_of(days[5]), spot=Decimal("99.0"),
     )
+    assert result.status == StructuralReclaimStatus.NONE
+
+
+def test_a_wick_through_the_level_is_not_a_break() -> None:
+    """The break session must CLOSE beyond the level. A session that
+    trades through prior structure and closes back inside it is a wick
+    the market never accepted -- there is nothing for a later session to
+    reclaim, and counting it as a break is what made this detector fire
+    on 39% of real session closes instead of naming a real event."""
+    days = _session_dates(8)
+    sessions = _failed_breakdown(days)
+    # Same 2% excursion as the qualifying case, but it closes back above
+    # the 100.0 floor in the same session.
+    sessions[5] = (days[5], 101.0, 101.5, 98.0, 100.6)
+    sessions[6] = (days[6], 100.6, 102.5, 100.4, 102.0)
+    result = _detect(sessions, spot=102.8)
     assert result.status == StructuralReclaimStatus.NONE
