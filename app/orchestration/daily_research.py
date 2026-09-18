@@ -2762,9 +2762,9 @@ def build_research_observation(
     if generated_at is None:
         raise ValueError(f"{candidate.symbol}: cannot build a research observation without a real generated_at")
     # 95% sprint (Section 6) -- see `ResearchObservation.invalidation_level_kind`'s
-    # own docstring for exactly why this is scoped to PRE_BREAKOUT_COMPRESSION
-    # only: every other pattern's `invalidate_if` text describes something
-    # this single static level cannot honestly represent.
+    # own docstring for which patterns record an invalidation level and
+    # why. This supporting-level form is PRE_BREAKOUT_COMPRESSION's;
+    # FAILED_BREAKDOWN_RECLAIM's own reclaimed level is applied below.
     invalidation_level = (
         _nearest_supporting_level(gated) if thesis.developing_pattern == "PRE_BREAKOUT_COMPRESSION" else None
     )
@@ -2855,9 +2855,11 @@ def build_price_only_observation(
     # (`app.orchestration.outcome_horizons`) determine a genuine
     # INVALIDATED/NOT_INVALIDATED result instead of UNKNOWN.
     nearest_level = _nearest_opposing_technical_level(direction, v.support_resistance, spot_decimal)
-    # 95% sprint (Section 6) -- same PRE_BREAKOUT_COMPRESSION-only scoping
-    # as `build_research_observation()`; see
-    # `ResearchObservation.invalidation_level_kind`'s own docstring.
+    # 95% sprint (Section 6) -- this supporting-level form of the
+    # invalidation level belongs to PRE_BREAKOUT_COMPRESSION;
+    # FAILED_BREAKDOWN_RECLAIM records its own reclaimed level just
+    # below instead. See `ResearchObservation.invalidation_level_kind`'s
+    # own docstring for which patterns record a level and why.
     invalidation_level = (
         _nearest_supporting_technical_level(direction, v.support_resistance, spot_decimal)
         if development.pattern == "PRE_BREAKOUT_COMPRESSION" else None

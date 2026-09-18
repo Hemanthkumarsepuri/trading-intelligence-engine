@@ -104,8 +104,12 @@ def capture_knew_then(observation: ResearchObservation, response: AnalyzeRespons
             "rule": development.invalidate_if if development is not None else None,
             "level_kind": observation.invalidation_level_kind,
             "level_value": observation.invalidation_level_value,
-            # Only PRE_BREAKOUT_COMPRESSION carries a deterministic level;
-            # every other pattern's invalidation stays UNKNOWN downstream.
+            # Two patterns carry a deterministic level today:
+            # PRE_BREAKOUT_COMPRESSION (its own supporting structure) and
+            # FAILED_BREAKDOWN_RECLAIM (the reclaimed level itself). Every
+            # other pattern's invalidation stays UNKNOWN downstream, which
+            # is what this flag reports -- read from the observation, never
+            # from a hardcoded pattern list.
             "deterministic": observation.invalidation_level_value is not None,
         },
         "spot_at_observation": observation.spot_at_observation,

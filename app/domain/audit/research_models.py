@@ -326,14 +326,21 @@ class ResearchObservation(_FrozenModel):
     # setup's compression range depends on NOT breaking; that pattern's
     # own `invalidate_if` text ("compression expands without a break, the
     # nearby level rejects") is exactly this geometry: price leaving the
-    # compression range on the WRONG side. Populated ONLY for
-    # PRE_BREAKOUT_COMPRESSION today -- the one pattern whose own
-    # documented definition makes this level's meaning unambiguous;
-    # every other pattern's `invalidate_if` describes something this
+    # compression range on the WRONG side.
+    #
+    # Populated for the patterns whose own documented `invalidate_if`
+    # names a specific level, and only those:
+    #   - PRE_BREAKOUT_COMPRESSION -- the thesis's own supporting level.
+    #   - FAILED_BREAKDOWN_RECLAIM (18 Sep 2026) -- the reclaimed level
+    #     itself, recorded by `app.domain.options.structural_reclaim`.
+    #     "Price loses the reclaimed level again" IS this number; before
+    #     that detector existed there was no such number to record, and
+    #     the pattern itself was unreachable.
+    # Every remaining pattern's `invalidate_if` describes something a
     # single static level cannot honestly represent (a relative-strength
-    # collapse, a reclaimed level being lost again, an OI reversal), so
-    # this stays `None` for them rather than guessing. `None` also for
-    # every observation written before this field existed.
+    # collapse, an OI reversal), so this stays `None` for them rather
+    # than guessing. `None` also for every observation written before
+    # this field existed.
     invalidation_level_kind: str | None = None
     invalidation_level_value: str | None = None
 

@@ -33,13 +33,15 @@ Final 95% sprint (Section 6) correctness note: `invalidation_outcome` is
 now a GENUINE determination (INVALIDATED/NOT_INVALIDATED), not just
 UNKNOWN, for the one case where a deterministic invalidation-side level
 can be established safely -- `ResearchObservation.invalidation_level_kind`/
-`invalidation_level_value`, populated only for PRE_BREAKOUT_COMPRESSION
-observations (see that field's own docstring for exactly why it is
-scoped that narrowly). It stays honestly `UNKNOWN` for every other
-pattern and for observations written before this field existed --
-never guessed from an unrelated fact (Section 7 / Section 6: "If a
-deterministic invalidation rule cannot be established safely: return
-UNKNOWN. Do not manufacture a rule.").
+`invalidation_level_value`, populated for the patterns whose own
+`invalidate_if` text names a specific level: PRE_BREAKOUT_COMPRESSION
+(its own supporting structure) and, since 18 Sep 2026,
+FAILED_BREAKDOWN_RECLAIM (the reclaimed level itself). It stays honestly
+`UNKNOWN` for every other pattern and for observations written before
+this field existed -- never guessed from an unrelated fact (Section 7 /
+Section 6: "If a deterministic invalidation rule cannot be established
+safely: return UNKNOWN. Do not manufacture a rule."). Nothing here reads
+the pattern name: this module only reads whether a level was recorded.
 """
 
 from __future__ import annotations
@@ -178,11 +180,12 @@ def _supporting_level_broken_through(
     below spot for a BULLISH thesis, resistance above spot for a
     BEARISH one; see `app.orchestration.daily_research
     ._nearest_supporting_level_in()`/`_nearest_supporting_technical_level()`,
-    which are what populate it, scoped to PRE_BREAKOUT_COMPRESSION
-    observations only -- see `ResearchObservation.invalidation_level_kind`'s
-    own docstring for why). `None` (never guessed) when no such level
-    was recorded -- every other pattern, and every observation written
-    before this field existed.
+    which are what populate it -- see
+    `ResearchObservation.invalidation_level_kind`'s own docstring for
+    which patterns record one and why). `None` (never guessed) when no
+    such level was recorded -- every pattern that does not name a
+    specific level, and every observation written before this field
+    existed.
 
     Final 95% sprint (Section 6) addition -- the genuinely SEPARATE
     counterpart to `_opposing_level_broken_through()` above. That
@@ -281,7 +284,7 @@ def compute_price_path_outcome(
         confirmation = ConfirmationOutcome.NOT_CONFIRMED
     # Final 95% sprint (Section 6) -- a genuinely separate INVALIDATION-
     # side level (`invalidation_level_kind`/`invalidation_level_value`)
-    # is now tracked, but only for PRE_BREAKOUT_COMPRESSION observations
+    # is now tracked, for the patterns that record a real level
     # (see that field's own docstring for why it stays scoped that
     # narrowly). `_supporting_level_broken_through()` returns `None`
     # (never guessed) for every observation that doesn't carry it --
