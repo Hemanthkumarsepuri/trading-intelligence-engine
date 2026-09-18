@@ -373,23 +373,38 @@ def test_a_failed_analyze_query_never_overwrites_a_valid_prior_context(tmp_path:
 
 
 def test_analyze_exposes_real_reasoning_and_never_fabricates_invalidation_without_a_thesis(tmp_path: Path) -> None:
-    """Against this file's real mocked chain, the evidence genuinely
-    conflicts (CONVERGENCE_CONFLICT -> NO_TRADE) -- reasoning still
-    explains that honestly, but there is no selected candidate, so
-    invalidation_level/condition must stay `None`, never fabricated to
-    look complete. The POPULATED case (a real candidate + invalidation
-    level) is proven separately in
-    tests/unit/orchestration/test_dashboard_service_reasoning.py."""
+    """Invalidation is either a REAL level from a real thesis, or absent --
+    never a number produced to make the response look complete.
+
+    Updated 18 Sep 2026: against this file's mocked chain the evidence used
+    to land on CONFLICT -> NO_TRADE, and this test pinned the resulting
+    empty invalidation fields. That CONFLICT was an artifact of the
+    inverted `row_m15_trend` mapping (a rising series was reported as
+    BEARISH, permanently contradicting the VWAP row from the same candle
+    series). With the mapping corrected the same mocked data converges
+    bullish, so the fixture now exercises the POPULATED side. The invariant
+    under test is unchanged and is asserted directly rather than through
+    one fixture's incidental outcome: a level appears if and only if a
+    condition explaining it does, and the level must be a real level from
+    this analysis, not an invented number. The error path's empty case is
+    covered by the next test."""
     app = _configured_app(tmp_path, provider=_provider(_router()), instrument_master=_MASTER)
     client = TestClient(app)
     resp = client.post("/api/analyze", json={"query": "RELIANCE 1300 CE"})
     body = resp.json()
     assert body["error"] is None
-    assert body["decision"] == "NO_TRADE"
+    assert body["decision"] == "WATCH"
     assert body["reasoning"]
     assert body["reasoning"] in body["detailed_report"]
-    assert body["invalidation_level"] is None
-    assert body["invalidation_condition"] is None
+
+    level, condition = body["invalidation_level"], body["invalidation_condition"]
+    assert (level is None) == (condition is None), "a level and its explanation must appear together or not at all"
+    if level is not None:
+        assert str(level) in condition, "the stated condition must name the level it was derived from"
+        real_levels = {
+            lv["strike"] for lv in body["visual"]["support_resistance"]["support"]
+        } | {lv["strike"] for lv in body["visual"]["support_resistance"]["resistance"]}
+        assert level in real_levels, "the invalidation level must be one of this analysis's own real S/R levels"
 
 
 def test_analyze_reasoning_fields_are_none_not_fabricated_when_analysis_failed(tmp_path: Path) -> None:

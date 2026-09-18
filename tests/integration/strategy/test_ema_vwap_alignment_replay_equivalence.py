@@ -19,7 +19,7 @@ from app.domain.market.market_state import assemble_market_state
 from app.domain.market.models import Candle, ExchangeSegment, Quote, Timeframe
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.persistence.in_memory import InMemoryCandleRepository, InMemoryOptionChainRepository
-from tests.unit.strategy.fixtures import BEARISH_CLOSES, BULLISH_CLOSES
+from tests.unit.strategy.fixtures import FALLING_CLOSES, RISING_CLOSES
 from tests.unit.technical.factories import make_series_from_closes
 
 T0 = datetime(2026, 8, 27, 9, 15, tzinfo=UTC)
@@ -91,8 +91,8 @@ def _run_case(closes: list[float], expected_direction: str) -> None:
 
 
 def test_bullish_case_replay_path_matches_direct_bounded_computation() -> None:
-    _run_case(BULLISH_CLOSES, "BULLISH")
+    _run_case(RISING_CLOSES, "BULLISH")
 
 
 def test_bearish_case_replay_path_matches_direct_bounded_computation() -> None:
-    _run_case(BEARISH_CLOSES, "BEARISH")
+    _run_case(FALLING_CLOSES, "BEARISH")

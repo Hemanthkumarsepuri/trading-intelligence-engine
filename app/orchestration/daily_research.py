@@ -2714,6 +2714,32 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
     )
 
 
+def _reclaim_invalidation_level(
+    pattern: str | None, v: VisualData | None, direction: str,
+) -> tuple[str, str] | None:
+    """The FAILED_BREAKDOWN_RECLAIM counterpart to
+    `_nearest_supporting_level()`/`_nearest_supporting_technical_level()`:
+    that pattern's own `invalidate_if` text is "price loses the reclaimed
+    level again", and the reclaimed level is a specific real number the
+    detector already recorded (`app.domain.options.structural_reclaim`) --
+    so unlike the other patterns this one HAS an unambiguous, deterministic
+    invalidation level and no longer has to stay `UNKNOWN`.
+
+    Never a guess: returns `None` unless the analysis actually recorded an
+    `OK` reclaim whose own direction matches this thesis (the same
+    direction gate the pipeline applied before the pattern could be named
+    at all -- re-checked here rather than assumed, because a persisted
+    observation must never carry a level from the opposite side)."""
+    if pattern != "FAILED_BREAKDOWN_RECLAIM" or v is None:
+        return None
+    reclaim = v.structural_reclaim
+    if reclaim is None or reclaim.status != "OK" or reclaim.direction != direction:
+        return None
+    if reclaim.level_kind is None or reclaim.level is None:
+        return None
+    return reclaim.level_kind, str(reclaim.level)
+
+
 def build_research_observation(
     candidate: RankedCandidate, thesis: ResearchThesisView, *, run_id: str, coverage_classification: str | None,
 ) -> ResearchObservation:
@@ -2742,6 +2768,13 @@ def build_research_observation(
     invalidation_level = (
         _nearest_supporting_level(gated) if thesis.developing_pattern == "PRE_BREAKOUT_COMPRESSION" else None
     )
+    reclaim_level = _reclaim_invalidation_level(
+        thesis.developing_pattern, candidate.response.visual, candidate.direction,
+    )
+    invalidation_kind = invalidation_level.kind if invalidation_level is not None else None
+    invalidation_value = str(invalidation_level.strike) if invalidation_level is not None else None
+    if reclaim_level is not None:
+        invalidation_kind, invalidation_value = reclaim_level
     return ResearchObservation(
         run_id=run_id, audit_id=candidate.response.audit_id, generated_at=generated_at,
         symbol=candidate.symbol, direction=candidate.direction, selected_right=c.right, selected_strike=str(c.strike),
@@ -2750,8 +2783,8 @@ def build_research_observation(
         contractual_expiry_breakeven=thesis.contractual_expiry_breakeven,
         nearest_level_kind=nearest_level.kind if nearest_level is not None else None,
         nearest_level_value=str(nearest_level.strike) if nearest_level is not None else None,
-        invalidation_level_kind=invalidation_level.kind if invalidation_level is not None else None,
-        invalidation_level_value=str(invalidation_level.strike) if invalidation_level is not None else None,
+        invalidation_level_kind=invalidation_kind,
+        invalidation_level_value=invalidation_value,
         market_context=thesis.market_context, participation_note=thesis.participation_note,
         coverage_classification=coverage_classification, thesis=thesis.thesis,
         structural_context=thesis.structural_context, participation_depth=thesis.participation_depth,
@@ -2829,6 +2862,14 @@ def build_price_only_observation(
         _nearest_supporting_technical_level(direction, v.support_resistance, spot_decimal)
         if development.pattern == "PRE_BREAKOUT_COMPRESSION" else None
     )
+    # FAILED_BREAKDOWN_RECLAIM's own real level -- see
+    # `_reclaim_invalidation_level()`. This is what makes the second named
+    # pattern's replay outcomes genuinely determinable instead of UNKNOWN.
+    reclaim_level = _reclaim_invalidation_level(development.pattern, v, direction)
+    invalidation_kind = invalidation_level.kind if invalidation_level is not None else None
+    invalidation_value = str(invalidation_level.price) if invalidation_level is not None else None
+    if reclaim_level is not None:
+        invalidation_kind, invalidation_value = reclaim_level
 
     return ResearchObservation(
         run_id=run_id, audit_id=response.audit_id, generated_at=generated_at,
@@ -2851,8 +2892,8 @@ def build_price_only_observation(
         contractual_expiry_breakeven=None,
         nearest_level_kind=nearest_level.kind if nearest_level is not None else None,
         nearest_level_value=str(nearest_level.price) if nearest_level is not None else None,
-        invalidation_level_kind=invalidation_level.kind if invalidation_level is not None else None,
-        invalidation_level_value=str(invalidation_level.price) if invalidation_level is not None else None,
+        invalidation_level_kind=invalidation_kind,
+        invalidation_level_value=invalidation_value,
         market_context=None, participation_note=None,
         coverage_classification=coverage_classification, thesis=development.what_is_developing,
         derivatives_evidence_available=False,

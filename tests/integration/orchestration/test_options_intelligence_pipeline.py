@@ -1281,37 +1281,69 @@ def test_market_regime_and_transmission_never_appear_in_the_evidence_matrix(tmp_
     assert "transmission" not in row_groups
     assert "geopolitical" not in row_groups
 
-    # Decisive proof: an identical run with the RISK_OFF-shaped macro
-    # inputs and the same geopolitical headline stripped out entirely
-    # produces the exact same decision -- macro/geopolitical context has
-    # zero causal effect on the final decision.
-    def handler_no_macro(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path == "/v2/market-quote/quotes":
-            keys = request.url.params["instrument_key"].split(",")
-            data: dict[str, object] = {}
-            for k in keys:
-                if k == RELIANCE_KEY:
-                    data["NSE_EQ:RELIANCE"] = {"instrument_token": k, "last_price": 1300.0, "net_change": 5.0, "volume": 1000000}
-                elif k == FUT_KEY:
-                    data["NSE_FO:FUT"] = {"instrument_token": k, "last_price": 1302.0, "net_change": 4.0, "oi": 1000000, "volume": 500000}
-            return httpx.Response(200, json={"status": "success", "data": data})
-        if path == "/v2/news":
+    # Decisive proof, run 2: the geopolitical headline removed, so there
+    # is no transmission note and no news-event note at all -- every OTHER
+    # input, including the MCX master and the crude quote it resolves,
+    # held identical.
+    #
+    # Corrected 18 Sep 2026. This run previously dropped the CRUDE quote
+    # too, which is a confound rather than a sharper test: crude feeds the
+    # macro regime AND the genuinely-matrix-resident `Global context` row
+    # (`assess_global_context(crude_oil_day_change_pct=...)`), so removing
+    # it changed real evidence, not just excluded context. The comparison
+    # only appeared to hold because an unrelated defect (the inverted
+    # `row_m15_trend` mapping, fixed the same day) forced BOTH runs into
+    # CONFLICT, which hid the difference behind an identical NO_TRADE.
+    def handler_no_geopolitics(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/news":
             return httpx.Response(200, json={"status": "success", "data": {RELIANCE_KEY: []}})
         return handler(request)
 
-    provider2 = _provider(handler_no_macro)
     report2 = asyncio.run(
         analyze_symbol(
-            "RELIANCE", provider=provider2, instrument_master=_MASTER, strategy=EMAVWAPAlignmentStrategy(),
-            repositories=_repos(tmp_path), as_of=AS_OF, config=_FAST_CONFIG,
+            "RELIANCE", provider=_provider(handler_no_geopolitics), instrument_master=_MASTER,
+            strategy=EMAVWAPAlignmentStrategy(), repositories=_repos(tmp_path), as_of=AS_OF,
+            config=_FAST_CONFIG, mcx_instrument_master=_MCX_MASTER,
         )
     )
-    assert report2.market_regime_context is not None
-    assert report2.market_regime_context.regime.value == "INSUFFICIENT_DATA"  # no index/crude quotes this run
     assert len(report2.transmission_notes) == 0
+    assert len(report2.news_event_notes) == 0
     assert report2.decision is not None and report.decision is not None
     assert report2.decision.decision == report.decision.decision
+
+    # Decisive proof, run 3: the MACRO REGIME itself changed, using the one
+    # input that feeds it and is explicitly NOT part of the global-context
+    # verdict (`contributes_to_verdict=False` for USD/INR -- see
+    # `app.domain.options.global_context`). Real macro context therefore
+    # differs while every matrix-resident evidence row is untouched.
+    def handler_macro_shifted(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/v2/market-quote/quotes":
+            response = handler(request)
+            body = response.json()
+            keys = request.url.params["instrument_key"].split(",")
+            if USDINR_KEY in keys:
+                body["data"]["NCD_FO:USDINR"] = {"instrument_token": USDINR_KEY, "last_price": 88.0, "net_change": -1.2}
+            return httpx.Response(200, json=body)
+        return handler(request)
+
+    report3 = asyncio.run(
+        analyze_symbol(
+            "RELIANCE", provider=_provider(handler_macro_shifted), instrument_master=_MASTER,
+            strategy=EMAVWAPAlignmentStrategy(), repositories=_repos(tmp_path), as_of=AS_OF,
+            config=_FAST_CONFIG, mcx_instrument_master=_MCX_MASTER,
+        )
+    )
+    assert report3.market_regime_context is not None
+    assert report3.market_regime_context.regime != report.market_regime_context.regime, (
+        "this run is only a proof of exclusion if the macro regime genuinely differs"
+    )
+    assert report3.matrix is not None and report.matrix is not None
+    assert [(r.name, r.direction) for r in report3.matrix.rows] == [
+        (r.name, r.direction) for r in report.matrix.rows
+    ], "a macro-regime change must leave every evidence row's direction untouched"
+    assert report3.decision is not None
+    assert report3.decision.decision == report.decision.decision
 
 
 def test_context_day_change_rejects_a_zero_last_price_as_impossible(tmp_path: Path) -> None:

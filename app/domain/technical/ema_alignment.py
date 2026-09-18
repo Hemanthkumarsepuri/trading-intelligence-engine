@@ -30,6 +30,25 @@ the fact half of that finding without repeating its error. Turning this
 sequence classification into a trading read is `StrategyDefinition`'s job,
 not this module's, exactly as `structure_facts.py` already treats
 HIGHER_HIGH/LOWER_HIGH.
+
+WHAT THE GEOMETRY ACTUALLY IS, so no caller has to re-derive it: with the
+conventional fastest-to-slowest period order `[9, 21, 50]`,
+
+    ASCENDING  == EMA9 < EMA21 < EMA50 -- the FASTER averages sit BELOW
+                  the slower ones, the ordering a FALLING series produces.
+    DESCENDING == EMA9 > EMA21 > EMA50 -- the FASTER averages sit ABOVE
+                  the slower ones, the ordering a RISING series produces.
+
+Every caller in this repo read that backwards until 18 Sep 2026: an
+`ASCENDING` sequence was mapped to BULLISH evidence, a BULLISH strategy
+setup and a `TRENDING_BULLISH` regime. Measured over 1,404 real M15
+samples from the local 45-symbol candle store, price had FALLEN over the
+trailing 50 bars in 90.2% of `ASCENDING` samples and RISEN in 89.3% of
+`DESCENDING` samples, so the labels were being attached to the opposite
+of what the tape had done. The warning above was correct; the callers
+simply ignored it. `tests/unit/technical/test_ema_alignment.py` now pins
+the geometry against real rising and falling series so the sequence and
+its meaning cannot drift apart again.
 """
 
 from __future__ import annotations

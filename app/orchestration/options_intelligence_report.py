@@ -62,6 +62,7 @@ from app.domain.options.price_oi_interpretation import BasisChangeObservation, P
 from app.domain.options.realized_volatility import RealizedVolatilityResult, VolatilityState
 from app.domain.options.research_blocker import BlockerAssessment
 from app.domain.options.sector_strength import SectorInfo, SectorRelativeStrength
+from app.domain.options.structural_reclaim import StructuralReclaim
 from app.domain.options.support_resistance import (
     Level,
     LevelClassification,
@@ -250,6 +251,12 @@ class OptionsIntelligenceReport:
     research_state: ResearchState | None = None
     development: DevelopmentNarrative | None = None
     historical_structure: HistoricalStructure | None = None
+    # The dated break-and-reclaim structural fact behind
+    # `DevelopmentPattern.FAILED_BREAKDOWN_RECLAIM` -- see
+    # `app.domain.options.structural_reclaim`. Computed from the same
+    # already-fetched M15 candles as `historical_structure` above; never
+    # a second data source and never a second technical-analysis engine.
+    structural_reclaim: StructuralReclaim | None = None
     # UAT finding (docs/TIRE_OPERATOR_UAT.md, Defect 2 -- generalized, not
     # KAYNES-specific): the single, deterministically-prioritized reason
     # nothing more decisive can be said yet, reconciled across the

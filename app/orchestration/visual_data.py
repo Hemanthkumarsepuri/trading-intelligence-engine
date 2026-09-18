@@ -832,6 +832,28 @@ class HistoricalStructureView(BaseModel):
     detail: str = ""
 
 
+class StructuralReclaimView(BaseModel):
+    """The dated break-and-reclaim structural fact behind
+    `FAILED_BREAKDOWN_RECLAIM` (`app.domain.options.structural_reclaim`),
+    exposed so a reader can see the actual level, the actual dates and
+    the actual depth rather than a pattern name alone. `level` is also
+    the one honest invalidation level for that pattern -- losing the
+    reclaimed level again is exactly what its `invalidate_if` text says.
+    `status` is reported verbatim (OK / NONE / INSUFFICIENT_HISTORY /
+    CONFLICTING), so "we could not look", "nothing there" and "the tape
+    reads both ways" stay three different answers."""
+
+    status: str
+    direction: str | None = None
+    level_kind: str | None = None
+    level: Decimal | None = None
+    broken_on: date | None = None
+    reclaimed_on: date | None = None
+    break_depth_pct: Decimal | None = None
+    sessions_since_reclaim: int | None = None
+    detail: str = ""
+
+
 class VisualData(BaseModel):
     price_chart: PriceChartData
     option_chain: OptionChainVisual
@@ -862,6 +884,7 @@ class VisualData(BaseModel):
     institutional_flows: InstitutionalFlowVisual | None = None
     sector: SectorContextVisual | None = None
     historical_structure: HistoricalStructureView | None = None
+    structural_reclaim: StructuralReclaimView | None = None
 
 
 _APPROACHING_EXTENSION_WITHIN_PCT = Decimal("1.5")
@@ -1103,6 +1126,21 @@ def build_visual_data(report: OptionsIntelligenceReport) -> VisualData:
                 detail=report.historical_structure.detail,
             )
             if report.historical_structure is not None
+            else None
+        ),
+        structural_reclaim=(
+            StructuralReclaimView(
+                status=report.structural_reclaim.status.value,
+                direction=report.structural_reclaim.direction,
+                level_kind=report.structural_reclaim.level_kind,
+                level=report.structural_reclaim.level,
+                broken_on=report.structural_reclaim.broken_on,
+                reclaimed_on=report.structural_reclaim.reclaimed_on,
+                break_depth_pct=report.structural_reclaim.break_depth_pct,
+                sessions_since_reclaim=report.structural_reclaim.sessions_since_reclaim,
+                detail=report.structural_reclaim.detail,
+            )
+            if report.structural_reclaim is not None
             else None
         ),
     )

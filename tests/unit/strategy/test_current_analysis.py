@@ -10,7 +10,7 @@ from app.domain.market.models import Quote, Timeframe
 from app.domain.strategy.current_analysis import assemble_current_analysis
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.domain.technical.series import IndicatorStatus
-from tests.unit.strategy.fixtures import BULLISH_CLOSES, INSUFFICIENT_CLOSES
+from tests.unit.strategy.fixtures import INSUFFICIENT_CLOSES, RISING_CLOSES
 from tests.unit.technical.factories import INSTRUMENT_ID, make_series_from_closes
 
 T0 = datetime(2026, 8, 27, 9, 15, tzinfo=UTC)
@@ -28,7 +28,7 @@ def _market_state(as_of: datetime) -> MarketState:
 
 def test_bullish_case_produces_full_auditable_result() -> None:
     strategy = EMAVWAPAlignmentStrategy()
-    series = make_series_from_closes(BULLISH_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
+    series = make_series_from_closes(RISING_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
     as_of = series[-1].freshness.data_timestamp
     market_state = _market_state(as_of)
 
@@ -76,7 +76,7 @@ def test_insufficient_history_reports_status_without_fabricating_values() -> Non
 
 def test_current_partial_candle_is_surfaced_but_never_fed_to_the_strategy() -> None:
     strategy = EMAVWAPAlignmentStrategy()
-    series = make_series_from_closes(BULLISH_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
+    series = make_series_from_closes(RISING_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
     as_of = series[-1].freshness.data_timestamp
     market_state = _market_state(as_of)
 
@@ -120,7 +120,7 @@ def test_current_partial_candle_is_surfaced_but_never_fed_to_the_strategy() -> N
 
 def test_deterministic_across_repeated_calls() -> None:
     strategy = EMAVWAPAlignmentStrategy()
-    series = make_series_from_closes(BULLISH_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
+    series = make_series_from_closes(RISING_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
     as_of = series[-1].freshness.data_timestamp
     market_state = _market_state(as_of)
 

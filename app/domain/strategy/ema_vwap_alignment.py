@@ -21,10 +21,18 @@ requiring the strategy's own future replay validation
 (`STRATEGY_FRAMEWORK.md`'s "Replay Requirements" section), not a claim about
 what these facts "mean" in any general trading sense:**
 
-    BULLISH  setup  <=>  EMA(9,21,50) alignment == ASCENDING  AND  price ABOVE 15m VWAP
-    BEARISH  setup  <=>  EMA(9,21,50) alignment == DESCENDING AND  price BELOW 15m VWAP
+    BULLISH  setup  <=>  EMA(9,21,50) alignment == DESCENDING AND  price ABOVE 15m VWAP
+    BEARISH  setup  <=>  EMA(9,21,50) alignment == ASCENDING  AND  price BELOW 15m VWAP
     no setup        <=>  either fact is INSUFFICIENT_HISTORY, MIXED, AT, or the two facts
-                          disagree (e.g. ASCENDING but BELOW VWAP)
+                          disagree (e.g. DESCENDING but BELOW VWAP)
+
+`DESCENDING` is the sequence EMA9 > EMA21 > EMA50 read in period order --
+the faster averages sitting ABOVE the slower ones, which is the ordering a
+RISING series produces. The pairing above is therefore "price structure and
+session position point the same way", not a contrarian rule. It was
+originally written with the two sequence labels swapped, so the strategy
+paired a falling EMA ordering with price above VWAP and called it BULLISH;
+that is corrected here.
 
 `ema_alignment.py`'s own docstring is explicit that its `ASCENDING`/
 `DESCENDING` labels describe a numeric EMA-value sequence only, and do NOT
@@ -115,9 +123,15 @@ class EMAVWAPAlignmentStrategy:
         if alignment.state is None or vwap_position.state is None:
             return None  # defensive: OK status always pairs with a non-None state today
 
-        if alignment.state == EMAAlignmentState.ASCENDING and vwap_position.state == VWAPPositionState.ABOVE:
+        # `ASCENDING` is the numeric sequence EMA9 < EMA21 < EMA50 -- the
+        # faster average BELOW the slower ones, i.e. a falling series.
+        # These two branches were the wrong way round, which paired a
+        # falling EMA ordering with "price above VWAP" and called the
+        # result a BULLISH setup. See `row_m15_trend()`'s own comment in
+        # `app.domain.options.evidence_matrix` for the measurement.
+        if alignment.state == EMAAlignmentState.DESCENDING and vwap_position.state == VWAPPositionState.ABOVE:
             direction = "BULLISH"
-        elif alignment.state == EMAAlignmentState.DESCENDING and vwap_position.state == VWAPPositionState.BELOW:
+        elif alignment.state == EMAAlignmentState.ASCENDING and vwap_position.state == VWAPPositionState.BELOW:
             direction = "BEARISH"
         else:
             return None

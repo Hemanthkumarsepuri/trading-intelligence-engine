@@ -15,7 +15,7 @@ from app.domain.market.market_state import MarketState, assemble_market_state
 from app.domain.market.models import Quote, Timeframe
 from app.domain.strategy import ema_vwap_alignment as ema_vwap_alignment_module
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
-from tests.unit.strategy.fixtures import BULLISH_CLOSES
+from tests.unit.strategy.fixtures import RISING_CLOSES
 from tests.unit.technical.factories import INSTRUMENT_ID, make_series_from_closes
 
 T0 = datetime(2026, 8, 27, 9, 15, tzinfo=UTC)
@@ -33,7 +33,7 @@ def _market_state(as_of: datetime) -> MarketState:
 
 def test_future_candles_do_not_alter_setup() -> None:
     strategy = EMAVWAPAlignmentStrategy()
-    through_t = make_series_from_closes(BULLISH_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
+    through_t = make_series_from_closes(RISING_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
     as_of = through_t[-1].freshness.data_timestamp
     future = make_series_from_closes(
         [1, 999, 1, 999], start=as_of + timedelta(minutes=15), step=timedelta(minutes=15), timeframe=Timeframe.M15
@@ -49,7 +49,7 @@ def test_future_candles_do_not_alter_setup() -> None:
 
 def test_results_identical_across_real_wall_clock_time() -> None:
     strategy = EMAVWAPAlignmentStrategy()
-    series = make_series_from_closes(BULLISH_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
+    series = make_series_from_closes(RISING_CLOSES, start=T0, step=timedelta(minutes=15), timeframe=Timeframe.M15)
     as_of = series[-1].freshness.data_timestamp
     market_state = _market_state(as_of)
 

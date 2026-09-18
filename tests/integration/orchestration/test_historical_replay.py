@@ -35,6 +35,11 @@ from app.orchestration.historical_replay import (
     replay_symbol_window,
 )
 from app.orchestration.options_intelligence_pipeline import Repositories
+from app.orchestration.outcome_horizons import (
+    InvalidationOutcome,
+    OutcomeHorizonLabel,
+    compute_price_path_outcome,
+)
 from app.persistence.jsonl_file import (
     JsonlCandleRepository,
     JsonlIvObservationRepository,
@@ -194,3 +199,120 @@ def test_window_replay_rejects_an_inverted_range(tmp_path: Path) -> None:
             "RELIANCE", date(2026, 8, 27), date(2026, 8, 20), candle_repository=_seed(tmp_path, []),
             instrument_master=_MASTER, repositories=_repositories(tmp_path),
         ))
+
+
+def _reclaim_candles(session_start: datetime) -> list[Candle]:
+    """A real failed-breakdown-and-reclaim shape, expressed as genuine
+    M15 bars: eight prior sessions building a ~1290 floor, one session
+    that breaks it to 1265, a session that closes back above it, and the
+    replay session itself trading above the reclaimed level. Built here
+    (rather than reusing `_session_candles`' flat series) because the
+    pattern this exercises is, by definition, a specific price
+    STRUCTURE -- flat data cannot produce it."""
+    shapes: list[tuple[float, float, float, float]] = [
+        (1300.0, 1310.0, 1292.0, 1305.0),
+        (1305.0, 1312.0, 1291.0, 1300.0),
+        (1300.0, 1308.0, 1290.0, 1296.0),
+        (1296.0, 1304.0, 1290.5, 1299.0),
+        (1299.0, 1306.0, 1291.0, 1302.0),
+        (1302.0, 1305.0, 1265.0, 1270.0),   # the break: 1290 floor lost by ~1.9%
+        (1270.0, 1300.0, 1268.0, 1298.0),   # reclaimed: closes back above 1290
+        (1298.0, 1316.0, 1296.0, 1314.0),   # held, and pushing up
+    ]
+    candles: list[Candle] = []
+    day_offsets = [11, 10, 7, 6, 5, 4, 3, 2]  # real weekdays before the replay session
+    for offset, (o, h, low, c) in zip(day_offsets, shapes, strict=True):
+        day_start = session_start - timedelta(days=offset)
+        legs = [(o, o, o), (h, h, h), (low, low, low), (c, c, c)]
+        for index, (bo, bh, bl) in enumerate(legs):
+            ts = day_start + timedelta(minutes=15 * index)
+            candles.append(Candle(
+                provider="test", freshness=DataFreshness(data_timestamp=ts, received_timestamp=ts),
+                instrument_id=_INSTRUMENT_KEY, timeframe=Timeframe.M15,
+                open=Decimal(str(bo)), high=Decimal(str(bh)), low=Decimal(str(bl)), close=Decimal(str(bl)),
+                volume=20000,
+            ))
+        for index in range(4, 26):
+            ts = day_start + timedelta(minutes=15 * index)
+            candles.append(Candle(
+                provider="test", freshness=DataFreshness(data_timestamp=ts, received_timestamp=ts),
+                instrument_id=_INSTRUMENT_KEY, timeframe=Timeframe.M15,
+                open=Decimal(str(c)), high=Decimal(str(c)), low=Decimal(str(c)), close=Decimal(str(c)),
+                volume=20000,
+            ))
+    # The replay session itself: a steady advance above the reclaimed level.
+    for bar in range(26):
+        ts = session_start + timedelta(minutes=15 * bar)
+        price = 1316.0 + bar * 0.6
+        candles.append(Candle(
+            provider="test", freshness=DataFreshness(data_timestamp=ts, received_timestamp=ts),
+            instrument_id=_INSTRUMENT_KEY, timeframe=Timeframe.M15,
+            open=Decimal(str(price)), high=Decimal(str(price + 1)), low=Decimal(str(price - 1)), close=Decimal(str(price)),
+            volume=20000,
+        ))
+    return candles
+
+
+def test_failed_breakdown_reclaim_is_reachable_end_to_end(tmp_path: Path) -> None:
+    """The second named pattern, through the REAL pipeline.
+
+    `classify_development()` has always been able to narrate
+    FAILED_BREAKDOWN_RECLAIM, but nothing ever computed the fact behind
+    it -- `failed_breakdown_reclaim` had no production caller, so the
+    pattern was unreachable in both the live path and replay (which is
+    why a 2,610-episode replay dataset contained exactly one pattern).
+    This pins the whole chain: real candles -> `detect_structural_reclaim()`
+    -> pipeline -> `classify_development()` -> a real `ResearchObservation`
+    carrying the reclaimed level as its invalidation level."""
+    repo = _seed(tmp_path, _reclaim_candles(_SESSION_START))
+    result = asyncio.run(replay_symbol_session(
+        "RELIANCE", date(2026, 8, 27), candle_repository=repo, instrument_master=_MASTER,
+        repositories=_repositories(tmp_path), config=None,
+    ))
+    reclaims = [o for o in result.observations if o.pattern == "FAILED_BREAKDOWN_RECLAIM"]
+    assert reclaims, (
+        "expected at least one FAILED_BREAKDOWN_RECLAIM observation from a real "
+        f"break-and-reclaim series; got patterns {[o.pattern for o in result.observations]}"
+    )
+    for obs in reclaims:
+        assert obs.direction == "BULLISH"
+        # The invalidation level is the RECLAIMED level itself -- the real
+        # 1290 floor that was broken and taken back, not a nearby swing.
+        assert obs.invalidation_level_kind == "support"
+        assert obs.invalidation_level_value == "1290.0"
+        assert obs.derivatives_evidence_available is False
+
+
+def test_a_reclaim_observation_can_reach_a_determined_outcome(tmp_path: Path) -> None:
+    """Research-integrity consequence of the level above: before it, every
+    pattern except PRE_BREAKOUT_COMPRESSION had `invalidation_outcome`
+    permanently UNKNOWN, so a reclaim episode could never be counted as
+    FAILED_SETUP no matter what price did. With a real recorded level the
+    determination becomes genuine -- here price loses the reclaimed floor,
+    and the outcome says so."""
+    candles = _reclaim_candles(_SESSION_START)
+    repo = _seed(tmp_path, candles)
+    result = asyncio.run(replay_symbol_session(
+        "RELIANCE", date(2026, 8, 27), candle_repository=repo, instrument_master=_MASTER,
+        repositories=_repositories(tmp_path), config=None,
+    ))
+    observation = next(o for o in result.observations if o.pattern == "FAILED_BREAKDOWN_RECLAIM")
+
+    # A later session that breaks back below the reclaimed 1290 floor.
+    after = list(candles)
+    next_day = _SESSION_START + timedelta(days=1)
+    for bar in range(26):
+        ts = next_day + timedelta(minutes=15 * bar)
+        after.append(Candle(
+            provider="test", freshness=DataFreshness(data_timestamp=ts, received_timestamp=ts),
+            instrument_id=_INSTRUMENT_KEY, timeframe=Timeframe.M15,
+            open=Decimal("1285"), high=Decimal("1286"), low=Decimal("1280"), close=Decimal("1282"),
+            volume=20000,
+        ))
+    outcome = compute_price_path_outcome(
+        observation, OutcomeHorizonLabel.PLUS_1D, after,
+        as_of=next_day + timedelta(days=2),
+    )
+    assert outcome.data_sufficient
+    assert outcome.invalidation_outcome == InvalidationOutcome.INVALIDATED
+    assert outcome.first_invalidation_at is not None

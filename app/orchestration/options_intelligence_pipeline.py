@@ -154,6 +154,10 @@ from app.domain.options.sector_strength import (
     classify_sector_relative_strength,
     sector_index_trading_symbol,
 )
+from app.domain.options.structural_reclaim import (
+    StructuralReclaimStatus,
+    detect_structural_reclaim,
+)
 from app.domain.options.support_resistance import (
     Level,
     assess_level_stability,
@@ -509,6 +513,11 @@ async def analyze_symbol(
         data_age_seconds=data_age.total_seconds(), spot=quote.last_price, candles=candles,
         candles_are_current=candles_are_current,
         historical_structure=assess_historical_structure(
+            candles, instrument_id=ref.instrument_key, timeframe=Timeframe.M15, as_of=as_of, spot=quote.last_price,
+        ),
+        # The dated break-and-reclaim fact behind FAILED_BREAKDOWN_RECLAIM.
+        # Same already-fetched candles, same `as_of` boundary, no fetch.
+        structural_reclaim=detect_structural_reclaim(
             candles, instrument_id=ref.instrument_key, timeframe=Timeframe.M15, as_of=as_of, spot=quote.last_price,
         ),
     )
@@ -1282,6 +1291,21 @@ async def analyze_symbol(
             max_pct=config.near_level_pct_threshold,
         )
         pre_breakout = near_structure
+    # FAILED_BREAKDOWN_RECLAIM's own missing fact (this pattern had no
+    # producer at all before `structural_reclaim` existed -- it was
+    # documented but unreachable). The detector reports a DIRECTED
+    # structural event; a BULLISH reclaim must not be narrated onto a
+    # BEARISH thesis, so it is only offered to `classify_development()`
+    # when its direction matches the evidence matrix's own convergence
+    # bias -- the SAME `market_bias_from_convergence()` mapping stage 14
+    # below already uses, never a second directional judgment. This gate
+    # only ever WITHHOLDS the pattern; it can never create one.
+    reclaim = report.structural_reclaim
+    reclaim_supports_thesis = (
+        reclaim is not None
+        and reclaim.status == StructuralReclaimStatus.OK
+        and reclaim.direction == market_bias_from_convergence(matrix.overall_convergence()).value
+    )
     report.development = classify_development(
         convergence=matrix.overall_convergence(),
         chain_is_current=chain_is_current,
@@ -1294,6 +1318,7 @@ async def analyze_symbol(
         m15_direction=_row_dir("M15 trend"),
         basis_change=report.futures_basis_change,
         pre_breakout_compression=pre_breakout,
+        failed_breakdown_reclaim=reclaim_supports_thesis,
         sector_rs_tier=(
             report.sector_relative_strength.tier.value if report.sector_relative_strength is not None else None
         ),

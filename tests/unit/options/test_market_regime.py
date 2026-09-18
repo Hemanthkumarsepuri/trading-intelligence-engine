@@ -36,17 +36,26 @@ def _classify(
 
 
 def test_trending_bullish() -> None:
-    result = _classify(ema=EMAAlignmentState.ASCENDING, vwap=VWAPPositionState.ABOVE, atr_value="1.0")
+    """`DESCENDING` == EMA9 > EMA21 > EMA50 (faster above slower), the
+    ordering a rising series produces; paired with price above VWAP."""
+    result = _classify(ema=EMAAlignmentState.DESCENDING, vwap=VWAPPositionState.ABOVE, atr_value="1.0")
     assert result.regime == MarketRegime.TRENDING_BULLISH
 
 
 def test_trending_bearish() -> None:
-    result = _classify(ema=EMAAlignmentState.DESCENDING, vwap=VWAPPositionState.BELOW, atr_value="1.0")
+    result = _classify(ema=EMAAlignmentState.ASCENDING, vwap=VWAPPositionState.BELOW, atr_value="1.0")
     assert result.regime == MarketRegime.TRENDING_BEARISH
 
 
 def test_mixed_when_ema_and_vwap_conflict() -> None:
-    result = _classify(ema=EMAAlignmentState.ASCENDING, vwap=VWAPPositionState.BELOW, atr_value="1.0")
+    """A falling EMA ordering with price above the session VWAP: the two
+    facts disagree, so neither is reported as a trend."""
+    result = _classify(ema=EMAAlignmentState.ASCENDING, vwap=VWAPPositionState.ABOVE, atr_value="1.0")
+    assert result.regime == MarketRegime.MIXED
+
+
+def test_mixed_when_rising_ema_ordering_meets_price_below_vwap() -> None:
+    result = _classify(ema=EMAAlignmentState.DESCENDING, vwap=VWAPPositionState.BELOW, atr_value="1.0")
     assert result.regime == MarketRegime.MIXED
 
 
@@ -66,7 +75,7 @@ def test_range_when_no_clear_structure_and_atr_normal() -> None:
 
 
 def test_trending_label_kept_even_if_also_volatile() -> None:
-    result = _classify(ema=EMAAlignmentState.ASCENDING, vwap=VWAPPositionState.ABOVE, atr_value="5.0")
+    result = _classify(ema=EMAAlignmentState.DESCENDING, vwap=VWAPPositionState.ABOVE, atr_value="5.0")
     assert result.regime == MarketRegime.TRENDING_BULLISH
 
 

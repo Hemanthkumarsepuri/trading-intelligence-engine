@@ -98,10 +98,22 @@ def test_no_directional_evidence_anywhere_is_insufficient() -> None:
 # -- individual row builders --------------------------------------------
 
 
-def test_row_m15_trend_ascending_is_bullish() -> None:
-    row = row_m15_trend(ema_alignment=EMAAlignmentState.ASCENDING, ema_status=IndicatorStatus.OK)
+def test_row_m15_trend_faster_emas_above_slower_is_bullish() -> None:
+    """`DESCENDING` is the numeric sequence EMA9 > EMA21 > EMA50 -- the
+    faster averages ABOVE the slower ones, which is what a rising series
+    produces. Until 18 Sep 2026 this row had the two labels swapped and
+    called a falling series bullish."""
+    row = row_m15_trend(ema_alignment=EMAAlignmentState.DESCENDING, ema_status=IndicatorStatus.OK)
     assert row.direction == EvidenceDirection.BULLISH
     assert row.group == EvidenceGroup.UNDERLYING_PRICE_STRUCTURE
+    assert "above" in row.detail
+
+
+def test_row_m15_trend_faster_emas_below_slower_is_bearish() -> None:
+    row = row_m15_trend(ema_alignment=EMAAlignmentState.ASCENDING, ema_status=IndicatorStatus.OK)
+    assert row.direction == EvidenceDirection.BEARISH
+    assert row.group == EvidenceGroup.UNDERLYING_PRICE_STRUCTURE
+    assert "below" in row.detail
 
 
 def test_row_m15_trend_insufficient_history_is_unknown() -> None:
@@ -148,7 +160,7 @@ def test_row_market_regime_unknown_when_candles_are_not_current() -> None:
 def test_row_m15_trend_still_directional_when_candles_are_current() -> None:
     """`data_is_current` defaults to True -- every pre-Sprint-7A call
     site is unaffected."""
-    row = row_m15_trend(ema_alignment=EMAAlignmentState.ASCENDING, ema_status=IndicatorStatus.OK)
+    row = row_m15_trend(ema_alignment=EMAAlignmentState.DESCENDING, ema_status=IndicatorStatus.OK)
     assert row.direction == EvidenceDirection.BULLISH
 
 

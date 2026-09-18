@@ -216,15 +216,31 @@ def row_m15_trend(*, ema_alignment: EMAAlignmentState | None, ema_status: Indica
             "M15 trend", EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.UNKNOWN,
             "EMA alignment unavailable (insufficient M15 history)",
         )
-    if ema_alignment == EMAAlignmentState.ASCENDING:
-        return EvidenceRow(
-            "M15 trend", EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH,
-            "EMA(9,21,50) ascending -- this system's own reading of the sequence (ema_vwap_alignment.py precedent)",
-        )
+    # `EMAAlignmentState` names the NUMERIC SEQUENCE in period order
+    # (9, 21, 50), not a trend: `ASCENDING` means EMA9 < EMA21 < EMA50 --
+    # the FASTER average sitting BELOW the slower ones, which is what a
+    # FALLING tape looks like. `ema_alignment.py`'s own docstring says so
+    # explicitly and warns callers not to read its label as a direction.
+    #
+    # This row used to do exactly that, and had the mapping backwards: it
+    # reported a falling series as BULLISH evidence and a rising one as
+    # BEARISH. Measured over 1,404 real M15 samples from the local
+    # 45-symbol candle store, price had FALLEN over the trailing 50 bars
+    # in 90.2% of `ASCENDING` samples (mean -1.68%) and RISEN in 89.3% of
+    # `DESCENDING` samples (mean +1.96%). The detail text below now
+    # states the geometry in words rather than repeating the ambiguous
+    # sequence label, so the row cannot be misread the same way again.
     if ema_alignment == EMAAlignmentState.DESCENDING:
         return EvidenceRow(
+            "M15 trend", EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH,
+            "EMA(9,21,50): each faster average is above the slower one (EMA9 > EMA21 > EMA50) -- "
+            "the ordering a rising M15 series produces",
+        )
+    if ema_alignment == EMAAlignmentState.ASCENDING:
+        return EvidenceRow(
             "M15 trend", EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BEARISH,
-            "EMA(9,21,50) descending -- this system's own reading of the sequence (ema_vwap_alignment.py precedent)",
+            "EMA(9,21,50): each faster average is below the slower one (EMA9 < EMA21 < EMA50) -- "
+            "the ordering a falling M15 series produces",
         )
     return EvidenceRow(
         "M15 trend", EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.NEUTRAL, "EMA(9,21,50) sequence is mixed"

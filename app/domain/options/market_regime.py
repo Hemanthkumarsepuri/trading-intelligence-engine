@@ -78,20 +78,26 @@ def classify_market_regime(
 
     atr_pct = atr.value / current_price * Decimal(100)
 
-    if ema_alignment == EMAAlignmentState.ASCENDING and vwap_state == VWAPPositionState.ABOVE:
+    # See `row_m15_trend()`'s own comment (`app.domain.options
+    # .evidence_matrix`): `EMAAlignmentState` labels the numeric sequence
+    # in period order, so `DESCENDING` (EMA9 > EMA21 > EMA50, faster
+    # above slower) is the RISING tape and `ASCENDING` is the falling
+    # one. Both branches below had this backwards, which labelled a
+    # falling market TRENDING_BULLISH.
+    if ema_alignment == EMAAlignmentState.DESCENDING and vwap_state == VWAPPositionState.ABOVE:
         return MarketRegimeResult(
             regime=MarketRegime.TRENDING_BULLISH,
-            detail="EMA(9,21,50) ascending AND price above VWAP -- this module's own reading, per its docstring",
+            detail="EMA9 > EMA21 > EMA50 (faster averages above slower) AND price above VWAP",
             atr_pct_of_price=atr_pct,
         )
-    if ema_alignment == EMAAlignmentState.DESCENDING and vwap_state == VWAPPositionState.BELOW:
+    if ema_alignment == EMAAlignmentState.ASCENDING and vwap_state == VWAPPositionState.BELOW:
         return MarketRegimeResult(
             regime=MarketRegime.TRENDING_BEARISH,
-            detail="EMA(9,21,50) descending AND price below VWAP -- this module's own reading, per its docstring",
+            detail="EMA9 < EMA21 < EMA50 (faster averages below slower) AND price below VWAP",
             atr_pct_of_price=atr_pct,
         )
-    if (ema_alignment == EMAAlignmentState.ASCENDING and vwap_state == VWAPPositionState.BELOW) or (
-        ema_alignment == EMAAlignmentState.DESCENDING and vwap_state == VWAPPositionState.ABOVE
+    if (ema_alignment == EMAAlignmentState.ASCENDING and vwap_state == VWAPPositionState.ABOVE) or (
+        ema_alignment == EMAAlignmentState.DESCENDING and vwap_state == VWAPPositionState.BELOW
     ):
         return MarketRegimeResult(
             regime=MarketRegime.MIXED,
