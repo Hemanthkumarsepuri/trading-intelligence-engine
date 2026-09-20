@@ -1193,6 +1193,20 @@ function collectScreenerRows(data) {
       if (o && o.symbol && !bySym.has(o.symbol)) bySym.set(o.symbol, o);
     });
   });
+  // Explicit queries return non-shortlisted names in `rejected` (symbol +
+  // reason only). Those are still real observations and must appear.
+  if (data.scan_mode === "EXPLICIT_SYMBOL_QUERY") {
+    (data.rejected || []).forEach((o) => {
+      if (!o || !o.symbol || bySym.has(o.symbol)) return;
+      bySym.set(o.symbol, {
+        symbol: o.symbol,
+        research_state: o.research_state || "NOT_SHORTLISTED",
+        developing_pattern: "",
+        research_confidence: o.reason || "",
+        contract_usability: "",
+      });
+    });
+  }
   return Array.from(bySym.values());
 }
 
@@ -1685,7 +1699,11 @@ function updateScanProgress(job) {
   }
   const mode = (job.result && job.result.scan_mode) || (job.scan_kind === "EXPLICIT" ? "EXPLICIT" : "F&O UNIVERSE");
   const modeLabel = (mode === "EXPLICIT_SYMBOL_QUERY" || mode === "EXPLICIT") ? "EXPLICIT" : "F&O UNIVERSE";
-  line.textContent = "Scan complete · " + modeLabel;
+  const selected = (job.symbols && job.symbols.length) || ((job.result && job.result.universe && job.result.universe.length) || 0);
+  const returned = job.result ? collectScreenerRows(job.result).length : screenerRows.length;
+  line.textContent = selected
+    ? ("Scan complete · " + modeLabel + " · " + selected + " selected · " + returned + " observations")
+    : ("Scan complete · " + modeLabel);
   if (last && job.result && job.result.generated_at) {
     last.textContent = "Last scan (" + modeLabel + "): " + new Date(job.result.generated_at).toLocaleString();
   }

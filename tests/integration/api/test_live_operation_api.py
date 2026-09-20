@@ -580,6 +580,8 @@ def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> Non
     assert "EXPLICIT · ANALYSING" in html or "SELECTED SYMBOLS" in html
     assert "F&O UNIVERSE" in html
     assert "NO LATEST MARKET SCAN" in html
+    assert 'data.scan_mode === "EXPLICIT_SYMBOL_QUERY"' in html
+    assert "data.rejected" in html
     # Per-stream glance times come from the observed-market payload.
     assert "cell.observed_at_ist" in html
     assert "cell.freshness_label" in html
