@@ -90,3 +90,35 @@ def test_run_analysis_exposes_reasoning_and_invalidation_when_the_report_has_the
     assert response.detailed_report is not None
     assert response.reasoning is not None and response.reasoning in response.detailed_report
     assert response.invalidation_condition is not None and response.invalidation_condition in response.detailed_report
+    assert response.tomorrow_watch is None
+
+
+def test_run_analysis_attaches_tomorrow_watch_when_the_session_is_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def _fake_analyze_symbol(*args: object, **kwargs: object) -> OptionsIntelligenceReport:
+        return _fake_report()
+
+    monkeypatch.setattr("app.orchestration.dashboard_service.analyze_symbol", _fake_analyze_symbol)
+
+    repositories = Repositories(
+        quotes=JsonlQuoteRepository(tmp_path / "quotes.jsonl"), option_chains=JsonlOptionChainRepository(tmp_path / "chains.jsonl"),
+        iv_observations=JsonlIvObservationRepository(tmp_path / "iv.jsonl"),
+    )
+    closed_sunday = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
+    response = asyncio.run(run_analysis(
+        "RELIANCE 1270 PE", provider=None, instrument_master=[], strategy=None,  # type: ignore[arg-type]
+        repositories=repositories, config=PipelineConfig(), as_of=closed_sunday,
+    ))
+    assert response.session is not None
+    assert response.session.session_window == "CLOSED"
+    assert response.session.observation_kind == "LAST_OBSERVED"
+    assert response.tomorrow_watch is not None
+    assert response.tomorrow_watch.at_open_check
+    assert response.tomorrow_watch.one_line_summary
+    assert "will fall" not in response.tomorrow_watch.one_line_summary.lower()
+    assert any("Refresh underlying" in line for line in response.tomorrow_watch.at_open_check)
+    assert any("Refresh option-chain" in line for line in response.tomorrow_watch.at_open_check)
+    dumped = response.tomorrow_watch.model_dump()
+    assert "score" not in dumped
+    assert "probability" not in dumped

@@ -49,6 +49,7 @@ from app.orchestration.options_intelligence_pipeline import (
     Repositories,
     analyze_symbol,
 )
+from app.orchestration.tomorrow_watch import TomorrowWatchView, build_tomorrow_watch
 from app.orchestration.visual_data import VisualData, build_visual_data
 from app.orchestration.watch_next import WatchCondition, build_watch_conditions
 from app.persistence.jsonl_file import JsonlAuditJournalRepository
@@ -118,6 +119,28 @@ class SessionContextView(BaseModel):
     live_discover_available: bool
 
 
+def _tomorrow_watch_for(
+    session: SessionContextView,
+    *,
+    research_state: str | None,
+    visual: VisualData | None,
+    has_specific_contract: bool,
+    invalidation_condition: str | None,
+    market_observed_at: datetime | None,
+) -> TomorrowWatchView | None:
+    return build_tomorrow_watch(
+        session_window=session.session_window,
+        observation_kind=session.observation_kind,
+        research_session_mode=session.research_session_mode,
+        next_session_open_ist_label=session.next_session_open_ist_label,
+        research_state=research_state,
+        visual=visual,
+        has_specific_contract=has_specific_contract,
+        invalidation_condition=invalidation_condition,
+        market_observed_at=market_observed_at,
+    )
+
+
 def session_context_view(as_of: datetime) -> SessionContextView:
     payload = session_window_payload(classify_session_window(as_of))
     return SessionContextView(
@@ -151,6 +174,7 @@ class AnalyzeResponse(BaseModel):
     timing_reason: str | None = None
     market_observed_at: datetime | None = None
     session: SessionContextView | None = None
+    tomorrow_watch: TomorrowWatchView | None = None
 
     error: str | None = None
     compact_report: str | None = None
@@ -276,6 +300,14 @@ async def run_analysis(
         return AnalyzeResponse(
             query=query, **_parsed_response_fields(parsed), error="could not parse a symbol from the query",
             latency_seconds=time.perf_counter() - started, session=session,
+            tomorrow_watch=_tomorrow_watch_for(
+                session,
+                research_state=None,
+                visual=None,
+                has_specific_contract=False,
+                invalidation_condition=None,
+                market_observed_at=None,
+            ),
         )
 
     report = await analyze_symbol(
@@ -302,6 +334,14 @@ async def run_analysis(
         return AnalyzeResponse(
             query=query, **_parsed_response_fields(parsed), symbol=report.symbol, generated_at=report.generated_at,
             market_state=report.data_state.value, error=report.error, latency_seconds=latency, session=session,
+            tomorrow_watch=_tomorrow_watch_for(
+                session,
+                research_state=report.research_state.value if report.research_state is not None else None,
+                visual=None,
+                has_specific_contract=parsed.has_specific_contract,
+                invalidation_condition=None,
+                market_observed_at=market_observed_at_from_report(report),
+            ),
         )
 
     audit_id: str | None = None
@@ -339,6 +379,9 @@ async def run_analysis(
     invalidation_level = str(report.invalidation_level) if report.invalidation_level is not None else None
     invalidation_condition = (report.candidates[0].invalidation_condition or None) if report.candidates else None
     timing_stage, timing_reason = timing_from_report(report)
+    visual = build_visual_data(report)
+    research_state = report.research_state.value if report.research_state is not None else None
+    observed_at = market_observed_at_from_report(report)
 
     return AnalyzeResponse(
         query=query, **_parsed_response_fields(parsed), symbol=report.symbol, generated_at=report.generated_at,
@@ -347,15 +390,23 @@ async def run_analysis(
         evidence_quality=report.quality_tiers.evidence_quality.value if report.quality_tiers is not None else None,
         decision_quality=report.quality_tiers.decision_quality.value if report.quality_tiers is not None else None,
         decision=report.decision.decision.value if report.decision is not None else None,
-        research_state=report.research_state.value if report.research_state is not None else None,
+        research_state=research_state,
         timing_stage=timing_stage,
         timing_reason=timing_reason,
-        market_observed_at=market_observed_at_from_report(report),
+        market_observed_at=observed_at,
         compact_report=report.render_compact(), detailed_report=report.render_text(),
-        visual=build_visual_data(report), latency_seconds=latency,
+        visual=visual, latency_seconds=latency,
         audit_id=audit_id, journal_status=journal_status, what_changed=what_changed, watch_next=watch_next,
         reasoning=reasoning, invalidation_level=invalidation_level, invalidation_condition=invalidation_condition,
         session=session,
+        tomorrow_watch=_tomorrow_watch_for(
+            session,
+            research_state=research_state,
+            visual=visual,
+            has_specific_contract=parsed.has_specific_contract,
+            invalidation_condition=invalidation_condition,
+            market_observed_at=observed_at,
+        ),
     )
 
 

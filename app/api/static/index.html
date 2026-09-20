@@ -312,14 +312,15 @@
   .glance-cell .d { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .why-block { margin: 16px 0 18px; }
   .why-block .k { color: var(--ink-faint); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
-  .why-block .v { font-size: 13px; max-width: 42em; }
+  .why-block .v { font-size: 13px; max-width: 42em; overflow-wrap: anywhere; word-break: break-word; }
   .dim-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
   .dim-cell .k { color: var(--ink-faint); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
   .dim-cell .v { font-size: 13px; font-weight: 600; margin-top: 4px; }
   .timing-track { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; font-size: 10px; color: var(--ink-faint); letter-spacing: 0.04em; }
   .timing-track span.is-now { color: var(--text); border-bottom: 1px solid var(--accent); }
-  .ws-block { margin: 14px 0; }
+  .ws-block { margin: 14px 0; overflow-wrap: anywhere; word-break: break-word; }
   .ws-block h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; }
+  #symbol-hero, #watchlist-host { overflow-x: hidden; max-width: 100%; }
   .watch-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 4px; }
   .watch-chip { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; border: 1px solid var(--border); background: var(--bg-elev); color: var(--text); padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
   .scan-stage { font-size: 13px; margin: 8px 0; color: var(--muted); }
@@ -1334,7 +1335,7 @@ function renderWatchlistWorkspace() {
     card.appendChild(el("p", { class: "chart-hint", text: "WHY (AT T0)  " + ((t0 && (t0.evidence_summary || t0.missing_confirmation)) || "n/a") }));
     card.appendChild(el("p", { class: "chart-hint", text: "WATCHED AT " + formatWatchWhen(w.created_at) + " · journal time and market observation time are not relabelled" }));
     card.appendChild(el("p", { text: "T0  " + stateLabel((t0 && t0.research_state) || "UNAVAILABLE") + (t0 && t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") + (t0 && t0.observation_timestamp ? " · " + formatWatchWhen(t0.observation_timestamp) : "") }));
-    card.appendChild(el("p", { text: "NOW  " + stateLabel((now && now.research_state) || "n/a") + (now && now.pattern ? " · " + String(now.pattern).replace(/_/g, " ") : "") + (now && now.observation_timestamp ? " · " + formatWatchWhen(now.observation_timestamp) : "") }));
+    card.appendChild(el("p", { text: "LATEST VERIFIED  " + stateLabel((now && now.research_state) || "n/a") + (now && now.pattern ? " · " + String(now.pattern).replace(/_/g, " ") : "") + (now && now.observation_timestamp ? " · " + formatWatchWhen(now.observation_timestamp) : "") }));
     if (w.evolution_states && w.evolution_states.length) {
       card.appendChild(el("p", { class: "chart-hint", text: "EVOLUTION  " + w.evolution_states.map(stateLabel).join(" → ") }));
     }
@@ -1342,10 +1343,21 @@ function renderWatchlistWorkspace() {
       material.forEach((c) => {
         card.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + String(c.category || "").replace(/_/g, " ") + " · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
       });
+    } else {
+      card.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · NO MATERIAL CHANGE" }));
     }
-    card.appendChild(el("p", { class: "chart-hint", text: "MISSING  " + ((now && now.missing_confirmation) || (t0 && t0.missing_confirmation) || "n/a") }));
-    card.appendChild(el("p", { class: "chart-hint", text: "CONFIRM IF  " + ((t0 && t0.confirmation_condition) || "n/a") }));
-    card.appendChild(el("p", { class: "chart-hint", text: "INVALIDATE IF  " + ((t0 && t0.invalidation_condition) || "n/a") }));
+    const since = sinceT0Lines(material);
+    card.appendChild(el("p", { class: "chart-hint", text: "SINCE T0  " + (since.length ? since.join(" ") : (material.length ? "NO COMPARABLE OBSERVATION" : "NO MATERIAL CHANGE")) }));
+    card.appendChild(el("p", { class: "chart-hint", text: "MISSING  " + conditionOrUnavailable((now && now.missing_confirmation) || (t0 && t0.missing_confirmation)) }));
+    card.appendChild(el("p", { class: "chart-hint", text: "CONFIRM IF  " + conditionOrUnavailable(t0 && t0.confirmation_condition) }));
+    card.appendChild(el("p", { class: "chart-hint", text: "INVALIDATE IF  " + conditionOrUnavailable(t0 && t0.invalidation_condition) }));
+    if (!isLiveSession()) {
+      const next = sessionPayload().next_session_open_ist_label || "UNKNOWN";
+      card.appendChild(el("p", { class: "chart-hint", text: "NEXT SESSION " + next }));
+      defaultAtOpenChecks(Boolean(t0 && t0.strike && t0.option_type)).forEach((line) => {
+        card.appendChild(el("p", { class: "chart-hint", text: "AT OPEN CHECK · " + line }));
+      });
+    }
     if (w.outcome_checkpoint_labels && w.outcome_checkpoint_labels.length) {
       card.appendChild(el("p", { class: "chart-hint", text: "AFTERWARD  " + w.outcome_checkpoint_labels.join(" · ") + " — historical checkpoints, not a win rate" }));
     }
@@ -1650,6 +1662,73 @@ function workspaceTiming(data) {
   return "UNKNOWN";
 }
 
+function conditionOrUnavailable(text) {
+  const t = String(text || "").trim();
+  if (!t || t === "n/a" || t.toUpperCase() === "NONE" || t.toUpperCase() === "UNKNOWN") return "NOT AVAILABLE";
+  return t;
+}
+
+function sinceT0Lines(changes) {
+  const labels = {
+    ltp: "Option LTP changed",
+    oi: "Option open interest changed",
+    iv: "Option IV changed",
+    underlying_last: "Underlying last observed price changed",
+    research_state: "Research state changed",
+    pattern: "Named pattern changed",
+    contract_state: "Contract usability changed",
+    expiry: "Observed expiry changed",
+    strike: "Observed strike changed",
+    option_type: "Observed option type changed",
+    instrument_type: "Observation scope changed",
+    freshness: "Freshness label changed",
+  };
+  const lines = [];
+  (changes || []).forEach((c) => {
+    const cat = String(c.category || "");
+    if (cat === "NO_MATERIAL_CHANGE") return;
+    if (cat === "OBSERVATION_SCOPE_CHANGED") {
+      lines.push("Observation scope changed from " + (c.before || "n/a") + " to " + (c.after || "n/a") + ".");
+      return;
+    }
+    const stem = labels[c.field];
+    if (!stem) return;
+    if (c.before == null || c.after == null || c.before === "" || c.after === "") return;
+    lines.push(stem + " from " + c.before + " to " + c.after + ".");
+  });
+  return lines;
+}
+
+function defaultAtOpenChecks(hasContract) {
+  const checks = [
+    "Refresh underlying price observation",
+    "Recalculate freshness for each stream independently",
+    "Re-evaluate evidence groups",
+    "Re-evaluate research state",
+  ];
+  if (hasContract) {
+    checks.push(
+      "Refresh option-chain observation",
+      "Verify strike and option type against the live chain",
+      "Verify requested expiry against the observed chain",
+      "Verify bid/ask when a quote is current",
+      "Verify liquidity / contract usability",
+    );
+  }
+  return checks;
+}
+
+function appendCheckList(host, title, lines, emptyText) {
+  const box = el("div", { class: "ws-block" });
+  box.appendChild(el("h3", { text: title }));
+  if (!lines || !lines.length) {
+    box.appendChild(el("p", { class: "chart-hint", text: emptyText || "NOT AVAILABLE" }));
+  } else {
+    lines.forEach((line) => box.appendChild(el("p", { text: line })));
+  }
+  host.appendChild(box);
+}
+
 function renderSymbolHero(data) {
   const host = document.getElementById("symbol-hero");
   if (!host) return;
@@ -1663,9 +1742,10 @@ function renderSymbolHero(data) {
   const whyText = (blk && blk.primary && blk.primary.explanation)
     ? blk.primary.explanation
     : ((v.development && v.development.why_it_matters) || STATE_PLAIN[st] || st);
-  const missing = (v.development && v.development.what_is_missing) || (blk && blk.missing_confirmation) || "n/a";
-  const confirm = (v.development && v.development.confirm_if) || "n/a";
-  const invalidate = (v.development && v.development.invalidate_if) || data.invalidation_condition || "n/a";
+  const tw = data.tomorrow_watch || null;
+  const missing = conditionOrUnavailable((tw && tw.missing) || (v.development && v.development.what_is_missing) || (blk && blk.missing_confirmation));
+  const confirm = conditionOrUnavailable((tw && tw.confirm_if) || (v.development && v.development.confirm_if));
+  const invalidate = conditionOrUnavailable((tw && tw.invalidate_if) || (v.development && v.development.invalidate_if) || data.invalidation_condition);
   const contract = workspaceContract(v, data);
   const timing = workspaceTiming(data);
   const sess = data.session || sessionPayload();
@@ -1685,7 +1765,24 @@ function renderSymbolHero(data) {
   top.appendChild(el("span", { style: "font-family:var(--mono);font-size:20px", text: move }));
   host.appendChild(top);
   host.appendChild(el("p", { class: "chart-hint", text: sessionPhrase + " · " + obsKind + " · RESEARCH MODE " + displayResearchMode(sess.research_session_mode) }));
-  if (sess.next_session_open_ist_label) {
+  if (tw) {
+    host.appendChild(el("p", { style: "font-weight:700", text: (sess.research_session_mode === "POST_MARKET" ? "POST-MARKET RESEARCH" : "PRE-MARKET RESEARCH") }));
+    host.appendChild(el("p", { class: "chart-hint", text: "LAST OBSERVED " + marketObs }));
+    host.appendChild(el("p", { class: "chart-hint", text: "NEXT SESSION " + (tw.next_session_open_ist_label || sess.next_session_open_ist_label || "UNKNOWN") }));
+    host.appendChild(el("p", { class: "chart-hint", text: "RESEARCH STATE " + stateLabel(st) }));
+    if (data.has_specific_contract) {
+      const rcHdr = v.requested_contract;
+      const assessHdr = rcHdr && rcHdr.assessment;
+      const ident = [
+        data.symbol || "",
+        (assessHdr && (assessHdr.strike || rcHdr.requested_strike)) || data.parsed_strike || "",
+        (assessHdr && (assessHdr.right || rcHdr.requested_right)) || data.parsed_right || "",
+        (rcHdr && rcHdr.expiry) || "",
+      ].filter(Boolean).join(" ");
+      host.appendChild(el("p", { class: "chart-hint", text: "CONTRACT " + ident }));
+    }
+    if (tw.one_line_summary) host.appendChild(el("p", { text: tw.one_line_summary }));
+  } else if (sess.next_session_open_ist_label) {
     host.appendChild(el("p", { class: "chart-hint", text: "NEXT SESSION " + sess.next_session_open_ist_label }));
   }
 
@@ -1701,19 +1798,26 @@ function renderSymbolHero(data) {
       const nowSnap = pinned.latest || {};
       box.appendChild(el("p", { class: "chart-hint", text: contractLine(t0) + (t0.observation_timestamp ? " · " + formatWatchWhen(t0.observation_timestamp) : "") }));
       box.appendChild(el("p", { text: "T0  " + stateLabel(t0.research_state || "n/a") + (t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") }));
-      box.appendChild(el("h3", { text: "LATEST VERIFIED OBSERVATION" }));
+      box.appendChild(el("h3", { text: "LATEST VERIFIED" }));
       box.appendChild(el("p", { class: "chart-hint", text: contractLine(nowSnap) + (nowSnap.observation_timestamp ? " · " + formatWatchWhen(nowSnap.observation_timestamp) : "") }));
       box.appendChild(el("p", { text: obsKind + "  " + stateLabel(nowSnap.research_state || st) + (nowSnap.pattern ? " · " + String(nowSnap.pattern).replace(/_/g, " ") : "") }));
       const material = watchMaterialChanges(pinned);
       box.appendChild(el("h3", { text: "WHAT CHANGED" }));
       if (!pinned.latest || pinned.t0_unavailable) {
-        box.appendChild(el("p", { class: "chart-hint", text: "NO COMPARABLE PRIOR OBSERVATION" }));
+        box.appendChild(el("p", { class: "chart-hint", text: "NO COMPARABLE OBSERVATION" }));
       } else if (!material.length) {
-        box.appendChild(el("p", { class: "chart-hint", text: "NO MATERIAL CHANGE versus T0" }));
+        box.appendChild(el("p", { class: "chart-hint", text: "NO MATERIAL CHANGE" }));
       } else {
         material.forEach((c) => {
           box.appendChild(el("p", { class: "chart-hint", text: String(c.category || "").replace(/_/g, " ") + " · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
         });
+      }
+      const since = sinceT0Lines(material);
+      box.appendChild(el("h3", { text: "SINCE T0" }));
+      if (!since.length) {
+        box.appendChild(el("p", { class: "chart-hint", text: material.length ? "NO COMPARABLE OBSERVATION" : "NO MATERIAL CHANGE" }));
+      } else {
+        since.forEach((line) => box.appendChild(el("p", { text: line })));
       }
     }
     host.appendChild(box);
@@ -1747,10 +1851,13 @@ function renderSymbolHero(data) {
   } else if (assess) {
     const expiryTxt = rc.expiry || "UNKNOWN";
     cblock.appendChild(el("p", { text: [assess.right || rc.requested_right, assess.strike || rc.requested_strike, expiryTxt].filter(Boolean).join(" ") }));
-    cblock.appendChild(el("p", { class: "chart-hint", text: obsKind + " · LTP " + (assess.ltp != null ? assess.ltp : "UNKNOWN") + " · OI " + (assess.open_interest != null ? assess.open_interest : "UNKNOWN") + " · ΔOI " + (assess.change_in_open_interest != null ? assess.change_in_open_interest : "UNKNOWN") + " · vol " + (assess.volume != null ? assess.volume : "UNKNOWN") + " · IV " + (assess.implied_volatility != null ? assess.implied_volatility : "UNKNOWN") }));
-    cblock.appendChild(el("p", { class: "chart-hint", text: "Bid " + (assess.bid != null ? assess.bid : "UNKNOWN") + " · Ask " + (assess.ask != null ? assess.ask : "UNKNOWN") + " · DTE only if expiry verified on this chain" }));
+    cblock.appendChild(el("p", { style: "font-weight:700", text: contract.code }));
+    const dteTxt = (tw && tw.contract_dte != null) ? String(tw.contract_dte) : "UNKNOWN";
+    cblock.appendChild(el("p", { class: "chart-hint", text: obsKind + " · LTP " + (assess.ltp != null ? assess.ltp : "UNKNOWN") + " · OI " + (assess.open_interest != null ? assess.open_interest : "UNKNOWN") + " · ΔOI " + (assess.change_in_open_interest != null ? assess.change_in_open_interest : "UNKNOWN") + " · Volume " + (assess.volume != null ? assess.volume : "UNKNOWN") + " · IV " + (assess.implied_volatility != null ? assess.implied_volatility : "UNKNOWN") }));
+    cblock.appendChild(el("p", { class: "chart-hint", text: "Bid " + (assess.bid != null ? assess.bid : "UNKNOWN") + " · Ask " + (assess.ask != null ? assess.ask : "UNKNOWN") + " · DTE " + dteTxt }));
   } else {
     cblock.appendChild(el("p", { class: "chart-hint", text: "No specific contract observed this run." }));
+    cblock.appendChild(el("p", { style: "font-weight:700", text: contract.code }));
   }
   host.appendChild(cblock);
 
@@ -1758,6 +1865,9 @@ function renderSymbolHero(data) {
   why.appendChild(el("div", { class: "k", text: "WHY" }));
   why.appendChild(el("div", { class: "v", text: whyText }));
   host.appendChild(why);
+  if (tw && tw.why && tw.why.length) {
+    tw.why.forEach((line) => host.appendChild(el("p", { class: "chart-hint", text: line })));
+  }
 
   if (pat) {
     const pb = el("div", { class: "ws-block" });
@@ -1795,16 +1905,27 @@ function renderSymbolHero(data) {
   host.appendChild(evb);
 
   [["MISSING", missing], ["CONFIRM IF", confirm], ["INVALIDATE IF", invalidate]].forEach(([k, val]) => {
+    const heading = (k === "CONFIRM IF" && val === "NOT AVAILABLE") ? "CONFIRMATION CONDITION" : ((k === "INVALIDATE IF" && val === "NOT AVAILABLE") ? "INVALIDATION CONDITION" : k);
     const b = el("div", { class: "ws-block" });
-    b.appendChild(el("h3", { text: k }));
+    b.appendChild(el("h3", { text: heading }));
     b.appendChild(el("p", { text: val }));
     host.appendChild(b);
   });
-  const cb = el("div", { class: "ws-block" });
-  cb.appendChild(el("h3", { text: "CONTRACT" }));
-  cb.appendChild(el("p", { style: "font-weight:700", text: contract.code }));
-  cb.appendChild(el("p", { text: contract.detail }));
-  host.appendChild(cb);
+  if (tw) {
+    const twBox = el("div", { class: "ws-block" });
+    twBox.appendChild(el("h3", { text: "TOMORROW WATCH" }));
+    twBox.appendChild(el("p", { class: "chart-hint", text: "Checklist for the next live session. Not an order plan and not a prediction." }));
+    host.appendChild(twBox);
+    (tw.evidence_groups || []).forEach((g) => {
+      const gb = el("div", { class: "ws-block" });
+      gb.appendChild(el("h3", { text: g.label + " · " + g.status }));
+      (g.evidence || []).forEach((row) => gb.appendChild(el("p", { text: row })));
+      if (g.freshness) gb.appendChild(el("p", { class: "chart-hint", text: "Freshness " + g.freshness }));
+      if (g.missing) gb.appendChild(el("p", { class: "chart-hint", text: "Missing " + g.missing }));
+      host.appendChild(gb);
+    });
+    appendCheckList(host, "AT OPEN CHECK", tw.at_open_check || [], "NOT AVAILABLE");
+  }
 }
 
 // ============================================================
@@ -3716,6 +3837,11 @@ function renderUnderlyingSummary(data) {
     nextSession.appendChild(el("p", { class: "chart-hint", text: "LAST OBSERVATION: " + (lastCandle && lastCandle.timestamp ? new Date(lastCandle.timestamp).toLocaleString() : "n/a") + ", last close ₹" + (lastCandle ? fmt(lastCandle.close) : "n/a") + "." }));
     const watchCount = data.watch_next ? data.watch_next.length : 0;
     nextSession.appendChild(el("p", { class: "chart-hint", text: "NEXT OPEN: refresh this analysis for live quotes/candles/option chain, then re-read " + (watchCount ? "the " + watchCount + " watch condition(s) below" : "the watch conditions below (none available this run)") + " against the new data -- trend, OI, IV, delta, and spread can all change materially between now and the next open." }));
+    const openChecks = (data.tomorrow_watch && data.tomorrow_watch.at_open_check) || [];
+    if (openChecks.length) {
+      nextSession.appendChild(el("h2", { text: "AT OPEN CHECK" }));
+      openChecks.forEach((line) => nextSession.appendChild(el("p", { class: "chart-hint", text: line })));
+    }
     body.appendChild(nextSession);
   }
 }

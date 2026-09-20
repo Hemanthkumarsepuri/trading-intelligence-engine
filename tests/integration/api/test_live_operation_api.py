@@ -688,3 +688,33 @@ def test_explain_simply_is_disabled_until_research_then_falls_back() -> None:
     assert "futures.no_futures_reason" in html
     assert "Futures: " in html
     assert "Futures unavailable." not in html
+
+
+def test_dashboard_html_tomorrow_watch_and_safety_copy() -> None:
+    import app.api.main as main_module
+
+    html = (Path(main_module.__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
+    assert "PRE-MARKET RESEARCH" in html
+    assert "TOMORROW WATCH" in html
+    assert "AT OPEN CHECK" in html
+    assert "function conditionOrUnavailable(" in html
+    assert "function sinceT0Lines(" in html
+    assert "function defaultAtOpenChecks(" in html
+    assert "NOT AVAILABLE" in html
+    assert "NO COMPARABLE OBSERVATION" in html
+    assert "NO MATERIAL CHANGE" in html
+    assert "LATEST VERIFIED" in html
+    assert "SINCE T0" in html
+    assert 'text: "BUY"' not in html
+    assert 'text: "SELL"' not in html
+    assert 'text: "ORDER"' not in html
+    assert "will fall tomorrow" not in html.lower()
+    assert 'text: "CONFIDENCE' not in html
+    assert "CONFIDENCE SCORE" not in html
+    hero = html.split("function renderSymbolHero(data) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "PRE-MARKET RESEARCH" in hero
+    assert "AT OPEN CHECK" in hero
+    assert "observation_kind === \"LIVE\"" in hero or 'observation_kind === "LIVE"' in hero
+    assert "CURRENT PRICE" not in hero or "LAST OBSERVED" in hero
+    assert 'text: "BUY"' not in hero
+    assert 'text: "SELL"' not in hero

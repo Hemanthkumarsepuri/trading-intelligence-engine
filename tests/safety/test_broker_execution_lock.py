@@ -68,3 +68,14 @@ def test_no_order_placement_routes_exist() -> None:
         assert "/orders" not in lowered
         assert "place-order" not in lowered
         assert "cancel-order" not in lowered
+
+
+def test_live_fno_certify_script_stays_pending_when_not_open() -> None:
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "scripts" / "certify_live_fno_scan.py").read_text(encoding="utf-8")
+    assert 'if session != "OPEN":' in source
+    assert "PENDING — MARKET CLOSED" in source
+    assert "return 2" in source
+    assert "will not start a universe scan" in source
+    assert "relabel last-observed prints as live" in source

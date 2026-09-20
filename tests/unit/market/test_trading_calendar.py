@@ -222,3 +222,32 @@ def test_research_session_mode_live_pre_market_post_market_and_holiday() -> None
     assert holiday.is_holiday is True
     assert holiday.research_session_mode == "CLOSED"
     assert holiday.next_session_open_ist.date() == date(2026, 9, 1)
+
+
+def test_special_session_next_open_uses_regular_0915_not_invented_hours() -> None:
+    from datetime import UTC, datetime
+
+    from app.domain.market.trading_calendar import (
+        configure_nse_special_sessions,
+        session_window_payload,
+    )
+
+    muhurat = date(2026, 11, 8)
+    configure_nse_special_sessions(frozenset({muhurat}))
+    try:
+        saturday = classify_session_window(datetime(2026, 11, 7, 6, 30, tzinfo=UTC))
+        assert saturday.session_window == "CLOSED"
+        assert saturday.next_session_open_ist.date() == muhurat
+        assert saturday.next_session_open_ist.hour == 9
+        assert saturday.next_session_open_ist.minute == 15
+        label = session_window_payload(saturday)["next_session_open_ist_label"]
+        assert "09:15" in str(label)
+
+        during = classify_session_window(datetime(2026, 11, 8, 6, 30, tzinfo=UTC))
+        assert during.is_special_session is True
+        assert during.session_window == "OPEN"
+        assert during.next_session_open_ist.hour == 9
+        assert during.next_session_open_ist.minute == 15
+        assert during.next_session_open_ist.date() == date(2026, 11, 9)
+    finally:
+        configure_nse_special_sessions(None)
