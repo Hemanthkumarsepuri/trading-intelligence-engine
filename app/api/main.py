@@ -31,12 +31,15 @@ from fastapi.responses import FileResponse
 
 from app.api.schemas import (
     AnalyzeRequest,
+    CreateResearchWatchRequest,
     ExplainRequest,
     FollowupRequest,
     IPOAnalyzeRequest,
     IPOCompareRequest,
+    MigrateResearchWatchesRequest,
     PersonalJournalEntryRequest,
     PersonalJournalOutcomeRequest,
+    UpdateWatchLatestRequest,
     WatchlistRequest,
 )
 from app.config.settings import settings
@@ -117,6 +120,12 @@ from app.orchestration.research_outcome import (
     build_research_history,
     build_research_outcome_detail,
 )
+from app.orchestration.research_watch import (
+    DuplicateWatchError,
+    ResearchWatchService,
+    WatchUnavailableError,
+    observation_from_client,
+)
 from app.orchestration.system_status import as_health_payload, build_system_status
 from app.persistence.jsonl_file import (
     JsonlAuditJournalRepository,
@@ -127,6 +136,7 @@ from app.persistence.jsonl_file import (
     JsonlQuoteRepository,
     JsonlResearchOutcomeRepository,
     JsonlResearchRunRepository,
+    JsonlWatchRecordRepository,
 )
 from app.utils.time import to_ist, utc_now
 
@@ -147,6 +157,7 @@ _IPO_JOURNAL_DIR = _DATA_ROOT / "persistence" / "ipo_audit_journal"
 _RESEARCH_JOURNAL_DIR = _DATA_ROOT / "persistence" / "research_journal"
 _RESEARCH_OUTCOME_DIR = _DATA_ROOT / "persistence" / "research_outcomes"
 _PERSONAL_JOURNAL_DIR = _DATA_ROOT / "persistence" / "personal_journal"
+_WATCH_DIR = _DATA_ROOT / "persistence" / "research_watches"
 _REPLAY_DATASET_DIR = _DATA_ROOT / "research_dataset"
 _REPLAY_OUTCOME_DIR = _DATA_ROOT / "persistence" / "replay_research_outcomes"
 
@@ -198,6 +209,7 @@ async def real_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # actually happened afterward, never the run itself), same discipline.
     app.state.outcome_repository = JsonlResearchOutcomeRepository(_RESEARCH_OUTCOME_DIR)
     app.state.personal_journal = JsonlPersonalJournalRepository(_PERSONAL_JOURNAL_DIR)
+    app.state.watch_repository = JsonlWatchRecordRepository(_WATCH_DIR)
     # Section 6 -- the deterministic follow-up mechanism's in-memory
     # context, process lifetime only (see query_context.py's module
     # docstring, rule 7: a restart intentionally clears this, and a
@@ -254,7 +266,7 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
             CORSMiddleware,
             allow_origins=origins,
             allow_credentials=False,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type", "Accept"],
         )
     app.state.research_jobs = ResearchJobRegistry()
@@ -493,6 +505,16 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
                     right=OptionRight(response.parsed_right) if response.parsed_right is not None else None,
                     audit_id=response.audit_id, established_at=utc_now(),
                 )
+            watch_repo = getattr(app.state, "watch_repository", None)
+            if watch_repo is not None:
+                try:
+                    existing = await watch_repo.active_for_symbol(response.symbol)
+                    if existing is not None:
+                        obs = observation_from_client(response.model_dump(mode="json"), kind="analyze")
+                        if obs is not None:
+                            await ResearchWatchService(watch_repo).update_latest(existing.watch_id, obs)
+                except Exception:
+                    logging.getLogger(__name__).exception("watch latest refresh failed for %s", response.symbol)
         return response
 
     @app.post("/api/watchlist")
@@ -954,7 +976,10 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
                     observation_dir=_REPLAY_OUTCOME_DIR, as_of=utc_now(),
                 )
             except ReplayDatasetUnavailable as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=404,
+                    detail="HISTORICAL REPLAY DATASET NOT AVAILABLE IN THIS DEPLOYMENT",
+                ) from exc
         if source.lower() != "live":
             raise HTTPException(status_code=422, detail="source must be 'live' or 'replay'")
         outcome_repository: JsonlResearchOutcomeRepository | None = getattr(app.state, "outcome_repository", None)
@@ -976,7 +1001,79 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
                 limit=max(1, min(limit, 200)),
             )
         except ReplayDatasetUnavailable as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="HISTORICAL REPLAY DATASET NOT AVAILABLE IN THIS DEPLOYMENT",
+            ) from exc
+
+    def _watch_service() -> ResearchWatchService:
+        repo = getattr(app.state, "watch_repository", None)
+        if repo is None:
+            raise HTTPException(status_code=503, detail="research watch persistence is not configured")
+        return ResearchWatchService(repo)
+
+    @app.post("/api/research/watches")
+    async def create_research_watch(body: CreateResearchWatchRequest) -> dict[str, object]:
+        """Pin a personal research observation. Never places an order."""
+        service = _watch_service()
+        kind = body.snapshot_kind if body.snapshot_kind in {"analyze", "screener", "raw"} else "analyze"
+        observation = observation_from_client(body.observation, kind=kind)
+        try:
+            view = await service.create(
+                symbol=body.symbol,
+                query=body.query,
+                observation=observation,
+                t0_unavailable=body.t0_unavailable,
+            )
+        except DuplicateWatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WatchUnavailableError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return view.model_dump(mode="json")
+
+    @app.get("/api/research/watches")
+    async def list_research_watches() -> dict[str, object]:
+        service = _watch_service()
+        views = await service.list_watches()
+        return {"watches": [v.model_dump(mode="json") for v in views]}
+
+    @app.post("/api/research/watches/migrate")
+    async def migrate_research_watches(body: MigrateResearchWatchesRequest) -> dict[str, object]:
+        service = _watch_service()
+        kind = body.snapshot_kind if body.snapshot_kind in {"analyze", "screener", "raw"} else "screener"
+        observations = {
+            key.strip().upper(): obs
+            for key, raw in body.observations.items()
+            if (obs := observation_from_client(raw, kind=kind)) is not None
+        }
+        views = await service.migrate_symbols(body.symbols, observations)
+        return {"watches": [v.model_dump(mode="json") for v in views]}
+
+    @app.get("/api/research/watches/{watch_id}")
+    async def get_research_watch(watch_id: str) -> dict[str, object]:
+        view = await _watch_service().get(watch_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="watch not found")
+        return view.model_dump(mode="json")
+
+    @app.post("/api/research/watches/{watch_id}/latest")
+    async def update_research_watch_latest(watch_id: str, body: UpdateWatchLatestRequest) -> dict[str, object]:
+        kind = body.snapshot_kind if body.snapshot_kind in {"analyze", "screener", "raw"} else "analyze"
+        observation = observation_from_client(body.observation, kind=kind)
+        if observation is None:
+            raise HTTPException(status_code=400, detail="observation is required")
+        try:
+            view = await _watch_service().update_latest(watch_id, observation)
+        except WatchUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return view.model_dump(mode="json")
+
+    @app.delete("/api/research/watches/{watch_id}")
+    async def delete_research_watch(watch_id: str) -> dict[str, object]:
+        removed = await _watch_service().remove(watch_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail="watch not found")
+        return {"removed": True, "watch_id": watch_id}
 
     @app.get("/api/research/{observation_id}/outcome", response_model=ResearchOutcomeDetailView)
     async def research_observation_outcome(observation_id: str) -> ResearchOutcomeDetailView:

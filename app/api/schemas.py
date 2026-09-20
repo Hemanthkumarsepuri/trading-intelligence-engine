@@ -143,3 +143,24 @@ class PersonalJournalOutcomeRequest(BaseModel):
     what_tire_observed: str | None = None
     mistake_class: str = "UNKNOWN"
     notes: str | None = None
+
+
+class CreateResearchWatchRequest(BaseModel):
+    """Pin a real observation. Not an order. T0 is frozen server-side."""
+
+    symbol: str = Field(min_length=1, max_length=40)
+    query: str | None = Field(default=None, max_length=200)
+    snapshot_kind: str = "analyze"
+    observation: dict[str, object] | None = None
+    t0_unavailable: bool = False
+
+
+class UpdateWatchLatestRequest(BaseModel):
+    snapshot_kind: str = "analyze"
+    observation: dict[str, object]
+
+
+class MigrateResearchWatchesRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=list, max_length=200)
+    snapshot_kind: str = "screener"
+    observations: dict[str, dict[str, object]] = Field(default_factory=dict)

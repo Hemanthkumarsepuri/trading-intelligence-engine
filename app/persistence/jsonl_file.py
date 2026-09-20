@@ -45,6 +45,7 @@ from app.domain.ipo.audit_models import IPOAnalysisSnapshot, IPOListingOutcomeRe
 from app.domain.journal.personal_journal import PersonalJournalEntry, PersonalJournalOutcome
 from app.domain.market.models import Candle, OptionChainSnapshot, Quote, Timeframe
 from app.domain.options.models import IvObservation
+from app.domain.research.watch_record import WatchEvent, WatchRecord, active_by_symbol, fold_events
 from app.utils.time import to_ist
 
 
@@ -548,3 +549,47 @@ class JsonlPersonalJournalRepository:
             if (o := PersonalJournalOutcome.model_validate_json(line)).journal_id == journal_id
         ]
         return sorted(matches, key=lambda o: o.captured_at)
+
+
+class JsonlWatchRecordRepository:
+    """Append-only personal research watches. Remove is a tombstone event.
+    T0 lives on CREATED and is never rewritten. Corrupt lines are skipped.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self._store = _JsonlStore(directory / "research_watches.jsonl")
+        self._lock = threading.Lock()
+
+    def _load_events(self) -> list[WatchEvent]:
+        events: list[WatchEvent] = []
+        for line in self._store.read_lines():
+            try:
+                events.append(WatchEvent.model_validate_json(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return events
+
+    def _records(self) -> dict[str, WatchRecord]:
+        return fold_events(self._load_events())
+
+    async def append_event(self, event: WatchEvent) -> None:
+        with self._lock:
+            self._store.append_line(event.model_dump_json())
+
+    async def list_active(self) -> list[WatchRecord]:
+        records = self._records()
+        active = [r for r in records.values() if not r.removed]
+        return sorted(active, key=lambda r: r.created_at)
+
+    async def get(self, watch_id: str) -> WatchRecord | None:
+        record = self._records().get(watch_id)
+        if record is None or record.removed:
+            return None
+        return record
+
+    async def get_including_removed(self, watch_id: str) -> WatchRecord | None:
+        return self._records().get(watch_id)
+
+    async def active_for_symbol(self, symbol: str) -> WatchRecord | None:
+        return active_by_symbol(self._records()).get(symbol.strip().upper())
+

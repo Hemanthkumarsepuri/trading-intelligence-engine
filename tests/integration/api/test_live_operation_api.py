@@ -562,7 +562,8 @@ def test_dashboard_html_netlify_readiness_api_base() -> None:
     # apiUrl(), which is the property actually under test here.
     # Release gate -- +1 for GET /api/research/replay-dataset (COMPARE
     # HISTORICAL OBSERVATIONS), which also routes through apiUrl().
-    assert html.count('fetch(apiUrl(') == 18
+    # Observation-backed watch -- +4 (list, migrate, create, delete/latest).
+    assert html.count('fetch(apiUrl(') == 22
 
 
 def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> None:

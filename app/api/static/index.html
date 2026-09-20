@@ -390,15 +390,22 @@
     .primary-nav { order: 3; width: 100%; }
     .primary-nav button { flex: 1; min-height: 32px; }
     .market-glance { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 12px 0; }
-    table.screener, table.history-desktop { display: none; }
+    table.screener, table.history-desktop { display: none; pointer-events: none; }
+    table.screener button { pointer-events: none; }
     .history-cards, .screener-cards { display: block; }
+    .screener-cards .watch-pin { min-height: 36px; min-width: 72px; }
     .screener-cards .simple-card { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 12px 0; }
     .screener-cards .simple-card h3 { font-size: 15px; letter-spacing: 0.04em; }
     .symbol-hero h2 { font-size: 20px; }
   }
   @media (min-width: 721px) {
-    .screener-cards, .history-cards { display: none; }
+    .screener-cards, .history-cards { display: none; pointer-events: none; }
+    .screener-cards .watch-pin { pointer-events: none; }
+    table.screener .watch-pin { min-height: 32px; }
   }
+  .watch-changes { margin: 10px 0 14px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .watch-card { border-bottom: 1px solid var(--border); padding: 12px 0; }
+  .watch-card h3 { margin: 0 0 6px; font-size: 15px; }
 </style>
 </head>
 <body>
@@ -415,6 +422,7 @@
     <nav class="primary-nav" aria-label="Primary">
       <button type="button" data-view="market" class="secondary">Market</button>
       <button type="button" data-view="screener">Screener</button>
+      <button type="button" class="secondary" data-view="watchlist">Watchlist</button>
       <button type="button" class="secondary" data-view="symbol">Symbol</button>
       <button type="button" class="secondary" data-view="history">History</button>
       <button type="button" class="secondary" data-view="patterns">Patterns</button>
@@ -464,7 +472,7 @@
       <button type="button" class="chip" data-filter="early">Early</button>
       <button type="button" class="chip" data-filter="developing">Developing</button>
       <button type="button" class="chip" data-filter="confirmed">Confirmed</button>
-      <button type="button" class="chip" data-filter="watch">Watch</button>
+      <button type="button" class="chip" data-filter="watch">Needs confirmation</button>
       <button type="button" class="chip" data-filter="pending">Pending</button>
       <button type="button" class="chip" data-filter="conflict">Conflict</button>
       <button type="button" class="chip" data-filter="extended">Extended</button>
@@ -489,6 +497,7 @@
       </select>
     </div>
     <div class="watch-bar" id="personal-watchlist"></div>
+    <div class="watch-changes" id="watched-changes-screener"></div>
     <div id="screener-table-host"></div>
     <details id="scan-details">
     <summary>Scan options</summary>
@@ -499,6 +508,15 @@
     </details>
     <div id="research-results"></div>
   </section>
+  </section>
+
+  <section class="app-view" id="view-watchlist" data-view="watchlist" hidden aria-hidden="true">
+    <section class="surface-workspace">
+      <h1>Watchlist</h1>
+      <p class="screener-lead">Pinned observations — what was true at T0 versus what TIRE observes now. Not a portfolio, not BUY/SELL.</p>
+      <div class="watch-changes" id="watched-changes-watchlist"></div>
+      <div id="watchlist-host"></div>
+    </section>
   </section>
 
   <section class="app-view" id="view-history" data-view="history" hidden aria-hidden="true">
@@ -991,6 +1009,7 @@ let analyzingQuery = null;
 let historyLoadedOnce = false;
 let patternsLoadedOnce = false;
 const WATCH_KEY = "TIRE_PERSONAL_WATCHLIST";
+let serverWatches = [];
 
 function showView(name) {
   document.querySelectorAll(".app-view").forEach((node) => {
@@ -1010,6 +1029,9 @@ function showView(name) {
   if (name === "patterns" && !patternsLoadedOnce) {
     patternsLoadedOnce = true;
     runPatternAggregation();
+  }
+  if (name === "watchlist") {
+    refreshWatches();
   }
   if (location.hash !== "#" + name) {
     try { history.replaceState(null, "", "#" + name); } catch (e) { /* ignore */ }
@@ -1107,41 +1129,174 @@ function applyObservedMarket(data) {
   }
 }
 
-function loadPersonalWatch() {
+function loadLegacyWatchSymbols() {
   try {
     const raw = JSON.parse(localStorage.getItem(WATCH_KEY) || "[]");
     return Array.isArray(raw) ? raw.filter((s) => typeof s === "string") : [];
   } catch (e) { return []; }
 }
-function savePersonalWatch(list) {
-  localStorage.setItem(WATCH_KEY, JSON.stringify(list));
+function watchForSymbol(symbol) {
+  const wanted = String(symbol || "").toUpperCase();
+  return serverWatches.find((w) => w.symbol === wanted) || null;
 }
-function toggleWatch(symbol) {
-  const list = loadPersonalWatch();
-  const i = list.indexOf(symbol);
-  if (i >= 0) list.splice(i, 1);
-  else list.push(symbol);
-  savePersonalWatch(list);
+function watchMaterialChanges(w) {
+  return (w.changes || []).filter((c) => c.category && c.category !== "NO_MATERIAL_CHANGE");
+}
+function formatWatchWhen(iso) {
+  if (!iso) return "n/a";
+  try {
+    return new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " IST";
+  } catch (e) { return String(iso); }
+}
+function contractLine(snap) {
+  if (!snap) return "";
+  const bits = [snap.underlying || "", snap.strike || "", snap.option_type || ""].filter(Boolean);
+  return bits.join(" ");
+}
+async function refreshWatches() {
+  try {
+    const resp = await fetch(apiUrl("/api/research/watches"));
+    if (!resp.ok) return;
+    const data = await resp.json();
+    serverWatches = data.watches || [];
+  } catch (e) { /* keep last known */ }
   renderPersonalWatch();
+  renderWatchlistWorkspace();
+  renderWatchedChanges();
+}
+async function migrateLegacyWatches() {
+  await refreshWatches();
+  const legacy = loadLegacyWatchSymbols();
+  if (!legacy.length) return;
+  const observations = {};
+  legacy.forEach((sym) => {
+    const row = screenerRows.find((o) => o.symbol === String(sym).toUpperCase() || o.symbol === sym);
+    if (row) observations[String(sym).toUpperCase()] = row;
+  });
+  try {
+    await fetch(apiUrl("/api/research/watches/migrate"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbols: legacy, snapshot_kind: "screener", observations }),
+    });
+  } catch (e) { /* server authoritative after next refresh */ }
+  await refreshWatches();
+}
+async function toggleWatch(symbol) {
+  const existing = watchForSymbol(symbol);
+  if (existing) {
+    await fetch(apiUrl("/api/research/watches/" + existing.watch_id), { method: "DELETE" });
+    await refreshWatches();
+    renderScreenerTable();
+    return;
+  }
+  const last = state.lastResponse;
+  const row = screenerRows.find((o) => o.symbol === symbol);
+  const body = { symbol: symbol, query: symbol, snapshot_kind: "screener", t0_unavailable: false };
+  if (last && last.symbol === symbol && !last.error) {
+    body.snapshot_kind = "analyze";
+    body.query = last.query || symbol;
+    body.observation = last;
+  } else if (row) {
+    body.snapshot_kind = "screener";
+    body.query = symbol;
+    body.observation = row;
+  } else {
+    return;
+  }
+  await fetch(apiUrl("/api/research/watches"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  await refreshWatches();
   renderScreenerTable();
+}
+function renderWatchedChanges() {
+  ["watched-changes-screener", "watched-changes-watchlist"].forEach((id) => {
+    const host = document.getElementById(id);
+    if (!host) return;
+    host.innerHTML = "";
+    host.appendChild(el("span", { class: "chip-label", text: "WATCHED CHANGES" }));
+    const changed = serverWatches.filter((w) => watchMaterialChanges(w).length);
+    if (!changed.length) {
+      host.appendChild(el("span", { class: "hint", text: "No material change on pinned observations." }));
+      return;
+    }
+    changed.forEach((w) => {
+      const t0s = (w.t0 && w.t0.research_state) || (w.t0_unavailable ? "T0 UNAVAILABLE" : "n/a");
+      const nows = (w.latest && w.latest.research_state) || "n/a";
+      const cats = watchMaterialChanges(w).map((c) => c.category.replace(/_/g, " ")).join(" · ");
+      const btn = el("button", { type: "button", class: "watch-chip", text: w.symbol + " " + stateLabel(t0s) + " → " + stateLabel(nows) });
+      btn.addEventListener("click", () => openSymbol(w.symbol));
+      host.appendChild(btn);
+      host.appendChild(el("span", { class: "hint", text: cats }));
+    });
+  });
+}
+function renderWatchlistWorkspace() {
+  const host = document.getElementById("watchlist-host");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!serverWatches.length) {
+    host.appendChild(el("div", { class: "empty-state" }, [
+      el("h3", { text: "NO PINNED OBSERVATIONS" }),
+      el("p", { class: "hint", text: "Pin a screener or symbol observation to freeze T0. This is not a recommendation." }),
+    ]));
+    return;
+  }
+  serverWatches.forEach((w) => {
+    const card = el("div", { class: "watch-card" });
+    const t0 = w.t0;
+    const now = w.latest;
+    const material = watchMaterialChanges(w);
+    const headline = w.t0_unavailable
+      ? "LEGACY WATCH · T0 OBSERVATION UNAVAILABLE"
+      : (material.length ? "CHANGED" : "NO MATERIAL CHANGE");
+    const title = el("h3");
+    title.appendChild(document.createTextNode(w.symbol + " "));
+    title.appendChild(el("span", { class: "state-tag", text: headline }));
+    card.appendChild(title);
+    card.appendChild(el("p", { class: "chart-hint", text: contractLine(t0 || now) + (w.query ? " · " + w.query : "") }));
+    card.appendChild(el("p", { class: "chart-hint", text: "WATCHED AT " + formatWatchWhen(w.created_at) + " · journal time and market observation time are not relabelled" }));
+    card.appendChild(el("p", { text: "T0  " + stateLabel((t0 && t0.research_state) || "UNAVAILABLE") + (t0 && t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") }));
+    card.appendChild(el("p", { text: "NOW  " + stateLabel((now && now.research_state) || "n/a") + (now && now.pattern ? " · " + String(now.pattern).replace(/_/g, " ") : "") }));
+    if (w.evolution_states && w.evolution_states.length) {
+      card.appendChild(el("p", { class: "chart-hint", text: "EVOLUTION  " + w.evolution_states.map(stateLabel).join(" → ") }));
+    }
+    if (material.length) {
+      material.forEach((c) => {
+        card.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
+      });
+    }
+    card.appendChild(el("p", { class: "chart-hint", text: "MISSING  " + ((now && now.missing_confirmation) || (t0 && t0.missing_confirmation) || "n/a") }));
+    card.appendChild(el("p", { class: "chart-hint", text: "CONFIRM IF  " + ((t0 && t0.confirmation_condition) || "n/a") }));
+    card.appendChild(el("p", { class: "chart-hint", text: "INVALIDATE IF  " + ((t0 && t0.invalidation_condition) || "n/a") }));
+    const actions = el("div", { class: "search-row" });
+    const open = el("button", { type: "button", class: "secondary", text: "OPEN SYMBOL" });
+    open.addEventListener("click", () => openSymbol(w.symbol));
+    const unpin = el("button", { type: "button", class: "secondary", text: "REMOVE" });
+    unpin.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(w.symbol); });
+    actions.appendChild(open);
+    actions.appendChild(unpin);
+    card.appendChild(actions);
+    host.appendChild(card);
+  });
 }
 function renderPersonalWatch() {
   const host = document.getElementById("personal-watchlist");
   if (!host) return;
-  const list = loadPersonalWatch();
   host.innerHTML = "";
   host.hidden = false;
-  host.appendChild(el("span", { class: "chip-label", text: "MY WATCHLIST" }));
-  if (!list.length) {
-    host.appendChild(el("span", { class: "hint", text: "Personal symbols only — not a recommendation. Star a row to save." }));
+  host.appendChild(el("span", { class: "chip-label", text: "PINNED OBSERVATIONS" }));
+  if (!serverWatches.length) {
+    host.appendChild(el("span", { class: "hint", text: "Personal observation pins only — not a recommendation. WATCH freezes T0." }));
     return;
   }
-  list.forEach((sym) => {
-    const row = screenerRows.find((o) => o.symbol === sym);
-    const btn = el("button", { type: "button", class: "watch-chip", text: row
-      ? (sym + " " + stateLabel(row.research_state || "UNKNOWN"))
-      : (sym + " — watched, no current scan row") });
-    btn.addEventListener("click", () => openSymbol(sym));
+  serverWatches.forEach((w) => {
+    const t0s = w.t0 && w.t0.research_state ? stateLabel(w.t0.research_state) : (w.t0_unavailable ? "T0 UNAVAILABLE" : "n/a");
+    const btn = el("button", { type: "button", class: "watch-chip", text: w.symbol + " T0 " + t0s });
+    btn.addEventListener("click", () => { showView("watchlist"); });
     host.appendChild(btn);
   });
 }
@@ -1292,14 +1447,21 @@ function renderScreenerTable() {
     const contract = contractLabel(o);
     const fresh = o.options_data_quality || "n/a";
     const st = o.research_state || "UNKNOWN";
-    const watched = loadPersonalWatch().indexOf(o.symbol) >= 0;
+    const watched = !!watchForSymbol(o.symbol);
     const open = () => openSymbol(o.symbol);
     const tr = el("tr");
     tr.addEventListener("click", open);
     const tdSym = el("td");
     tdSym.appendChild(document.createTextNode(o.symbol + " "));
-    const star = el("button", { type: "button", class: "secondary", text: watched ? "WATCHED" : "WATCH" });
-    star.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
+    const mobile = window.matchMedia("(max-width: 720px)").matches;
+    const star = el("button", { type: "button", class: "secondary watch-pin", text: watched ? "WATCHED" : "WATCH" });
+    if (mobile) {
+      star.disabled = true;
+      star.tabIndex = -1;
+      star.setAttribute("aria-hidden", "true");
+    } else {
+      star.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
+    }
     tdSym.appendChild(star);
     tr.appendChild(tdSym);
     const tdS = el("td"); tdS.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) })); tr.appendChild(tdS);
@@ -1316,8 +1478,14 @@ function renderScreenerTable() {
     card.appendChild(title);
     card.appendChild(el("p", { class: "chart-hint", text: moveTxt }));
     card.appendChild(el("p", { class: "chart-hint", text: "Pattern " + pat + " · Evidence " + ev + " · Contract " + contract + " · " + fresh }));
-    const starC = el("button", { type: "button", class: "secondary", text: watched ? "WATCHED" : "WATCH" });
-    starC.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
+    const starC = el("button", { type: "button", class: "secondary watch-pin", text: watched ? "WATCHED" : "WATCH" });
+    if (!mobile) {
+      starC.disabled = true;
+      starC.tabIndex = -1;
+      starC.setAttribute("aria-hidden", "true");
+    } else {
+      starC.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
+    }
     card.appendChild(starC);
     card.addEventListener("click", open);
     cards.appendChild(card);
@@ -1421,6 +1589,31 @@ function renderSymbolHero(data) {
   top.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) }));
   top.appendChild(el("span", { style: "font-family:var(--mono);font-size:20px", text: move }));
   host.appendChild(top);
+
+  const pinned = watchForSymbol(data.symbol);
+  if (pinned) {
+    const box = el("div", { class: "ws-block" });
+    box.appendChild(el("h3", { text: "T0 WATCH" }));
+    box.appendChild(el("p", { class: "chart-hint", text: "WATCHED AT " + formatWatchWhen(pinned.created_at) }));
+    if (pinned.t0_unavailable) {
+      box.appendChild(el("p", { text: "T0 OBSERVATION UNAVAILABLE — pin again after a real observation." }));
+    } else {
+      const t0 = pinned.t0 || {};
+      const nowSnap = pinned.latest || {};
+      box.appendChild(el("p", { text: "T0  " + stateLabel(t0.research_state || "n/a") + (t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") }));
+      box.appendChild(el("p", { text: "CURRENT  " + stateLabel(st) + (nowSnap.pattern && nowSnap.pattern !== t0.pattern ? " · " + String(nowSnap.pattern).replace(/_/g, " ") : "") }));
+      const material = watchMaterialChanges(pinned);
+      if (!material.length) {
+        box.appendChild(el("p", { class: "chart-hint", text: "NO MATERIAL CHANGE versus T0" }));
+      } else {
+        material.forEach((c) => {
+          box.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
+        });
+      }
+    }
+    host.appendChild(box);
+  }
+
   const meta = el("div", { class: "hero-grid" });
   [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs]].forEach(([k, val]) => {
     const b = el("div", { class: "hero-block" });
@@ -1564,6 +1757,7 @@ async function analyze(query) {
     state.lastResponse = data;
     state.lastFetchedAt = new Date();
     renderDashboard(data);
+    refreshWatches();
   }
 }
 
@@ -1636,7 +1830,7 @@ const STATE_PLAIN = {
   CONFLICT: "No single directional interpretation is currently dominant.",
   NO_TRADE: "Nothing compelling is developing",
   EXTENDED: "The move is already extended",
-  WATCH: "Watch — confirmation is still missing.",
+  WATCH: "Needs confirmation — confirmation is still missing.",
   UNKNOWN: "Unknown"
 };
 const BLOCKER_PLAIN = {
@@ -2189,6 +2383,10 @@ async function runResearchHistory() {
   }
   btn.disabled = false;
   results.innerHTML = "";
+  results.appendChild(el("p", { class: "hint", text: "Timestamps are not relabelled. Journal generated_at = analysis clock. Watch created_at = T0 pin time. Market observation time stays on the observation when present." }));
+  serverWatches.forEach((w) => {
+    results.appendChild(el("p", { class: "chart-hint", text: "WATCH " + w.symbol + " · T0 " + formatWatchWhen(w.created_at) + (w.t0 && w.t0.observation_timestamp ? " · T0 market " + formatWatchWhen(w.t0.observation_timestamp) : "") + (w.latest && w.latest.observation_timestamp ? " · latest market " + formatWatchWhen(w.latest.observation_timestamp) : "") }));
+  });
 
   if (!data.entries.length) {
     results.appendChild(el("p", { class: "hint", text: "No matching research observations found." }));
@@ -2303,7 +2501,13 @@ async function runPatternAggregation() {
     data = await resp.json();
   } catch (err) {
     results.innerHTML = "";
-    results.appendChild(el("p", { class: "hint", text: "PATTERN HISTORY FAILED: " + err.message }));
+    const source = (document.getElementById("patterns-source") || {}).value || "live";
+    if (source === "replay") {
+      results.appendChild(el("p", { class: "hint", text: "HISTORICAL REPLAY DATASET NOT AVAILABLE IN THIS DEPLOYMENT" }));
+      results.appendChild(el("p", { class: "chart-hint", text: String(err.message || "") }));
+    } else {
+      results.appendChild(el("p", { class: "hint", text: "PATTERN HISTORY UNAVAILABLE: " + err.message }));
+    }
     btn.disabled = false;
     return;
   }
@@ -5083,11 +5287,12 @@ loadSystemStatus().finally(() => {
     });
   }
   renderScreenerTable();
+  migrateLegacyWatches();
   const initialView = (location.hash || "#screener").replace("#", "");
-  if (["market", "screener", "history", "patterns", "symbol"].includes(initialView)) showView(initialView);
+  if (["market", "screener", "watchlist", "history", "patterns", "symbol"].includes(initialView)) showView(initialView);
   window.addEventListener("hashchange", () => {
     const vname = (location.hash || "#screener").replace("#", "");
-    if (["market", "screener", "history", "patterns", "symbol"].includes(vname)) showView(vname);
+    if (["market", "screener", "watchlist", "history", "patterns", "symbol"].includes(vname)) showView(vname);
   });
   if (!document.body.dataset.explainBound) {
     document.body.dataset.explainBound = "1";
