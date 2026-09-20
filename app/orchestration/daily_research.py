@@ -2614,8 +2614,16 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
     risk = case.could_fail[0] if case.could_fail else "no specific opposing evidence recorded for this run"
     v = candidate.response.visual
     contract_expiry = None
-    if v is not None and v.term_structure is not None and v.term_structure.expiries:
-        contract_expiry = v.term_structure.expiries[0].expiry.isoformat()
+    if v is not None:
+        oc = v.option_chain
+        rc = v.requested_contract
+        observed = None
+        if oc is not None and oc.expiry is not None:
+            observed = oc.expiry
+        elif rc is not None and rc.expiry is not None:
+            observed = rc.expiry
+        if observed is not None:
+            contract_expiry = observed.isoformat() if hasattr(observed, "isoformat") else str(observed)
     bullish_case = _build_side_case(candidate.response, candidate.dc, "BULLISH", preferred=candidate.direction == "BULLISH")
     bearish_case = _build_side_case(candidate.response, candidate.dc, "BEARISH", preferred=candidate.direction == "BEARISH")
 

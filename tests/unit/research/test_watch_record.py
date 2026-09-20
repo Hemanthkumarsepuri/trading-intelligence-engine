@@ -130,6 +130,53 @@ def test_snapshot_from_analyze_payload_uses_audit_and_market_time() -> None:
     assert snap.observation_timestamp < snap.generated_at  # type: ignore[operator]
 
 
+def test_snapshot_copies_observed_chain_expiry_not_first_term_structure() -> None:
+    """Synthetic: expiry comes from the fetched chain, never expiries[0]."""
+    snap = snapshot_from_analyze_payload(
+        {
+            "audit_id": "exp-obs",
+            "symbol": "RELIANCE",
+            "query": "RELIANCE 1270 PE",
+            "parsed_expiry_hint": None,
+            "has_specific_contract": True,
+            "visual": {
+                "requested_contract": {
+                    "found": True,
+                    "expiry": "2026-09-29",
+                    "assessment": {"strike": "1270", "right": "PE"},
+                },
+                "option_chain": {"expiry": "2026-09-29"},
+                "term_structure": {
+                    "expiries": [
+                        {"expiry": "2026-09-29", "days_remaining": 9},
+                        {"expiry": "2026-10-27", "days_remaining": 37},
+                    ]
+                },
+            },
+        }
+    )
+    assert snap.expiry == "2026-09-29"
+    assert snap.dte == 9
+
+
+def test_snapshot_does_not_invent_expiry_from_term_structure_alone() -> None:
+    """Synthetic: term structure without a chain expiry stays missing."""
+    snap = snapshot_from_analyze_payload(
+        {
+            "audit_id": "no-exp",
+            "symbol": "RELIANCE",
+            "query": "RELIANCE",
+            "visual": {
+                "term_structure": {
+                    "expiries": [{"expiry": "2026-09-29", "days_remaining": 9}]
+                }
+            },
+        }
+    )
+    assert snap.expiry is None
+    assert snap.dte is None
+
+
 def test_create_duplicate_remove_and_t0_immutable(tmp_path: Path) -> None:
     repo = JsonlWatchRecordRepository(tmp_path)
     service = ResearchWatchService(repo)

@@ -174,6 +174,7 @@ class OptionChainVisual(BaseModel):
     rows: list[ChainRowView] = Field(default_factory=list)
     atm_strike: Decimal | None = None
     detail: str = ""
+    expiry: date | None = None
 
 
 def _leg_view(leg: OptionQuote | None) -> ChainLegView | None:
@@ -202,7 +203,12 @@ def _build_option_chain(report: OptionsIntelligenceReport) -> OptionChainVisual:
         )
         for row in build_chain_rows(report.option_chain)
     ]
-    return OptionChainVisual(rows=rows, atm_strike=report.atm_strike, detail="")
+    return OptionChainVisual(
+        rows=rows,
+        atm_strike=report.atm_strike,
+        detail="",
+        expiry=report.option_chain.expiry,
+    )
 
 
 # ============================================================
@@ -296,6 +302,7 @@ class RequestedContractVisual(BaseModel):
     alternatives: list[ContractAssessmentView]
     preference: str
     preference_detail: str
+    expiry: date | None = None
 
 
 def _build_requested_contract(report: OptionsIntelligenceReport) -> RequestedContractVisual | None:
@@ -304,12 +311,14 @@ def _build_requested_contract(report: OptionsIntelligenceReport) -> RequestedCon
         return None
 
     preference, preference_detail = summarize_contract_preference(comparison)
+    chain_expiry = report.option_chain.expiry if report.option_chain is not None else None
     return RequestedContractVisual(
         requested_strike=comparison.requested_strike, requested_right=comparison.requested_right.value,
         found=comparison.requested is not None, detail=comparison.requested_not_in_chain_detail,
         assessment=_contract_assessment_view(comparison.requested) if comparison.requested is not None else None,
         alternatives=[_contract_assessment_view(alt) for alt in comparison.alternatives],
         preference=preference.value, preference_detail=preference_detail,
+        expiry=chain_expiry,
     )
 
 

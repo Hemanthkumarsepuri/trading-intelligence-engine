@@ -1462,7 +1462,7 @@ function renderScreenerTable() {
     return;
   }
   const table = el("table", { class: "plain screener" });
-  table.appendChild(el("thead", {}, [el("tr", {}, ["Symbol", "State", "Move", "Pattern", "Evidence", "Contract", "Freshness"].map((h) => el("th", { text: h })))]));
+  table.appendChild(el("thead", {}, [el("tr", {}, ["Symbol", "State", "Move", "Pattern", "Completeness", "Contract", "Freshness"].map((h) => el("th", { text: h })))]));
   const tbody = el("tbody");
   const cards = el("div", { class: "screener-cards" });
   rows.forEach((o) => {
@@ -1501,7 +1501,10 @@ function renderScreenerTable() {
     title.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) }));
     card.appendChild(title);
     card.appendChild(el("p", { class: "chart-hint", text: moveTxt }));
-    card.appendChild(el("p", { class: "chart-hint", text: "Pattern " + pat + " · Evidence " + ev + " · Contract " + contract + " · " + fresh }));
+    card.appendChild(el("p", { class: "chart-hint", text: "Pattern " + pat + " · Completeness " + ev + " · Contract " + contract + " · " + fresh }));
+    if (o.what_is_missing) {
+      card.appendChild(el("p", { class: "chart-hint", text: "Missing " + o.what_is_missing }));
+    }
     const starC = el("button", { type: "button", class: "secondary watch-pin", text: watched ? "WATCHED" : "WATCH" });
     if (!mobile) {
       disableWatchControl(starC);

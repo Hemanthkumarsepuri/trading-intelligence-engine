@@ -270,6 +270,17 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
     strike = assessment.get("strike") if assessment else payload.get("parsed_strike")
     right = assessment.get("right") if assessment else payload.get("parsed_right")
     kind = _kind_from_analyze_payload(payload, right, strike)
+    expiry = _norm(payload.get("parsed_expiry_hint")) or _norm(requested.get("expiry")) or _norm(
+        _as_mapping(visual.get("option_chain")).get("expiry")
+    )
+    dte = payload.get("dte") if isinstance(payload.get("dte"), int) else None
+    if dte is None and expiry:
+        for row in _as_sequence(_as_mapping(visual.get("term_structure")).get("expiries")):
+            if not isinstance(row, dict):
+                continue
+            if _norm(row.get("expiry")) == expiry and isinstance(row.get("days_remaining"), int):
+                dte = row["days_remaining"]
+                break
     return ObservationSnapshot(
         observation_id=_norm(payload.get("audit_id")),
         observation_timestamp=obs_ts,
@@ -290,8 +301,8 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
         instrument_type=kind.value,
         option_type=_norm(right),
         strike=_dec(strike),
-        expiry=_norm(payload.get("parsed_expiry_hint")),
-        dte=payload.get("dte") if isinstance(payload.get("dte"), int) else None,
+        expiry=expiry,
+        dte=dte,
         ltp=_dec(assessment.get("ltp")),
         bid=_dec(assessment.get("bid")),
         ask=_dec(assessment.get("ask")),
