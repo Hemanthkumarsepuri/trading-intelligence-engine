@@ -581,6 +581,9 @@ def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> Non
     assert "EXPLICIT · ANALYSING" in html or "SELECTED SYMBOLS" in html
     assert "F&O UNIVERSE" in html
     assert "NO LATEST MARKET SCAN" in html
+    assert "Indian Market Options Intelligence" in html
+    assert "What TIRE has observed" in html
+    assert "surface-workspace" in html
     assert "ANALYSIS GENERATED" in html
     assert "if (analyzingQuery !== wanted)" in html
     # Per-stream glance times come from the observed-market payload.

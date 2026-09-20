@@ -59,6 +59,15 @@
     font-size: 13px;
     line-height: 1.45;
   }
+  .surface-chrome { background: #101318; }
+  .surface-market { background: #101318; border-bottom: 1px solid var(--border); }
+  .surface-workspace {
+    background: #10141a;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 16px 20px;
+  }
+  .surface-table-head { background: #14181f; }
   header {
     padding: 10px 20px;
     border-bottom: 1px solid var(--border);
@@ -226,6 +235,8 @@
     padding: 0 16px;
     display: flex;
     align-items: center;
+    background: #101318;
+    border-bottom: 1px solid var(--border);
   }
   header.app-chrome .chrome-row {
     display: flex;
@@ -234,8 +245,19 @@
     width: 100%;
     flex-wrap: nowrap;
   }
+  header.app-chrome .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   header.app-chrome h1 { font-size: 13px; letter-spacing: 0.16em; font-weight: 600; }
-  header.app-chrome .sub { display: none; }
+  header.app-chrome .sub {
+    display: inline;
+    margin: 0;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .chrome-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .session-pill, .data-pill {
     display: inline-flex;
@@ -277,12 +299,13 @@
     gap: 12px;
     max-width: var(--max);
     margin: 0 auto;
-    padding: 14px 16px 4px;
-    background: var(--bg);
-    border-bottom: 0;
+    padding: 12px 16px 14px;
+    background: #101318;
+    border-bottom: 1px solid var(--border);
   }
-  .glance-cell { min-width: 0; background: transparent; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; }
+  .glance-cell { min-width: 0; background: transparent; border: 1px solid transparent; border-radius: var(--radius); padding: 6px 8px; text-align: left; color: inherit; font: inherit; }
   .glance-cell.clickable { cursor: pointer; }
+  .glance-cell.clickable:hover { border-color: var(--border); background: #14181f; }
   .glance-cell.clickable:focus { outline: 1px solid var(--accent); outline-offset: 2px; }
   .glance-cell .k { color: var(--ink-faint); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
   .glance-cell .v { font-family: var(--mono); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -313,8 +336,10 @@
   #header-badges { display: none; }
   #system-status { display: none; }
   .screener-toolbar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 12px 0 16px; }
-  .screener-toolbar h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  .screener-toolbar h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
   .screener-toolbar .note { color: var(--muted); font-size: 12px; width: 100%; }
+  .screener-lead { width: 100%; margin: 0 0 4px; color: var(--muted); font-size: 12px; max-width: 42em; }
+  .last-scan-meta { width: 100%; margin: 0 0 8px; color: var(--muted); font-size: 11px; letter-spacing: 0.03em; }
   .screener-toolbar input[type="search"], .screener-toolbar select {
     height: 32px; flex: 1 1 160px; min-width: 0;
     background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
@@ -324,6 +349,7 @@
   table.screener th {
     text-align: left; font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
     color: var(--ink-faint); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border);
+    background: #14181f;
   }
   table.screener td { padding: 11px 10px; vertical-align: middle; border-bottom: 1px solid var(--border); }
   table.screener td:nth-child(1) { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; }
@@ -359,6 +385,7 @@
   }
   @media (max-width: 720px) {
     header.app-chrome { height: auto; min-height: 48px; padding: 8px 12px; }
+    header.app-chrome .sub { display: none; }
     header.app-chrome .chrome-row { flex-wrap: wrap; gap: 8px; }
     .primary-nav { order: 3; width: 100%; }
     .primary-nav button { flex: 1; min-height: 32px; }
@@ -377,9 +404,9 @@
 <body>
 <header class="app-chrome">
   <div class="chrome-row">
-    <div>
+    <div class="brand">
       <h1>TIRE</h1>
-      <p class="sub">Indian Market Intelligence — read-only research terminal — no order execution</p>
+      <p class="sub">Indian Market Options Intelligence</p>
     </div>
     <div class="chrome-meta">
       <span class="session-pill" id="session-pill" title="NSE calendar plus IST clock. Not a live exchange ping.">Session …</span>
@@ -399,8 +426,8 @@
   <div id="system-status" class="status-row"></div>
 </header>
 <div class="market-glance" id="market-glance" aria-label="Market at a glance">
-  <button type="button" class="glance-cell clickable" data-analyze="NIFTY"><div class="k">Nifty</div><div class="v" id="glance-nifty">UNAVAILABLE</div><div class="d" id="glance-nifty-d">not observed yet</div></button>
-  <button type="button" class="glance-cell clickable" data-analyze="BANKNIFTY"><div class="k">Banknifty</div><div class="v" id="glance-banknifty">UNAVAILABLE</div><div class="d" id="glance-banknifty-d">not observed yet</div></button>
+  <button type="button" class="glance-cell clickable" data-analyze="NIFTY"><div class="k">NIFTY</div><div class="v" id="glance-nifty">UNAVAILABLE</div><div class="d" id="glance-nifty-d">not observed yet</div></button>
+  <button type="button" class="glance-cell clickable" data-analyze="BANKNIFTY"><div class="k">BANKNIFTY</div><div class="v" id="glance-banknifty">UNAVAILABLE</div><div class="d" id="glance-banknifty-d">not observed yet</div></button>
   <button type="button" class="glance-cell clickable" data-analyze="INDIA VIX"><div class="k">India VIX</div><div class="v" id="glance-vix">UNAVAILABLE</div><div class="d" id="glance-vix-d">not observed yet</div></button>
   <div class="glance-cell"><div class="k">Breadth</div><div class="v" id="glance-breadth">UNAVAILABLE</div><div class="d" id="glance-breadth-d">sample only when observed</div></div>
   <div class="glance-cell"><div class="k">Session</div><div class="v" id="glance-session">…</div><div class="d" id="glance-session-d">calendar + IST clock</div></div>
@@ -414,14 +441,16 @@
        research-priority ordering, never a recommendation: the real
        ACTIONABILITY shown per opportunity is copied verbatim from that
        symbol's own decision engine result, never upgraded here. -->
-  <section id="daily-research">
+  <section id="daily-research" class="surface-workspace">
     <div class="screener-toolbar">
       <h1>Screener</h1>
+      <p class="screener-lead">What TIRE has observed. Latest research observations from the selected market universe.</p>
       <p class="note" id="source-note">Latest market scan only — not a prediction, not BUY/SELL</p>
       <p class="hint" id="market-status-line" hidden>Market Status: loading…</p>
-      <p class="hint" id="last-scan-line" hidden>Last scan: none yet</p>
+      <p class="last-scan-meta" id="last-scan-line">LAST SCAN — none yet</p>
       <p class="hint" id="scan-progress-line" hidden>Ready to scan the market</p>
-      <input id="screener-search" type="search" placeholder="RELIANCE" autocomplete="off" aria-label="Search symbols">
+      <input id="screener-search" type="search" placeholder="Search symbol" autocomplete="off" aria-label="Search symbols">
+      <button type="button" id="research-btn">RUN MARKET SCAN</button>
       <select id="screener-sort" aria-label="Sort screener">
         <option value="symbol">Sort: symbol</option>
         <option value="state">Sort: state</option>
@@ -459,11 +488,8 @@
         <option value="STALE">Stale</option>
       </select>
     </div>
-    <div class="watch-bar" id="personal-watchlist" hidden></div>
+    <div class="watch-bar" id="personal-watchlist"></div>
     <div id="screener-table-host"></div>
-    <div class="search-row" style="margin-top:16px">
-      <button id="research-btn">RUN MARKET SCAN</button>
-    </div>
     <details id="scan-details">
     <summary>Scan options</summary>
     <p class="hint">Blank symbols = whole F&amp;O universe — not a prediction, not BUY/SELL. Named symbols run the same research pipeline, not invented rows.</p>
@@ -1055,7 +1081,7 @@ function formatObservedCell(cell) {
     return { v: "UNAVAILABLE", d: (cell && cell.unavailable_reason) || "no trustworthy observation" };
   }
   const n = Number(cell.last_price);
-  const price = Number.isFinite(n) ? n.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : String(cell.last_price);
+  const price = Number.isFinite(n) ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(cell.last_price);
   let move = "";
   if (cell.day_change_pct !== null && cell.day_change_pct !== undefined) {
     const p = Number(cell.day_change_pct);
@@ -1065,7 +1091,7 @@ function formatObservedCell(cell) {
   const fresh = cell.freshness_label && cell.freshness_label !== "MARKET_CLOSED" && cell.freshness_label !== "LIVE"
     ? cell.freshness_label.replace(/_/g, " ")
     : "";
-  return { v: price, d: [move, cell.observed_at_ist, kind, fresh].filter(Boolean).join(" · ") };
+  return { v: price, d: [move, kind, cell.observed_at_ist, fresh].filter(Boolean).join(" · ") };
 }
 
 function applyObservedMarket(data) {
@@ -1104,9 +1130,12 @@ function renderPersonalWatch() {
   if (!host) return;
   const list = loadPersonalWatch();
   host.innerHTML = "";
-  if (!list.length) { host.hidden = true; return; }
   host.hidden = false;
   host.appendChild(el("span", { class: "chip-label", text: "MY WATCHLIST" }));
+  if (!list.length) {
+    host.appendChild(el("span", { class: "hint", text: "Personal symbols only — not a recommendation. Star a row to save." }));
+    return;
+  }
   list.forEach((sym) => {
     const row = screenerRows.find((o) => o.symbol === sym);
     const btn = el("button", { type: "button", class: "watch-chip", text: row
@@ -1206,8 +1235,9 @@ function renderScreenerTable() {
   }
   if (!lastDiscoverResult) {
     const empty = el("div", { class: "empty-state" });
+    empty.appendChild(el("p", { class: "chip-label", text: "LATEST SCAN" }));
     empty.appendChild(el("h3", { text: "NO LATEST MARKET SCAN" }));
-    empty.appendChild(el("p", { class: "hint", text: "Run Market Scan to populate the screener. Rows are never invented." }));
+    empty.appendChild(el("p", { class: "hint", text: "Run a scan to populate current observations. Rows are never invented." }));
     const run = el("button", { type: "button", text: "RUN MARKET SCAN" });
     run.addEventListener("click", () => document.getElementById("research-btn").click());
     empty.appendChild(run);
@@ -1658,7 +1688,7 @@ function updateScanProgress(job) {
   if (!line) return;
   if (!job || job.status === "NONE") {
     line.textContent = "Ready to scan the market";
-    if (last) last.textContent = "Last scan: none yet";
+    if (last) last.textContent = "LAST SCAN — none yet";
     return;
   }
   if (job.status === "QUEUED" || job.status === "RUNNING") {
@@ -1700,8 +1730,13 @@ function updateScanProgress(job) {
   line.textContent = selected
     ? ("Scan complete · " + modeLabel + " · " + selected + " selected · " + returned + " observations")
     : ("Scan complete · " + modeLabel);
-  if (last && job.result && job.result.generated_at) {
-    last.textContent = "Last scan (" + modeLabel + "): " + new Date(job.result.generated_at).toLocaleString();
+  if (last) {
+    const when = (job.result && job.result.generated_at)
+      ? new Date(job.result.generated_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " IST"
+      : "";
+    last.textContent = ("LAST SCAN" + (when ? " · " + when : "") + " · MODE: " + modeLabel
+      + (selected ? (" · " + selected + " SYMBOLS") : "")
+      + " · " + returned + " OBSERVATION" + (returned === 1 ? "" : "S"));
   }
 }
 
