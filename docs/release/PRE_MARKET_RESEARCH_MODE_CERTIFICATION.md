@@ -59,7 +59,25 @@ T0 remains immutable. Closed-market re-analysis does not rewrite T0. Scope seman
 
 ## Production verification
 
-Filled after Railway/Netlify deploy in this sprint.
+Railway deployment: `868f8548-1280-438c-ae3d-493a8d57d225` SUCCESS.  
+Netlify: `6aafcb372630dac5966f4678`.  
+Frontend: https://tire-research-terminal.netlify.app  
+API: https://api-production-983e.up.railway.app
+
+| Check | Result |
+| --- | --- |
+| Health | 200, `broker_execution=impossible`, `qwen_enabled=false`, `data_root=/data` |
+| Session | CLOSED, research_session_mode CLOSED, observation_kind LAST_OBSERVED |
+| Next session | 21 Sep 2026 · 09:15 IST |
+| POST `/api/research/jobs/discover` | 409 LIVE DISCOVER UNAVAILABLE — MARKET CLOSED |
+| Analyze `RELIANCE 1270 PE` | 200, CONFLICT, MARKET_CLOSED_LATEST_DATA, session LAST_OBSERVED |
+| Observed expiry | option_chain and requested_contract **2026-09-29**; parsed_expiry_hint null |
+| MCP 1440 / ~1280 / 390 / 360 | no horizontal overflow; MARKET CLOSED; RESEARCH MODE PRE-MARKET; scan button disabled |
+| Last observed quote | RELIANCE ₹1226.40 · 18 Sep · not CURRENT PRICE |
+| Contract | PE 1270 2026-09-29 last observed LTP/OI/IV/bid/ask |
+| Localhost / mixed content | absent |
+| BUY/SELL buttons | none |
+| Gate 1 harness | exit 2 PENDING — MARKET CLOSED |
 
 ## Known limitations
 
