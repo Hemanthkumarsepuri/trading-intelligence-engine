@@ -9,7 +9,7 @@ Production:
 
 - Frontend: https://tire-research-terminal.netlify.app
 - API: https://api-production-983e.up.railway.app
-- Railway deployment at audit start: `ba3628eb-76a7-46d8-860c-6009c86bea47`
+- Railway deployment: `59ff794c-59a4-4e35-8195-52d8df71af1d` (this sprint)
 - Provider: Upstox read-only. `broker_execution=impossible`. `QWEN_ENABLED=false`. `TIRE_DATA_ROOT=/data`.
 
 ## 1. Market session
@@ -72,7 +72,7 @@ Rows expose symbol, research state, day move, pattern, evidence completeness (`r
 
 **PASS** for closed-session last print of **RELIANCE 1270 PE** (prior Watch v1 cert). **PENDING** for live CE/PE/ATM/OTM/expiry matrix.
 
-Expiry: engine had term structure `2026-09-29` and `2026-10-27`. T0 previously left expiry null rather than guessing `expiries[0]` — correct honesty, incomplete wiring. After this fix, T0 may show the **fetched chain expiry** when the visual carries it. Still never inferred from the first term-structure row.
+Expiry: production `POST /api/analyze` `RELIANCE 1270 PE` after `ab9d717` returned `visual.option_chain.expiry` = `visual.requested_contract.expiry` = **2026-09-29** while `parsed_expiry_hint` remained null. That is the fetched chain expiry, not `term_structure.expiries[0]` guessing. Market state `MARKET_CLOSED_LATEST_DATA`. Live CE/PE matrix **PENDING**.
 
 ## 6. Observation Watch
 
@@ -110,7 +110,7 @@ Live full-scan latency **PENDING**. Prior measured architecture (docs, 16 Sep 20
 
 ## 11. Browser / MCP
 
-Prior Watch v1 MCP **PASS** (four viewports, 0 uncaught JS, 0 localhost). This sprint’s frontend copy change (Completeness / Missing) requires a Netlify deploy to appear in production; re-verify after that deploy.
+Prior Watch v1 MCP **PASS**. This sprint (Netlify `6aafc538941aa8425b985d3b`): four viewports on `#screener` after deploy — see MCP log. Empty scan state is honest (`NO LATEST MARKET SCAN`). 0 localhost. Replay 404 on Patterns remains expected if visited.
 
 ## 12. Safety
 
