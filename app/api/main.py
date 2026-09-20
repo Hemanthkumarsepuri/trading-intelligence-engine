@@ -69,6 +69,7 @@ from app.domain.market.trading_calendar import (
     classify_session,
     classify_session_window,
 )
+from app.domain.research.watch_record import same_instrument_scope
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.llm.qwen_narrative import QwenNarrativeAdapter
 from app.orchestration.daily_research import (
@@ -512,7 +513,13 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
                     if existing is not None:
                         obs = observation_from_client(response.model_dump(mode="json"), kind="analyze")
                         if obs is not None:
-                            await ResearchWatchService(watch_repo).update_latest(existing.watch_id, obs)
+                            t0 = existing.t0
+                            if (
+                                t0 is None
+                                or existing.t0_unavailable
+                                or same_instrument_scope(t0, obs)
+                            ):
+                                await ResearchWatchService(watch_repo).update_latest(existing.watch_id, obs)
                 except Exception:
                     logging.getLogger(__name__).exception("watch latest refresh failed for %s", response.symbol)
         return response
@@ -1035,6 +1042,21 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
     async def list_research_watches() -> dict[str, object]:
         service = _watch_service()
         views = await service.list_watches()
+        outcome_repository = getattr(app.state, "outcome_repository", None)
+        if outcome_repository is not None:
+            enriched = []
+            for view in views:
+                oid = view.t0.observation_id if view.t0 is not None else None
+                labels: list[str] = []
+                if oid:
+                    try:
+                        checkpoints = await outcome_repository.query_checkpoints_for_observation(oid)
+                        labels = [c.checkpoint_label.value for c in checkpoints]
+                    except Exception:
+                        logging.getLogger(__name__).exception("watch outcome labels failed for %s", oid)
+                        labels = []
+                enriched.append(view.model_copy(update={"outcome_checkpoint_labels": labels}))
+            views = enriched
         return {"watches": [v.model_dump(mode="json") for v in views]}
 
     @app.post("/api/research/watches/migrate")

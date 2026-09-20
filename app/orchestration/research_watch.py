@@ -16,6 +16,7 @@ from app.domain.research.watch_record import (
     WatchEventKind,
     WatchRecord,
     compare_snapshots,
+    material_watch_changes,
     new_watch_id,
     snapshot_from_analyze_payload,
     snapshot_from_screener_row,
@@ -149,6 +150,9 @@ class ResearchWatchService:
             and observation.observation_timestamp < t0.observation_timestamp
         ):
             return view_from_record(record)
+        previous = record.latest or t0
+        if previous is not None and not material_watch_changes(previous, observation):
+            return view_from_record(record)
         await self._repository.append_event(
             WatchEvent(
                 kind=WatchEventKind.LATEST_UPDATED,
@@ -196,6 +200,9 @@ class ResearchWatchService:
 
 def observation_from_client(payload: dict[str, object] | None, *, kind: str) -> ObservationSnapshot | None:
     if not payload:
+        return None
+    err = payload.get("error")
+    if isinstance(err, str) and err.strip():
         return None
     if kind == "analyze":
         return snapshot_from_analyze_payload(payload)

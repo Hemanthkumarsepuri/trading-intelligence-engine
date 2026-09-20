@@ -92,6 +92,20 @@ def test_invalid_symbol_without_observation(tmp_path: Path) -> None:
     assert "UNAVAILABLE" in resp.json()["detail"]
 
 
+def test_error_observation_payload_does_not_create_watch(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    resp = client.post(
+        "/api/research/watches",
+        json={
+            "symbol": "ZZZXNOTREAL",
+            "snapshot_kind": "analyze",
+            "observation": {"symbol": "ZZZXNOTREAL", "error": "not found in the real Upstox instrument master"},
+        },
+    )
+    assert resp.status_code == 400
+    assert client.get("/api/research/watches").json()["watches"] == []
+
+
 def test_migrate_legacy(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     resp = client.post(

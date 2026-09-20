@@ -29,11 +29,23 @@ class WatchEventKind(str, Enum):
     REMOVED = "REMOVED"
 
 
+class ObservationInstrumentKind(str, Enum):
+    """What was observed — not inferred trader intent."""
+
+    UNDERLYING = "UNDERLYING"
+    OPTION_CONTRACT = "OPTION_CONTRACT"
+    FUTURES_CONTRACT = "FUTURES_CONTRACT"
+
+
 class WatchChangeCategory(str, Enum):
     NO_MATERIAL_CHANGE = "NO_MATERIAL_CHANGE"
     STATE_CHANGED = "STATE_CHANGED"
     PATTERN_CHANGED = "PATTERN_CHANGED"
     DIRECTION_CHANGED = "DIRECTION_CHANGED"
+    OBSERVATION_SCOPE_CHANGED = "OBSERVATION_SCOPE_CHANGED"
+    STRIKE_CHANGED = "STRIKE_CHANGED"
+    EXPIRY_CHANGED = "EXPIRY_CHANGED"
+    OPTION_TYPE_CHANGED = "OPTION_TYPE_CHANGED"
     CONTRACT_CHANGED = "CONTRACT_CHANGED"
     CONTRACT_DEGRADED = "CONTRACT_DEGRADED"
     FRESHNESS_DEGRADED = "FRESHNESS_DEGRADED"
@@ -69,6 +81,7 @@ class ObservationSnapshot(BaseModel):
     confirmation_condition: str | None = None
     invalidation_condition: str | None = None
     underlying: str | None = None
+    instrument_type: str | None = None
     option_type: str | None = None
     strike: str | None = None
     expiry: str | None = None
@@ -156,6 +169,69 @@ def _as_sequence(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def infer_instrument_kind(
+    *,
+    instrument_type: str | None = None,
+    option_type: str | None = None,
+    strike: str | None = None,
+    has_specific_contract: bool | None = None,
+) -> ObservationInstrumentKind:
+    """Derive scope from fields that were actually present. Never invents expiry."""
+    stored = _norm(instrument_type)
+    if stored in {kind.value for kind in ObservationInstrumentKind}:
+        return ObservationInstrumentKind(stored)
+    right = (_norm(option_type) or "").upper()
+    if right in {"FUT", "FUTURE", "FUTURES"}:
+        return ObservationInstrumentKind.FUTURES_CONTRACT
+    if right in {"CE", "PE"} or _norm(strike) or has_specific_contract is True:
+        return ObservationInstrumentKind.OPTION_CONTRACT
+    return ObservationInstrumentKind.UNDERLYING
+
+
+def instrument_kind_of(snapshot: ObservationSnapshot) -> ObservationInstrumentKind:
+    return infer_instrument_kind(
+        instrument_type=snapshot.instrument_type,
+        option_type=snapshot.option_type,
+        strike=snapshot.strike,
+    )
+
+
+def scope_label(snapshot: ObservationSnapshot) -> str:
+    kind = instrument_kind_of(snapshot)
+    underlying = snapshot.underlying or ""
+    if kind is ObservationInstrumentKind.OPTION_CONTRACT:
+        parts = [underlying, snapshot.strike or "", snapshot.option_type or "", snapshot.expiry or ""]
+        return " ".join(part for part in parts if part) or underlying
+    if kind is ObservationInstrumentKind.FUTURES_CONTRACT:
+        parts = [underlying, "FUT", snapshot.expiry or ""]
+        return " ".join(part for part in parts if part)
+    return underlying or ObservationInstrumentKind.UNDERLYING.value
+
+
+def same_instrument_scope(t0: ObservationSnapshot, latest: ObservationSnapshot) -> bool:
+    """True when latest is the same observed instrument as T0 (expiry may still fill in)."""
+    if instrument_kind_of(t0) != instrument_kind_of(latest):
+        return False
+    if (t0.underlying or "").upper() != (latest.underlying or "").upper():
+        return False
+    kind = instrument_kind_of(t0)
+    if kind is ObservationInstrumentKind.OPTION_CONTRACT:
+        return _norm(t0.option_type) == _norm(latest.option_type) and _norm(t0.strike) == _norm(latest.strike)
+    if kind is ObservationInstrumentKind.FUTURES_CONTRACT:
+        if t0.expiry is None or latest.expiry is None:
+            return True
+        return _norm(t0.expiry) == _norm(latest.expiry)
+    return True
+
+
+def _kind_from_analyze_payload(payload: dict[str, Any], right: object | None, strike: object | None) -> ObservationInstrumentKind:
+    return infer_instrument_kind(
+        option_type=_norm(right),
+        strike=_dec(strike) if strike is not None else None,
+        has_specific_contract=payload.get("has_specific_contract") if isinstance(payload.get("has_specific_contract"), bool) else None,
+    )
+
+
 def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapshot:
     """Build T0/current from an AnalyzeResponse JSON object (or equivalent)."""
     visual = _as_mapping(payload.get("visual"))
@@ -193,6 +269,7 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
     obs_ts = _dt(payload.get("market_observed_at")) or _dt(payload.get("generated_at"))
     strike = assessment.get("strike") if assessment else payload.get("parsed_strike")
     right = assessment.get("right") if assessment else payload.get("parsed_right")
+    kind = _kind_from_analyze_payload(payload, right, strike)
     return ObservationSnapshot(
         observation_id=_norm(payload.get("audit_id")),
         observation_timestamp=obs_ts,
@@ -210,6 +287,7 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
         confirmation_condition=confirm,
         invalidation_condition=invalidate,
         underlying=_norm(payload.get("symbol")),
+        instrument_type=kind.value,
         option_type=_norm(right),
         strike=_dec(strike),
         expiry=_norm(payload.get("parsed_expiry_hint")),
@@ -232,6 +310,9 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
 def snapshot_from_screener_row(row: dict[str, Any]) -> ObservationSnapshot:
     """Weaker T0 from a scan card — still a real observation, not a fabricated one."""
     observed = _dt(row.get("observed_at")) or _dt(row.get("generated_at"))
+    strike = _norm(row.get("selected_strike")) or _norm(row.get("strike"))
+    option_type = _norm(row.get("option_type")) or _norm(row.get("right"))
+    kind = infer_instrument_kind(option_type=option_type, strike=strike)
     return ObservationSnapshot(
         observation_id=_norm(row.get("audit_id")),
         observation_timestamp=observed,
@@ -249,8 +330,9 @@ def snapshot_from_screener_row(row: dict[str, Any]) -> ObservationSnapshot:
         confirmation_condition=_norm(row.get("what_would_confirm")),
         invalidation_condition=_norm(row.get("what_invalidates")),
         underlying=_norm(row.get("symbol")),
-        option_type=None,
-        strike=_norm(row.get("selected_strike")) or _norm(row.get("strike")),
+        instrument_type=kind.value,
+        option_type=option_type,
+        strike=strike,
         expiry=_norm(row.get("expiry")),
         dte=row.get("dte") if isinstance(row.get("dte"), int) else None,
         liquidity_state=_norm(row.get("liquidity_grade")),
@@ -262,9 +344,26 @@ _DEGRADED_FRESHNESS = {"STALE", "RED", "EXPIRED"}
 
 
 def compare_snapshots(t0: ObservationSnapshot | None, latest: ObservationSnapshot | None) -> list[WatchChange]:
-    """Deterministic field diff. No AI, no scores, no inferred intent."""
+    """Deterministic field diff. No AI, no scores, no inferred intent.
+
+    Instrument-kind changes are OBSERVATION_SCOPE_CHANGED, never CONTRACT_CHANGED.
+    Same-option strike / right / expiry are their own categories. CONTRACT_* is
+    liquidity/usability of the same observed instrument.
+    """
     if t0 is None or latest is None:
         return []
+    kind_t0 = instrument_kind_of(t0)
+    kind_latest = instrument_kind_of(latest)
+    if kind_t0 != kind_latest:
+        return [
+            WatchChange(
+                category=WatchChangeCategory.OBSERVATION_SCOPE_CHANGED,
+                field="instrument_type",
+                before=scope_label(t0) or kind_t0.value,
+                after=scope_label(latest) or kind_latest.value,
+            )
+        ]
+
     changes: list[WatchChange] = []
 
     def add(category: WatchChangeCategory, field: str, before: object | None, after: object | None) -> None:
@@ -278,9 +377,12 @@ def compare_snapshots(t0: ObservationSnapshot | None, latest: ObservationSnapsho
     add(WatchChangeCategory.PATTERN_CHANGED, "pattern", t0.pattern, latest.pattern)
     add(WatchChangeCategory.DIRECTION_CHANGED, "direction", t0.direction, latest.direction)
     add(WatchChangeCategory.CONTRACT_CHANGED, "contract_state", t0.contract_state, latest.contract_state)
-    add(WatchChangeCategory.CONTRACT_CHANGED, "strike", t0.strike, latest.strike)
-    add(WatchChangeCategory.CONTRACT_CHANGED, "option_type", t0.option_type, latest.option_type)
-    add(WatchChangeCategory.CONTRACT_CHANGED, "expiry", t0.expiry, latest.expiry)
+    if kind_t0 is ObservationInstrumentKind.OPTION_CONTRACT:
+        add(WatchChangeCategory.STRIKE_CHANGED, "strike", t0.strike, latest.strike)
+        add(WatchChangeCategory.OPTION_TYPE_CHANGED, "option_type", t0.option_type, latest.option_type)
+        add(WatchChangeCategory.EXPIRY_CHANGED, "expiry", t0.expiry, latest.expiry)
+    elif kind_t0 is ObservationInstrumentKind.FUTURES_CONTRACT:
+        add(WatchChangeCategory.EXPIRY_CHANGED, "expiry", t0.expiry, latest.expiry)
     after_f = (latest.freshness or "").upper()
     before_f = (t0.freshness or "").upper()
     if after_f != before_f and any(token in after_f for token in _DEGRADED_FRESHNESS) and not any(
@@ -373,8 +475,11 @@ def compare_snapshots(t0: ObservationSnapshot | None, latest: ObservationSnapsho
                 after=latest.observation_id,
             )
         ]
-    # Do not also emit NO_MATERIAL_CHANGE when real diffs exist.
     return [c for c in changes if c.category != WatchChangeCategory.NO_MATERIAL_CHANGE]
+
+
+def material_watch_changes(t0: ObservationSnapshot | None, latest: ObservationSnapshot | None) -> list[WatchChange]:
+    return [c for c in compare_snapshots(t0, latest) if c.category != WatchChangeCategory.NO_MATERIAL_CHANGE]
 
 
 def fold_events(events: list[WatchEvent]) -> dict[str, WatchRecord]:
@@ -408,7 +513,14 @@ def fold_events(events: list[WatchEvent]) -> dict[str, WatchRecord]:
             if not _latest_is_not_lookahead(existing.t0, latest):
                 continue
             evo = list(existing.evolution)
-            if not evo or evo[-1].observation_id != latest.observation_id or evo[-1].research_state != latest.research_state:
+            if (
+                (material_watch_changes(existing.latest, latest) or material_watch_changes(existing.t0, latest))
+                and (
+                    not evo
+                    or evo[-1].observation_id != latest.observation_id
+                    or evo[-1].research_state != latest.research_state
+                )
+            ):
                 evo.append(latest)
             records[event.watch_id] = existing.model_copy(update={"latest": latest, "evolution": evo})
     return records

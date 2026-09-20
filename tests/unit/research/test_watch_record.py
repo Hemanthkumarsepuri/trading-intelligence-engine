@@ -125,6 +125,7 @@ def test_snapshot_from_analyze_payload_uses_audit_and_market_time() -> None:
     assert snap.option_type == "PE"
     assert snap.strike == "1270"
     assert snap.oi == 2000
+    assert snap.instrument_type == "OPTION_CONTRACT"
     assert snap.observation_timestamp is not None
     assert snap.observation_timestamp < snap.generated_at  # type: ignore[operator]
 
@@ -238,5 +239,55 @@ def test_jsonl_skips_corrupt_lines(tmp_path: Path) -> None:
         listed = await ResearchWatchService(JsonlWatchRecordRepository(tmp_path)).list_watches()
         assert len(listed) == 1
         assert listed[0].symbol == "RELIANCE"
+
+    asyncio.run(_run())
+
+
+def test_synthetic_scope_option_vs_underlying_is_not_contract_changed() -> None:
+    """Synthetic fixture: RELIANCE 1270 PE vs RELIANCE underlying."""
+    option = _snap()
+    underlying = ObservationSnapshot(
+        observation_id="und1",
+        observation_timestamp=T0,
+        research_state="EARLY_SETUP",
+        underlying="RELIANCE",
+        instrument_type="UNDERLYING",
+    )
+    cats = {c.category for c in compare_snapshots(option, underlying)}
+    assert cats == {WatchChangeCategory.OBSERVATION_SCOPE_CHANGED}
+    assert WatchChangeCategory.CONTRACT_CHANGED not in cats
+    assert WatchChangeCategory.CONTRACT_DEGRADED not in cats
+
+
+def test_synthetic_same_option_strike_expiry_right_categories() -> None:
+    """Synthetic fixture: same option kind, identity fields change separately."""
+    t0 = _snap()
+    strike = _snap(observation_id="s2")
+    strike = strike.model_copy(update={"strike": "1280"})
+    cats = {c.category for c in compare_snapshots(t0, strike)}
+    assert WatchChangeCategory.STRIKE_CHANGED in cats
+    assert WatchChangeCategory.OBSERVATION_SCOPE_CHANGED not in cats
+    right = t0.model_copy(update={"option_type": "CE", "observation_id": "ce"})
+    cats = {c.category for c in compare_snapshots(t0, right)}
+    assert WatchChangeCategory.OPTION_TYPE_CHANGED in cats
+    expiry = t0.model_copy(update={"expiry": "2026-09-30", "observation_id": "exp"})
+    cats = {c.category for c in compare_snapshots(t0, expiry)}
+    assert WatchChangeCategory.EXPIRY_CHANGED in cats
+
+
+def test_no_material_latest_does_not_append(tmp_path: Path) -> None:
+    service = ResearchWatchService(JsonlWatchRecordRepository(tmp_path))
+
+    async def _run() -> None:
+        created = await service.create(
+            symbol="RELIANCE", query="RELIANCE 1270 PE", observation=_snap(), t0_unavailable=False
+        )
+        same_print = _snap(observation_id="obs-reanalyze")
+        updated = await service.update_latest(created.watch_id, same_print)
+        assert updated.t0 is not None
+        assert updated.t0.observation_id == "obs1"
+        assert updated.latest is not None
+        assert updated.latest.observation_id == "obs1"
+        assert updated.changes[0].category == WatchChangeCategory.NO_MATERIAL_CHANGE
 
     asyncio.run(_run())

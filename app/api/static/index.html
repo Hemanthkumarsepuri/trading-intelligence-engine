@@ -392,6 +392,7 @@
     .market-glance { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 12px 0; }
     table.screener, table.history-desktop { display: none; pointer-events: none; }
     table.screener button { pointer-events: none; }
+    table.screener .watch-pin { pointer-events: none; }
     .history-cards, .screener-cards { display: block; }
     .screener-cards .watch-pin { min-height: 36px; min-width: 72px; }
     .screener-cards .simple-card { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 12px 0; }
@@ -1150,8 +1151,26 @@ function formatWatchWhen(iso) {
 }
 function contractLine(snap) {
   if (!snap) return "";
-  const bits = [snap.underlying || "", snap.strike || "", snap.option_type || ""].filter(Boolean);
+  const kind = snap.instrument_type || "";
+  if (kind === "UNDERLYING") return (snap.underlying || "") + " UNDERLYING";
+  const bits = [snap.underlying || "", snap.strike || "", snap.option_type || "", snap.expiry || ""].filter(Boolean);
+  if (kind === "FUTURES_CONTRACT") return [snap.underlying || "", "FUT", snap.expiry || ""].filter(Boolean).join(" ");
   return bits.join(" ");
+}
+function watchScopeLine(w) {
+  const snap = (w && (w.t0 || w.latest)) || null;
+  if (w && w.query) {
+    const line = contractLine(snap);
+    if (line && w.query !== line) return line + " · " + w.query;
+    return w.query;
+  }
+  return contractLine(snap);
+}
+function disableWatchControl(btn) {
+  btn.disabled = true;
+  btn.tabIndex = -1;
+  btn.setAttribute("aria-hidden", "true");
+  btn.setAttribute("inert", "");
 }
 async function refreshWatches() {
   try {
@@ -1224,13 +1243,14 @@ function renderWatchedChanges() {
       return;
     }
     changed.forEach((w) => {
-      const t0s = (w.t0 && w.t0.research_state) || (w.t0_unavailable ? "T0 UNAVAILABLE" : "n/a");
-      const nows = (w.latest && w.latest.research_state) || "n/a";
-      const cats = watchMaterialChanges(w).map((c) => c.category.replace(/_/g, " ")).join(" · ");
-      const btn = el("button", { type: "button", class: "watch-chip", text: w.symbol + " " + stateLabel(t0s) + " → " + stateLabel(nows) });
+      const material = watchMaterialChanges(w);
+      const first = material[0] || {};
+      const btn = el("button", { type: "button", class: "watch-chip", text: watchScopeLine(w) + " " + String(first.category || "").replace(/_/g, " ") });
       btn.addEventListener("click", () => openSymbol(w.symbol));
       host.appendChild(btn);
-      host.appendChild(el("span", { class: "hint", text: cats }));
+      material.forEach((c) => {
+        host.appendChild(el("span", { class: "hint", text: (c.field || "") + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") + (w.latest && w.latest.observation_timestamp ? " · " + formatWatchWhen(w.latest.observation_timestamp) : "") }));
+      });
     });
   });
 }
@@ -1257,21 +1277,25 @@ function renderWatchlistWorkspace() {
     title.appendChild(document.createTextNode(w.symbol + " "));
     title.appendChild(el("span", { class: "state-tag", text: headline }));
     card.appendChild(title);
-    card.appendChild(el("p", { class: "chart-hint", text: contractLine(t0 || now) + (w.query ? " · " + w.query : "") }));
+    card.appendChild(el("p", { class: "chart-hint", text: "WHAT I PINNED  " + watchScopeLine(w) }));
+    card.appendChild(el("p", { class: "chart-hint", text: "WHY (AT T0)  " + ((t0 && (t0.evidence_summary || t0.missing_confirmation)) || "n/a") }));
     card.appendChild(el("p", { class: "chart-hint", text: "WATCHED AT " + formatWatchWhen(w.created_at) + " · journal time and market observation time are not relabelled" }));
-    card.appendChild(el("p", { text: "T0  " + stateLabel((t0 && t0.research_state) || "UNAVAILABLE") + (t0 && t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") }));
-    card.appendChild(el("p", { text: "NOW  " + stateLabel((now && now.research_state) || "n/a") + (now && now.pattern ? " · " + String(now.pattern).replace(/_/g, " ") : "") }));
+    card.appendChild(el("p", { text: "T0  " + stateLabel((t0 && t0.research_state) || "UNAVAILABLE") + (t0 && t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") + (t0 && t0.observation_timestamp ? " · " + formatWatchWhen(t0.observation_timestamp) : "") }));
+    card.appendChild(el("p", { text: "NOW  " + stateLabel((now && now.research_state) || "n/a") + (now && now.pattern ? " · " + String(now.pattern).replace(/_/g, " ") : "") + (now && now.observation_timestamp ? " · " + formatWatchWhen(now.observation_timestamp) : "") }));
     if (w.evolution_states && w.evolution_states.length) {
       card.appendChild(el("p", { class: "chart-hint", text: "EVOLUTION  " + w.evolution_states.map(stateLabel).join(" → ") }));
     }
     if (material.length) {
       material.forEach((c) => {
-        card.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
+        card.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + String(c.category || "").replace(/_/g, " ") + " · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
       });
     }
     card.appendChild(el("p", { class: "chart-hint", text: "MISSING  " + ((now && now.missing_confirmation) || (t0 && t0.missing_confirmation) || "n/a") }));
     card.appendChild(el("p", { class: "chart-hint", text: "CONFIRM IF  " + ((t0 && t0.confirmation_condition) || "n/a") }));
     card.appendChild(el("p", { class: "chart-hint", text: "INVALIDATE IF  " + ((t0 && t0.invalidation_condition) || "n/a") }));
+    if (w.outcome_checkpoint_labels && w.outcome_checkpoint_labels.length) {
+      card.appendChild(el("p", { class: "chart-hint", text: "AFTERWARD  " + w.outcome_checkpoint_labels.join(" · ") + " — historical checkpoints, not a win rate" }));
+    }
     const actions = el("div", { class: "search-row" });
     const open = el("button", { type: "button", class: "secondary", text: "OPEN SYMBOL" });
     open.addEventListener("click", () => openSymbol(w.symbol));
@@ -1301,9 +1325,11 @@ function renderPersonalWatch() {
   });
 }
 function openSymbol(symbol) {
-  document.getElementById("query").value = symbol;
+  const pinned = watchForSymbol(symbol);
+  const q = (pinned && pinned.query) ? pinned.query : symbol;
+  document.getElementById("query").value = q;
   showView("symbol");
-  analyze(symbol);
+  analyze(q);
 }
 
 function applyGlanceFromVisual(visual) {
@@ -1456,9 +1482,7 @@ function renderScreenerTable() {
     const mobile = window.matchMedia("(max-width: 720px)").matches;
     const star = el("button", { type: "button", class: "secondary watch-pin", text: watched ? "WATCHED" : "WATCH" });
     if (mobile) {
-      star.disabled = true;
-      star.tabIndex = -1;
-      star.setAttribute("aria-hidden", "true");
+      disableWatchControl(star);
     } else {
       star.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
     }
@@ -1480,9 +1504,7 @@ function renderScreenerTable() {
     card.appendChild(el("p", { class: "chart-hint", text: "Pattern " + pat + " · Evidence " + ev + " · Contract " + contract + " · " + fresh }));
     const starC = el("button", { type: "button", class: "secondary watch-pin", text: watched ? "WATCHED" : "WATCH" });
     if (!mobile) {
-      starC.disabled = true;
-      starC.tabIndex = -1;
-      starC.setAttribute("aria-hidden", "true");
+      disableWatchControl(starC);
     } else {
       starC.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
     }
@@ -1600,14 +1622,17 @@ function renderSymbolHero(data) {
     } else {
       const t0 = pinned.t0 || {};
       const nowSnap = pinned.latest || {};
+      box.appendChild(el("p", { class: "chart-hint", text: contractLine(t0) + (t0.observation_timestamp ? " · " + formatWatchWhen(t0.observation_timestamp) : "") }));
       box.appendChild(el("p", { text: "T0  " + stateLabel(t0.research_state || "n/a") + (t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") }));
-      box.appendChild(el("p", { text: "CURRENT  " + stateLabel(st) + (nowSnap.pattern && nowSnap.pattern !== t0.pattern ? " · " + String(nowSnap.pattern).replace(/_/g, " ") : "") }));
+      box.appendChild(el("h3", { text: "CURRENT OBSERVATION" }));
+      box.appendChild(el("p", { class: "chart-hint", text: contractLine(nowSnap) + (nowSnap.observation_timestamp ? " · " + formatWatchWhen(nowSnap.observation_timestamp) : "") }));
+      box.appendChild(el("p", { text: "CURRENT  " + stateLabel(nowSnap.research_state || st) + (nowSnap.pattern ? " · " + String(nowSnap.pattern).replace(/_/g, " ") : "") }));
       const material = watchMaterialChanges(pinned);
       if (!material.length) {
         box.appendChild(el("p", { class: "chart-hint", text: "NO MATERIAL CHANGE versus T0" }));
       } else {
         material.forEach((c) => {
-          box.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
+          box.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + String(c.category || "").replace(/_/g, " ") + " · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
         });
       }
     }
