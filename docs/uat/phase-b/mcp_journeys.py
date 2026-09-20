@@ -94,7 +94,7 @@ def main() -> None:
     }
 
     mcp.call("browser_resize", {"width": 1280, "height": 800})
-    mcp.call("browser_navigate", {"url": "http://localhost:8000/#screener"})
+    mcp.call("browser_navigate", {"url": "http://127.0.0.1:8000/#screener"})
     time.sleep(1.2)
     mcp.call("browser_snapshot", {})
     mcp.call("browser_take_screenshot", {"filename": str(OUT / "mcp-home-1280.png")})
@@ -117,7 +117,7 @@ def main() -> None:
     print("HOME1280", geo)
 
     mcp.call("browser_resize", {"width": 1440, "height": 900})
-    mcp.call("browser_navigate", {"url": "http://localhost:8000/?v=final#screener"})
+    mcp.call("browser_navigate", {"url": "http://127.0.0.1:8000/?v=final#screener"})
     time.sleep(0.8)
     geo1440 = text_of(mcp.call("browser_evaluate", {
         "function": """() => ({
@@ -231,7 +231,7 @@ def main() -> None:
     print("PATTERNS", pat[:400])
 
     mcp.call("browser_resize", {"width": 390, "height": 844})
-    mcp.call("browser_navigate", {"url": "http://localhost:8000/?m=1#screener"})
+    mcp.call("browser_navigate", {"url": "http://127.0.0.1:8000/?m=1#screener"})
     time.sleep(1)
     mob = text_of(mcp.call("browser_evaluate", {
         "function": """() => ({
@@ -252,6 +252,66 @@ def main() -> None:
     report["journeys"].append({"name": "mobile", "geo": mob, "console_errors": cons2[:1500]})
     print("MOBILE", mob)
     print("CONSOLE_ERR", cons2[:800])
+
+    mcp.call("browser_resize", {"width": 360, "height": 800})
+    time.sleep(0.5)
+    geo360 = text_of(mcp.call("browser_evaluate", {
+        "function": """() => ({
+          header: document.querySelector('header.app-chrome')?.getBoundingClientRect().height,
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          scrollW: document.documentElement.scrollWidth,
+          clientW: document.documentElement.clientWidth
+        })"""
+    }))
+    mcp.call("browser_take_screenshot", {"filename": str(OUT / "mcp-mobile-360.png")})
+    report["journeys"].append({"name": "mobile-360", "geo": geo360})
+    print("MOBILE360", geo360)
+
+    mcp.call("browser_resize", {"width": 1280, "height": 800})
+    mcp.call("browser_navigate", {"url": "http://127.0.0.1:8000/#screener"})
+    time.sleep(1)
+    race = text_of(mcp.call("browser_evaluate", {
+        "function": """() => {
+          window.analyze('RELIANCE');
+          window.analyze('KAYNES');
+          window.analyze('BEL');
+          return document.getElementById('symbol-hero')?.innerText?.slice(0,200);
+        }"""
+    }))
+    time.sleep(16)
+    race_after = text_of(mcp.call("browser_evaluate", {
+        "function": """() => ({
+          hero: document.getElementById('symbol-hero')?.innerText?.slice(0,400),
+          hasReliance: (document.getElementById('symbol-hero')?.innerText||'').includes('RELIANCE'),
+          hasKaynes: (document.getElementById('symbol-hero')?.innerText||'').includes('KAYNES'),
+          hasBel: (document.getElementById('symbol-hero')?.innerText||'').includes('BEL')
+        })"""
+    }))
+    report["journeys"].append({"name": "race", "mid": race, "after": race_after})
+    print("RACE", race_after[:800])
+
+    nifty = text_of(mcp.call("browser_evaluate", {
+        "function": """() => {
+          document.querySelector('#market-glance [data-analyze=\"NIFTY\"]')?.click();
+          return 'nifty-click';
+        }"""
+    }))
+    time.sleep(10)
+    nifty_after = text_of(mcp.call("browser_evaluate", {
+        "function": """() => ({
+          hero: document.getElementById('symbol-hero')?.innerText?.slice(0,300),
+          symbol: (document.getElementById('symbol-hero')?.innerText||'').split('\\n')[0]
+        })"""
+    }))
+    report["journeys"].append({"name": "nifty-click", "start": nifty, "after": nifty_after})
+    print("NIFTY", nifty_after[:500])
+
+    try:
+        net = text_of(mcp.call("browser_network_requests", {}))
+    except Exception as exc:  # noqa: BLE001 -- UAT probe
+        net = str(exc)
+    report["journeys"].append({"name": "network", "state": net[:2500]})
+    print("NET", net[:600])
 
     (OUT / "mcp-journey-log.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("WROTE", OUT / "mcp-journey-log.json")

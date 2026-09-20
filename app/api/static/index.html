@@ -1193,20 +1193,6 @@ function collectScreenerRows(data) {
       if (o && o.symbol && !bySym.has(o.symbol)) bySym.set(o.symbol, o);
     });
   });
-  // Explicit queries return non-shortlisted names in `rejected` (symbol +
-  // reason only). Those are still real observations and must appear.
-  if (data.scan_mode === "EXPLICIT_SYMBOL_QUERY") {
-    (data.rejected || []).forEach((o) => {
-      if (!o || !o.symbol || bySym.has(o.symbol)) return;
-      bySym.set(o.symbol, {
-        symbol: o.symbol,
-        research_state: o.research_state || "NOT_SHORTLISTED",
-        developing_pattern: "",
-        research_confidence: o.reason || "",
-        contract_usability: "",
-      });
-    });
-  }
   return Array.from(bySym.values());
 }
 
@@ -1406,7 +1392,11 @@ function renderSymbolHero(data) {
   top.appendChild(el("span", { style: "font-family:var(--mono);font-size:20px", text: move }));
   host.appendChild(top);
   const meta = el("div", { class: "hero-grid" });
-  [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs]].forEach(([k, val]) => {
+  let analysisGen = "n/a";
+  if (data.generated_at) {
+    analysisGen = new Date(data.generated_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " IST";
+  }
+  [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs], ["ANALYSIS GENERATED", analysisGen]].forEach(([k, val]) => {
     const b = el("div", { class: "hero-block" });
     b.appendChild(el("div", { class: "k", text: k }));
     b.appendChild(el("div", { class: "v", text: val }));
@@ -1480,22 +1470,24 @@ function enableExplainSimply() {
 }
 
 async function analyze(query) {
+  const wanted = String(query || "").trim().toUpperCase();
+  analyzingQuery = wanted;
   if (state.inFlight) {
-    state.pendingQuery = query;
+    state.pendingQuery = wanted;
     showView("symbol");
-    showAnalyzing(query);
+    showAnalyzing(wanted);
     return;
   }
   state.inFlight = true;
   document.getElementById("analyze-btn").disabled = true;
   document.getElementById("manual-refresh-btn").disabled = true;
   showView("symbol");
-  showAnalyzing(query);
+  showAnalyzing(wanted);
 
   let data = null;
   let failed = null;
   try {
-    const resp = await fetch(apiUrl("/api/analyze"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) });
+    const resp = await fetch(apiUrl("/api/analyze"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: wanted }) });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
       throw new Error(body.detail || ("request failed (" + resp.status + ")"));
@@ -1506,18 +1498,22 @@ async function analyze(query) {
   }
 
   state.inFlight = false;
-  hideAnalyzing();
   document.getElementById("analyze-btn").disabled = false;
   document.getElementById("manual-refresh-btn").disabled = false;
+
+  if (analyzingQuery !== wanted) {
+    hideAnalyzing();
+    const next = state.pendingQuery;
+    state.pendingQuery = null;
+    if (next) return analyze(next);
+    return;
+  }
+
+  hideAnalyzing();
 
   if (state.pendingQuery) {
     const next = state.pendingQuery;
     state.pendingQuery = null;
-    if (failed) {
-      document.getElementById("error-box").textContent = "ANALYSIS UNAVAILABLE for " + query + ": " + failed.message + "\n\nThe previous workspace was cleared. Retry this symbol, or continue with the queued request.";
-      document.getElementById("error-box").style.display = "block";
-      document.getElementById("report").style.display = "none";
-    }
     return analyze(next);
   }
 
@@ -1525,14 +1521,14 @@ async function analyze(query) {
     const host = document.getElementById("symbol-hero");
     if (host) {
       host.innerHTML = "";
-      host.appendChild(el("h2", { text: query }));
+      host.appendChild(el("h2", { text: wanted }));
       host.appendChild(el("p", { class: "state-tag", text: "ANALYSIS UNAVAILABLE" }));
       host.appendChild(el("p", { text: "Reason: " + failed.message }));
       const retry = el("button", { type: "button", text: "Retry" });
-      retry.addEventListener("click", () => analyze(query));
+      retry.addEventListener("click", () => analyze(wanted));
       host.appendChild(retry);
     }
-    document.getElementById("error-box").textContent = "ANALYSIS UNAVAILABLE for " + query + ": " + failed.message +
+    document.getElementById("error-box").textContent = "ANALYSIS UNAVAILABLE for " + wanted + ": " + failed.message +
       "\n\nThis box only accepts a market symbol, optionally with a strike and CE/PE -- not a question. Try:\nRELIANCE\nRELIANCE 1300 CE\nRELIANCE 1300 PE";
     document.getElementById("error-box").style.display = "block";
     document.getElementById("report").style.display = "none";
@@ -3283,7 +3279,9 @@ function renderUnderlyingSummary(data) {
   // data_age_seconds from the SAME real generated_at -- both values
   // already come from the backend; this is display arithmetic on real
   // numbers, not a new timestamp source.
-  const quoteAsOf = (data.generated_at && ageSeconds !== null) ? new Date(new Date(data.generated_at).getTime() - ageSeconds * 1000) : null;
+  const quoteAsOf = data.market_observed_at
+    ? new Date(data.market_observed_at)
+    : ((data.generated_at && ageSeconds !== null) ? new Date(new Date(data.generated_at).getTime() - ageSeconds * 1000) : null);
 
   // Phase 5 -- the session-aware FRESH/AGING/STALE/MARKET_CLOSED state is
   // the PRIMARY freshness signal (a real market-session fact plus, only
@@ -3511,7 +3509,7 @@ function renderFinalAssessment(data) {
   // (`data.reasoning`/`data.invalidation_level`/`data.invalidation_condition`,
   // themselves copied verbatim from the backend report) -- nothing is
   // computed or reworded in this file.
-  body.appendChild(el("h2", { text: "WHY", style: "margin-top:12px" }));
+  body.appendChild(el("h2", { text: "DECISION REASONING", style: "margin-top:12px" }));
   body.appendChild(el("p", { text: data.reasoning || "NOT AVAILABLE -- no reasoning was computed for this analysis." }));
 
   body.appendChild(el("h2", { text: "INVALIDATION", style: "margin-top:12px" }));

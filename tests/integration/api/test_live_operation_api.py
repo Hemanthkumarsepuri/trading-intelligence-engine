@@ -320,8 +320,9 @@ def test_dashboard_html_final_assessment_renders_reasoning_and_invalidation_with
     assert "data.reasoning" in final_assessment_fn
     assert "data.invalidation_level" in final_assessment_fn
     assert "data.invalidation_condition" in final_assessment_fn
-    assert '"WHY"' in final_assessment_fn
+    assert '"DECISION REASONING"' in final_assessment_fn
     assert '"INVALIDATION"' in final_assessment_fn
+    assert 'el("div", { class: "k", text: "WHY" })' in html
 
 
 def test_dashboard_html_ipo_analysis_renders_hidden_opportunity_and_drops_the_stale_hint() -> None:
@@ -580,8 +581,8 @@ def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> Non
     assert "EXPLICIT · ANALYSING" in html or "SELECTED SYMBOLS" in html
     assert "F&O UNIVERSE" in html
     assert "NO LATEST MARKET SCAN" in html
-    assert 'data.scan_mode === "EXPLICIT_SYMBOL_QUERY"' in html
-    assert "data.rejected" in html
+    assert "ANALYSIS GENERATED" in html
+    assert "if (analyzingQuery !== wanted)" in html
     # Per-stream glance times come from the observed-market payload.
     assert "cell.observed_at_ist" in html
     assert "cell.freshness_label" in html
