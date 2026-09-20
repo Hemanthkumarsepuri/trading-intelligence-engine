@@ -37,6 +37,7 @@ from app.domain.audit.snapshot_diff import (
     SnapshotChangeReport,
     build_snapshot_change_report,
 )
+from app.domain.market.trading_calendar import classify_session_window, session_window_payload
 from app.domain.options.early_opportunity import TimingStage, classify_research_bucket
 from app.domain.options.freshness_label import DataStream
 from app.domain.options.query_parser import ParsedQuery, parse_instrument_query
@@ -106,6 +107,29 @@ class WatchConditionView(BaseModel):
         return cls(watch=condition.watch, why=condition.why, current=condition.current, status=condition.status.value)
 
 
+class SessionContextView(BaseModel):
+    """Calendar research context. Never converts last-observed prints into LIVE."""
+
+    session_window: str
+    research_session_mode: str
+    observation_kind: str
+    next_session_open_ist: datetime | None = None
+    next_session_open_ist_label: str | None = None
+    live_discover_available: bool
+
+
+def session_context_view(as_of: datetime) -> SessionContextView:
+    payload = session_window_payload(classify_session_window(as_of))
+    return SessionContextView(
+        session_window=str(payload["session_window"]),
+        research_session_mode=str(payload["research_session_mode"]),
+        observation_kind=str(payload["observation_kind"]),
+        next_session_open_ist=datetime.fromisoformat(str(payload["next_session_open_ist"])),
+        next_session_open_ist_label=str(payload["next_session_open_ist_label"]),
+        live_discover_available=bool(payload["live_discover_available"]),
+    )
+
+
 class AnalyzeResponse(BaseModel):
     query: str
     parsed_symbol: str | None
@@ -126,6 +150,7 @@ class AnalyzeResponse(BaseModel):
     timing_stage: str | None = None
     timing_reason: str | None = None
     market_observed_at: datetime | None = None
+    session: SessionContextView | None = None
 
     error: str | None = None
     compact_report: str | None = None
@@ -245,11 +270,12 @@ async def run_analysis(
 ) -> AnalyzeResponse:
     started = time.perf_counter()
     parsed = parse_instrument_query(query)
+    session = session_context_view(as_of)
 
     if parsed.symbol is None:
         return AnalyzeResponse(
             query=query, **_parsed_response_fields(parsed), error="could not parse a symbol from the query",
-            latency_seconds=time.perf_counter() - started,
+            latency_seconds=time.perf_counter() - started, session=session,
         )
 
     report = await analyze_symbol(
@@ -275,7 +301,7 @@ async def run_analysis(
     if report.error is not None:
         return AnalyzeResponse(
             query=query, **_parsed_response_fields(parsed), symbol=report.symbol, generated_at=report.generated_at,
-            market_state=report.data_state.value, error=report.error, latency_seconds=latency,
+            market_state=report.data_state.value, error=report.error, latency_seconds=latency, session=session,
         )
 
     audit_id: str | None = None
@@ -329,6 +355,7 @@ async def run_analysis(
         visual=build_visual_data(report), latency_seconds=latency,
         audit_id=audit_id, journal_status=journal_status, what_changed=what_changed, watch_next=watch_next,
         reasoning=reasoning, invalidation_level=invalidation_level, invalidation_condition=invalidation_condition,
+        session=session,
     )
 
 

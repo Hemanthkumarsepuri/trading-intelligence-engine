@@ -13,7 +13,7 @@ from typing import Any, Protocol
 
 from app.data.providers.upstox_instrument_master import resolve_symbol
 from app.domain.market.models import Quote
-from app.domain.market.trading_calendar import classify_session_window
+from app.domain.market.trading_calendar import classify_session_window, session_window_payload
 from app.domain.options.freshness_label import FreshnessLabel
 from app.utils.time import to_ist
 
@@ -57,7 +57,8 @@ async def build_observed_market(
     as_of: datetime,
 ) -> dict[str, Any]:
     window = classify_session_window(as_of)
-    session_kind = "LIVE" if window.session_window == "OPEN" else "LAST_OBSERVED"
+    payload = session_window_payload(window)
+    session_kind = str(payload["observation_kind"])
     cells: dict[str, dict[str, Any]] = {}
     wanted: dict[str, str] = {}
     if instrument_master is None:
@@ -131,10 +132,7 @@ async def build_observed_market(
                 cell["freshness_label"] = FreshnessLabel.STALE.value
 
     return {
-        "session_window": window.session_window,
-        "calendar_date_ist": window.calendar_date_ist.isoformat(),
-        "is_trading_day": window.is_trading_day,
-        "basis": window.basis,
+        **payload,
         "as_of": as_of.isoformat(),
         "indices": cells,
         "breadth": {

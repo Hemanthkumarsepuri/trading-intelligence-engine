@@ -185,3 +185,40 @@ def test_session_window_is_closed_on_a_weekend_even_during_weekday_hours() -> No
     saturday_noon_ist = classify_session_window(datetime(2026, 8, 29, 6, 30, tzinfo=UTC))
     assert saturday_noon_ist.is_weekend is True
     assert saturday_noon_ist.session_window == "CLOSED"
+    assert saturday_noon_ist.research_session_mode == "CLOSED"
+    assert saturday_noon_ist.next_session_open_ist.hour == 9
+    assert saturday_noon_ist.next_session_open_ist.minute == 15
+    assert saturday_noon_ist.next_session_open_ist.date() == _MONDAY
+
+
+def test_research_session_mode_live_pre_market_post_market_and_holiday() -> None:
+    from datetime import UTC, datetime
+
+    from app.domain.market.trading_calendar import session_window_payload
+
+    live = classify_session_window(datetime(2026, 8, 28, 6, 30, tzinfo=UTC))
+    assert live.session_window == "OPEN"
+    assert live.research_session_mode == "LIVE"
+    payload = session_window_payload(live)
+    assert payload["observation_kind"] == "LIVE"
+    assert payload["live_discover_available"] is True
+
+    pre_open = classify_session_window(datetime(2026, 8, 28, 3, 40, tzinfo=UTC))
+    assert pre_open.session_window == "PRE_OPEN"
+    assert pre_open.research_session_mode == "PRE_MARKET"
+    assert session_window_payload(pre_open)["observation_kind"] == "LAST_OBSERVED"
+    assert session_window_payload(pre_open)["live_discover_available"] is False
+
+    before_pre_open = classify_session_window(datetime(2026, 8, 28, 2, 0, tzinfo=UTC))
+    assert before_pre_open.session_window == "CLOSED"
+    assert before_pre_open.research_session_mode == "PRE_MARKET"
+
+    post = classify_session_window(datetime(2026, 8, 28, 11, 0, tzinfo=UTC))
+    assert post.session_window == "CLOSED"
+    assert post.research_session_mode == "POST_MARKET"
+
+    holiday = classify_session_window(datetime(2026, 8, 31, 6, 30, tzinfo=UTC), holidays=frozenset({_MONDAY}))
+    assert holiday.session_window == "CLOSED"
+    assert holiday.is_holiday is True
+    assert holiday.research_session_mode == "CLOSED"
+    assert holiday.next_session_open_ist.date() == date(2026, 9, 1)

@@ -338,3 +338,41 @@ def test_no_material_latest_does_not_append(tmp_path: Path) -> None:
         assert updated.changes[0].category == WatchChangeCategory.NO_MATERIAL_CHANGE
 
     asyncio.run(_run())
+
+
+def test_comparable_ltp_change_is_evidence_not_scope() -> None:
+    t0 = _snap().model_copy(update={"ltp": "32.50", "oi": 1000, "iv": "17.5", "underlying_last": "1238.20"})
+    later = _snap(observation_id="obs2").model_copy(
+        update={"ltp": "30.00", "oi": 1221500, "iv": "18.1", "underlying_last": "1226.40"}
+    )
+    changes = compare_snapshots(t0, later)
+    fields = {c.field: c for c in changes}
+    assert "ltp" in fields
+    assert fields["ltp"].category == WatchChangeCategory.EVIDENCE_CHANGED
+    assert fields["underlying_last"].before == "1238.20"
+    assert fields["underlying_last"].after == "1226.40"
+    assert WatchChangeCategory.OBSERVATION_SCOPE_CHANGED not in {c.category for c in changes}
+
+
+def test_missing_ltp_does_not_invent_a_change() -> None:
+    t0 = _snap()
+    later = _snap(observation_id="obs2").model_copy(update={"ltp": "30.00"})
+    fields = {c.field for c in compare_snapshots(t0, later)}
+    assert "ltp" not in fields
+
+
+def test_snapshot_copies_underlying_last_from_quote_not_term_structure() -> None:
+    snap = snapshot_from_analyze_payload(
+        {
+            "audit_id": "u1",
+            "symbol": "RELIANCE",
+            "query": "RELIANCE 1270 PE",
+            "visual": {
+                "price_consistency": {
+                    "prices": [{"source": "LATEST_QUOTE", "price": "1226.40"}],
+                },
+                "requested_contract": {"found": True, "assessment": {"strike": "1270", "right": "PE"}},
+            },
+        }
+    )
+    assert snap.underlying_last == "1226.40"

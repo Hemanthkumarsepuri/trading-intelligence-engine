@@ -43,6 +43,10 @@ def test_discover_job_does_not_block_health(tmp_path: Path, monkeypatch: pytest.
         )
 
     monkeypatch.setattr("app.api.main.run_daily_research", fake_run)
+    monkeypatch.setattr(
+        "app.api.main.utc_now",
+        lambda: datetime(2026, 8, 28, 6, 30, tzinfo=UTC),
+    )
     app = _configured_app(tmp_path, provider=_provider(_router()), instrument_master=_MASTER)
     with TestClient(app) as client:
         posted = client.post("/api/research/jobs/discover")
@@ -61,6 +65,25 @@ def test_discover_job_does_not_block_health(tmp_path: Path, monkeypatch: pytest.
                 break
             time.sleep(0.05)
         assert client.get("/api/research/jobs/latest").json()["status"] == "COMPLETE"
+
+
+def test_live_discover_is_blocked_when_session_is_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.api.main.utc_now",
+        lambda: datetime(2026, 8, 30, 6, 30, tzinfo=UTC),  # Sunday noon IST
+    )
+    app = _configured_app(tmp_path, provider=_provider(_router()), instrument_master=_MASTER)
+    client = TestClient(app)
+    posted = client.post("/api/research/jobs/discover")
+    assert posted.status_code == 409
+    detail = posted.json()["detail"]
+    assert detail["code"] == "LIVE_DISCOVER_UNAVAILABLE"
+    assert "MARKET CLOSED" in detail["message"]
+    assert detail["session_window"] == "CLOSED"
+    assert detail["live_discover_available"] is False
+    latest = client.get("/api/research/jobs/latest").json()
+    assert latest["status"] == "NONE"
+    assert "MARKET CLOSED" in latest["message"]
 
 
 def test_qwen_health_timeout_status(tmp_path: Path) -> None:

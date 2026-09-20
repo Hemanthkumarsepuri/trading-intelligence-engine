@@ -455,6 +455,7 @@
       <h1>Screener</h1>
       <p class="screener-lead">What TIRE has observed. Latest research observations from the selected market universe.</p>
       <p class="note" id="source-note">Latest market scan only — not a prediction, not BUY/SELL</p>
+      <p class="hint" id="research-mode-line">RESEARCH MODE …</p>
       <p class="hint" id="market-status-line" hidden>Market Status: loading…</p>
       <p class="last-scan-meta" id="last-scan-line">LAST SCAN — none yet</p>
       <p class="hint" id="scan-progress-line" hidden>Ready to scan the market</p>
@@ -1039,7 +1040,14 @@ function showView(name) {
   }
 }
 
-function compactDataLabel(streams) {
+function compactDataLabel(streams, sessionWindow) {
+  const session = sessionWindow || "UNKNOWN";
+  if (session !== "OPEN") {
+    if (!streams || !streams.length) return { code: "UNKNOWN", text: "DATA ? UNKNOWN" };
+    const kinds = streams.map((s) => s.state);
+    if (kinds.every((s) => s === "UNKNOWN" || s === "RED")) return { code: "UNKNOWN", text: "DATA ? UNKNOWN" };
+    return { code: "LAST OBSERVED", text: "DATA · LAST OBSERVED" };
+  }
   if (!streams || !streams.length) return { code: "UNKNOWN", text: "DATA ? UNKNOWN" };
   const states = streams.map((s) => s.state);
   if (states.every((s) => s === "GREEN")) return { code: "LIVE", text: "DATA ● LIVE" };
@@ -1047,6 +1055,46 @@ function compactDataLabel(streams) {
   if (states.some((s) => s === "YELLOW")) return { code: "PARTIAL", text: "DATA ◐ PARTIAL" };
   if (states.every((s) => s === "UNKNOWN")) return { code: "UNKNOWN", text: "DATA ? UNKNOWN" };
   return { code: "PARTIAL", text: "DATA ◐ PARTIAL" };
+}
+
+function sessionPayload() {
+  return (lastHealth && lastHealth.session_window) || {};
+}
+function isLiveSession() {
+  return sessionPayload().session_window === "OPEN";
+}
+function displayResearchMode(mode) {
+  if (mode === "LIVE") return "LIVE";
+  if (mode === "POST_MARKET") return "POST-MARKET";
+  if (mode === "PRE_MARKET" || mode === "CLOSED") return "PRE-MARKET";
+  return mode || "UNKNOWN";
+}
+function marketStatusPhrase() {
+  const win = sessionPayload();
+  if (win.session_window === "OPEN") return "MARKET OPEN";
+  if (win.session_window === "PRE_OPEN") return "PRE-OPEN";
+  if (win.research_session_mode === "POST_MARKET") return "POST-MARKET";
+  return "MARKET CLOSED";
+}
+function applyLiveDiscoverControls() {
+  const btn = document.getElementById("research-btn");
+  const live = isLiveSession();
+  if (btn) {
+    btn.disabled = !live;
+    btn.textContent = live ? "RUN MARKET SCAN" : "LIVE DISCOVER UNAVAILABLE";
+    btn.title = live ? "Run a live F&O scan" : "LIVE DISCOVER UNAVAILABLE — MARKET CLOSED";
+  }
+  const modeLine = document.getElementById("research-mode-line");
+  if (modeLine) {
+    const win = sessionPayload();
+    const bits = [
+      marketStatusPhrase(),
+      "RESEARCH MODE " + displayResearchMode(win.research_session_mode),
+      win.next_session_open_ist_label ? ("NEXT SESSION " + win.next_session_open_ist_label) : null,
+    ].filter(Boolean);
+    modeLine.hidden = false;
+    modeLine.textContent = bits.join(" · ");
+  }
 }
 
 function renderDataPopover(streams) {
@@ -1068,28 +1116,33 @@ function applyGlanceFromHealth(data) {
   const session = win.session_window || "UNKNOWN";
   const pill = document.getElementById("session-pill");
   if (pill) {
-    pill.textContent = "Session " + String(session).toLowerCase().replace(/_/g, " ");
-    pill.title = win.basis || "";
+    pill.textContent = marketStatusPhrase();
+    pill.title = (win.basis || "") + (win.next_session_open_ist_label ? (" Next regular open " + win.next_session_open_ist_label) : "");
   }
   const gs = document.getElementById("glance-session");
-  if (gs) gs.textContent = session;
+  if (gs) gs.textContent = marketStatusPhrase();
   const gsd = document.getElementById("glance-session-d");
   if (gsd) {
     const bits = [];
+    bits.push("RESEARCH " + displayResearchMode(win.research_session_mode));
+    if (win.next_session_open_ist_label) bits.push("NEXT " + win.next_session_open_ist_label);
     if (win.is_weekend) bits.push("weekend");
     if (win.is_holiday) bits.push("holiday");
     if (win.is_special_session) bits.push("special session listed; regular hours not assumed");
     if (win.calendar_date_ist) bits.push(win.calendar_date_ist);
     gsd.textContent = bits.join(" · ") || (win.basis || "calendar + IST clock");
   }
-  const compact = compactDataLabel(data.streams);
+  const compact = compactDataLabel(data.streams, session);
   const dp = document.getElementById("data-pill");
   if (dp) dp.textContent = compact.text;
   const gd = document.getElementById("glance-data");
   if (gd) gd.textContent = compact.code;
+  const gdd = document.getElementById("glance-data-d");
+  if (gdd) gdd.textContent = compact.code === "LIVE" ? "not a score" : "not a live feed";
   renderDataPopover(data.streams);
   const note = document.getElementById("market-view-note");
   if (note) note.textContent = win.basis || "";
+  applyLiveDiscoverControls();
 }
 
 function setGlanceIndex(id, value, detail) {
@@ -1412,18 +1465,29 @@ function renderScreenerTable() {
   host.innerHTML = "";
   if (lastDiscoverResult) {
     const note = document.getElementById("source-note");
-    if (note) note.textContent = "Latest market scan only — not a prediction, not BUY/SELL";
+    if (note) {
+      note.textContent = isLiveSession()
+        ? "Latest market scan only — not a prediction, not BUY/SELL"
+        : "LAST VERIFIED SCAN — not live. Last observed prints only.";
+    }
   }
   if (!lastDiscoverResult) {
     const empty = el("div", { class: "empty-state" });
-    empty.appendChild(el("p", { class: "chip-label", text: "LATEST SCAN" }));
+    empty.appendChild(el("p", { class: "chip-label", text: isLiveSession() ? "LATEST SCAN" : "MARKET CLOSED" }));
     empty.appendChild(el("h3", { text: "NO LATEST MARKET SCAN" }));
-    empty.appendChild(el("p", { class: "hint", text: "Run a scan to populate current observations. Rows are never invented." }));
-    const run = el("button", { type: "button", text: "RUN MARKET SCAN" });
-    run.addEventListener("click", () => document.getElementById("research-btn").click());
-    empty.appendChild(run);
+    if (!isLiveSession()) {
+      empty.appendChild(el("p", { class: "hint", text: "LIVE DISCOVER UNAVAILABLE — MARKET CLOSED. Last verified observations remain available on Symbol and Watchlist. This is not a live F&O scan." }));
+      const next = sessionPayload().next_session_open_ist_label;
+      if (next) empty.appendChild(el("p", { class: "hint", text: "NEXT SESSION " + next }));
+      empty.appendChild(el("p", { class: "hint", text: "RESEARCH MODE " + displayResearchMode(sessionPayload().research_session_mode) }));
+    } else {
+      empty.appendChild(el("p", { class: "hint", text: "Run a scan to populate current observations. Rows are never invented." }));
+      const run = el("button", { type: "button", text: "RUN MARKET SCAN" });
+      run.addEventListener("click", () => document.getElementById("research-btn").click());
+      empty.appendChild(run);
+    }
     const note = document.getElementById("source-note");
-    if (note) note.textContent = "The screener has no current scan to display.";
+    if (note) note.textContent = isLiveSession() ? "The screener has no current scan to display." : "MARKET CLOSED — no live scan. Symbol research uses last observed prints.";
     host.appendChild(empty);
     renderPersonalWatch();
     return;
@@ -1556,7 +1620,11 @@ function hideAnalyzing() {
   if (box) { box.style.display = "none"; box.classList.remove("is-on"); box.textContent = "ANALYZING…"; }
 }
 
-function workspaceContract(v) {
+function workspaceContract(v, data) {
+  const requested = v.requested_contract;
+  if (data && data.has_specific_contract && requested && requested.found === false) {
+    return { code: "UNVERIFIED", detail: "CONTRACT UNVERIFIED — requested contract was not in the observed chain." };
+  }
   const blk = v.blockers;
   if (blk && blk.primary && blk.primary.blocker_class === "CONTRACT_UNUSABLE") {
     return { code: "UNTRADEABLE", detail: blk.primary.explanation || "No sufficiently liquid option candidate." };
@@ -1598,10 +1666,12 @@ function renderSymbolHero(data) {
   const missing = (v.development && v.development.what_is_missing) || (blk && blk.missing_confirmation) || "n/a";
   const confirm = (v.development && v.development.confirm_if) || "n/a";
   const invalidate = (v.development && v.development.invalidate_if) || data.invalidation_condition || "n/a";
-  const contract = workspaceContract(v);
+  const contract = workspaceContract(v, data);
   const timing = workspaceTiming(data);
-  const session = (lastHealth && lastHealth.session_window && lastHealth.session_window.session_window) || "UNKNOWN";
-  const dataCode = compactDataLabel((lastHealth && lastHealth.streams) || []).code;
+  const sess = data.session || sessionPayload();
+  const sessionPhrase = (sess.session_window === "OPEN") ? "MARKET OPEN" : (sess.session_window === "PRE_OPEN" ? "PRE-OPEN" : (sess.research_session_mode === "POST_MARKET" ? "POST-MARKET" : "MARKET CLOSED"));
+  const dataCode = compactDataLabel((lastHealth && lastHealth.streams) || [], sess.session_window).code;
+  const obsKind = (sess.observation_kind === "LIVE") ? "LIVE" : "LAST OBSERVED";
   let marketObs = "n/a";
   const quoteStamp = data.market_observed_at
     || ((v.freshness && v.freshness.streams || []).find((s) => s.stream === "underlying_quote") || {}).data_timestamp;
@@ -1614,6 +1684,10 @@ function renderSymbolHero(data) {
   top.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) }));
   top.appendChild(el("span", { style: "font-family:var(--mono);font-size:20px", text: move }));
   host.appendChild(top);
+  host.appendChild(el("p", { class: "chart-hint", text: sessionPhrase + " · " + obsKind + " · RESEARCH MODE " + displayResearchMode(sess.research_session_mode) }));
+  if (sess.next_session_open_ist_label) {
+    host.appendChild(el("p", { class: "chart-hint", text: "NEXT SESSION " + sess.next_session_open_ist_label }));
+  }
 
   const pinned = watchForSymbol(data.symbol);
   if (pinned) {
@@ -1627,15 +1701,18 @@ function renderSymbolHero(data) {
       const nowSnap = pinned.latest || {};
       box.appendChild(el("p", { class: "chart-hint", text: contractLine(t0) + (t0.observation_timestamp ? " · " + formatWatchWhen(t0.observation_timestamp) : "") }));
       box.appendChild(el("p", { text: "T0  " + stateLabel(t0.research_state || "n/a") + (t0.pattern ? " · " + String(t0.pattern).replace(/_/g, " ") : "") }));
-      box.appendChild(el("h3", { text: "CURRENT OBSERVATION" }));
+      box.appendChild(el("h3", { text: "LATEST VERIFIED OBSERVATION" }));
       box.appendChild(el("p", { class: "chart-hint", text: contractLine(nowSnap) + (nowSnap.observation_timestamp ? " · " + formatWatchWhen(nowSnap.observation_timestamp) : "") }));
-      box.appendChild(el("p", { text: "CURRENT  " + stateLabel(nowSnap.research_state || st) + (nowSnap.pattern ? " · " + String(nowSnap.pattern).replace(/_/g, " ") : "") }));
+      box.appendChild(el("p", { text: obsKind + "  " + stateLabel(nowSnap.research_state || st) + (nowSnap.pattern ? " · " + String(nowSnap.pattern).replace(/_/g, " ") : "") }));
       const material = watchMaterialChanges(pinned);
-      if (!material.length) {
+      box.appendChild(el("h3", { text: "WHAT CHANGED" }));
+      if (!pinned.latest || pinned.t0_unavailable) {
+        box.appendChild(el("p", { class: "chart-hint", text: "NO COMPARABLE PRIOR OBSERVATION" }));
+      } else if (!material.length) {
         box.appendChild(el("p", { class: "chart-hint", text: "NO MATERIAL CHANGE versus T0" }));
       } else {
         material.forEach((c) => {
-          box.appendChild(el("p", { class: "chart-hint", text: "WHAT CHANGED · " + String(c.category || "").replace(/_/g, " ") + " · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
+          box.appendChild(el("p", { class: "chart-hint", text: String(c.category || "").replace(/_/g, " ") + " · " + c.field + ": " + (c.before || "n/a") + " → " + (c.after || "n/a") }));
         });
       }
     }
@@ -1643,13 +1720,39 @@ function renderSymbolHero(data) {
   }
 
   const meta = el("div", { class: "hero-grid" });
-  [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs]].forEach(([k, val]) => {
+  [["SESSION", sessionPhrase], ["DATA", dataCode], [obsKind, marketObs]].forEach(([k, val]) => {
     const b = el("div", { class: "hero-block" });
     b.appendChild(el("div", { class: "k", text: k }));
     b.appendChild(el("div", { class: "v", text: val }));
     meta.appendChild(b);
   });
   host.appendChild(meta);
+
+  const und = el("div", { class: "ws-block" });
+  und.appendChild(el("h3", { text: "UNDERLYING" }));
+  let lastQuote = null;
+  const prices = (v.price_consistency && v.price_consistency.prices) || [];
+  prices.forEach((p) => { if (p && p.source === "LATEST_QUOTE") lastQuote = p; });
+  und.appendChild(el("p", { text: (data.symbol || "n/a") + " · " + obsKind + " " + (lastQuote && lastQuote.price != null ? ("₹" + fmt(lastQuote.price)) : (ext && ext.day_change_pct != null ? ("day move " + move) : "UNKNOWN")) }));
+  und.appendChild(el("p", { class: "chart-hint", text: "Day move " + move + (marketObs !== "n/a" ? (" · " + marketObs) : "") }));
+  host.appendChild(und);
+
+  const rc = v.requested_contract;
+  const assess = rc && rc.assessment;
+  const cblock = el("div", { class: "ws-block" });
+  cblock.appendChild(el("h3", { text: "CONTRACT" }));
+  if (data.has_specific_contract && rc && rc.found === false) {
+    cblock.appendChild(el("p", { style: "font-weight:700", text: "CONTRACT UNVERIFIED" }));
+    cblock.appendChild(el("p", { class: "chart-hint", text: rc.detail || "Requested contract was not in the observed chain." }));
+  } else if (assess) {
+    const expiryTxt = rc.expiry || "UNKNOWN";
+    cblock.appendChild(el("p", { text: [assess.right || rc.requested_right, assess.strike || rc.requested_strike, expiryTxt].filter(Boolean).join(" ") }));
+    cblock.appendChild(el("p", { class: "chart-hint", text: obsKind + " · LTP " + (assess.ltp != null ? assess.ltp : "UNKNOWN") + " · OI " + (assess.open_interest != null ? assess.open_interest : "UNKNOWN") + " · ΔOI " + (assess.change_in_open_interest != null ? assess.change_in_open_interest : "UNKNOWN") + " · vol " + (assess.volume != null ? assess.volume : "UNKNOWN") + " · IV " + (assess.implied_volatility != null ? assess.implied_volatility : "UNKNOWN") }));
+    cblock.appendChild(el("p", { class: "chart-hint", text: "Bid " + (assess.bid != null ? assess.bid : "UNKNOWN") + " · Ask " + (assess.ask != null ? assess.ask : "UNKNOWN") + " · DTE only if expiry verified on this chain" }));
+  } else {
+    cblock.appendChild(el("p", { class: "chart-hint", text: "No specific contract observed this run." }));
+  }
+  host.appendChild(cblock);
 
   const why = el("div", { class: "why-block" });
   why.appendChild(el("div", { class: "k", text: "WHY" }));
@@ -1966,8 +2069,7 @@ function renderDiscoverResults(data) {
   if (resultsEl) delete resultsEl.dataset.scanUi;
   applyGlanceFromVisual((data.opportunities && data.opportunities[0] && data.opportunities[0].visual) || null);
   const results = document.getElementById("research-results");
-  const btn = document.getElementById("research-btn");
-  if (btn) btn.disabled = false;
+  applyLiveDiscoverControls();
   results.innerHTML = "";
 
   // Header: date/time, market status, freshness. No run-level "data age"
@@ -2278,6 +2380,7 @@ async function pollDiscoverJob() {
     results.innerHTML = "";
     results.appendChild(el("p", { class: "hint", text: "Market scan could not finish: " + (job.error || "unknown error") }));
     document.getElementById("research-btn").disabled = false;
+    applyLiveDiscoverControls();
     return true;
   }
   return job.status !== "QUEUED" && job.status !== "RUNNING";
@@ -2287,6 +2390,12 @@ async function runDailyResearch() {
   const symbolsRaw = document.getElementById("research-symbols").value.trim();
   const btn = document.getElementById("research-btn");
   const results = document.getElementById("research-results");
+  if (!isLiveSession()) {
+    results.innerHTML = "";
+    results.appendChild(el("p", { class: "hint", text: "LIVE DISCOVER UNAVAILABLE — MARKET CLOSED. Symbol and Watch research remain available using last observed prints. This does not constitute live F&O certification." }));
+    applyLiveDiscoverControls();
+    return;
+  }
   btn.disabled = true;
   results.innerHTML = "";
   results.appendChild(el("p", { class: "hint", text: "Starting market scan…" }));
@@ -2295,7 +2404,9 @@ async function runDailyResearch() {
     const resp = await fetch(url, { method: "POST" });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
-      throw new Error(body.detail ? JSON.stringify(body.detail) : ("request failed (" + resp.status + ")"));
+      const detail = body.detail;
+      const msg = (detail && detail.message) ? detail.message : (detail ? JSON.stringify(detail) : ("request failed (" + resp.status + ")"));
+      throw new Error(msg);
     }
     const job = await resp.json();
     updateScanProgress(job);
@@ -3445,8 +3556,8 @@ async function refreshJournalStatus() {
 const MARKET_STATE_LABELS = {
   LIVE_STREAMING: "LIVE (streaming)",
   LIVE_SNAPSHOT: "LIVE",
-  MARKET_CLOSED_LATEST_DATA: "MARKET CLOSED -- showing latest available data",
-  PRE_MARKET: "PRE-MARKET -- exchange in pre-open auction, showing latest available data",
+  MARKET_CLOSED_LATEST_DATA: "MARKET CLOSED — last observed prints, not live",
+  PRE_MARKET: "PRE-MARKET — last observed prints, not live",
   STALE_DATA: "STALE -- data is older than expected",
   INSUFFICIENT_HISTORY: "INSUFFICIENT HISTORY -- not enough data yet",
   PROVIDER_UNAVAILABLE: "PROVIDER UNAVAILABLE",
@@ -3485,6 +3596,7 @@ const _LIVE_AGING_MAX_SECONDS = 300; // 1-5 min: AGING; >= 5 min while reportedl
 
 function freshnessState(marketState, ageSeconds) {
   if (marketState === "MARKET_CLOSED_LATEST_DATA") return { state: "MARKET_CLOSED", cls: "" };
+  if (marketState === "PRE_MARKET") return { state: "PRE_MARKET", cls: "" };
   if (marketState === "LIVE_STREAMING" || marketState === "LIVE_SNAPSHOT") {
     if (ageSeconds === null) return { state: "UNKNOWN", cls: "" };
     if (ageSeconds < _LIVE_FRESH_MAX_SECONDS) return { state: "FRESH", cls: "good" };
@@ -3536,7 +3648,9 @@ function renderUnderlyingSummary(data) {
       const priceStr = p.price !== null && p.price !== undefined ? "₹" + fmt(p.price) : "n/a";
       const label = p.user_label || p.source;
       const candleNote = p.source === "LATEST_CANDLE" ? " (indicators from this bar refer to the last completed candle, which can differ from the live quote)" : "";
-      const liveNote = p.source === "LATEST_QUOTE" ? " (LIVE -- may move after the last completed candle)" : "";
+      const liveNote = p.source === "LATEST_QUOTE"
+        ? (isLiveSession() ? " (LIVE -- may move after the last completed candle)" : " (LAST OBSERVED — not a live print)")
+        : "";
       priceList.appendChild(el("li", { text: "PRICE SOURCE " + label + " [" + p.source + "]: " + priceStr + "  (as of " + ts + ")" + liveNote + candleNote }));
     });
     pcRow.appendChild(priceList);
@@ -3569,8 +3683,8 @@ function renderUnderlyingSummary(data) {
   // is closed, this needs to be the single most prominent statement on
   // the page, immediately under the badge, so it can never be read as
   // "this is what the market is doing right now."
-  if (fs.state === "MARKET_CLOSED") {
-    body.appendChild(el("p", { style: "font-weight:700;margin-top:6px", text: "CURRENT DECISION STATUS: MARKET CLOSED -- HISTORICAL SNAPSHOT ONLY" }));
+  if (fs.state === "MARKET_CLOSED" || fs.state === "PRE_MARKET") {
+    body.appendChild(el("p", { style: "font-weight:700;margin-top:6px", text: "LAST OBSERVED — not live. Closed/pre-market research uses verified prints only." }));
   }
 
   // Issue 1 -- raw seconds demoted out of the visible Quick View text
@@ -3594,9 +3708,11 @@ function renderUnderlyingSummary(data) {
   // Monday price/IV/OI/trend, only restates which real values are "last
   // available" vs "will need rechecking", and points at the SAME
   // `data.watch_next` conditions already rendered in Quick View below.
-  if (fs.state === "MARKET_CLOSED") {
+  if (fs.state === "MARKET_CLOSED" || fs.state === "PRE_MARKET") {
     const nextSession = el("div", { class: "list-block", style: "margin-top:10px" });
+    const nextLabel = (data.session && data.session.next_session_open_ist_label) || sessionPayload().next_session_open_ist_label;
     nextSession.appendChild(el("h2", { text: "NEXT SESSION -- WHAT TO RECHECK, NOT A PREDICTION" }));
+    if (nextLabel) nextSession.appendChild(el("p", { class: "chart-hint", text: "NEXT SESSION " + nextLabel }));
     nextSession.appendChild(el("p", { class: "chart-hint", text: "LAST OBSERVATION: " + (lastCandle && lastCandle.timestamp ? new Date(lastCandle.timestamp).toLocaleString() : "n/a") + ", last close ₹" + (lastCandle ? fmt(lastCandle.close) : "n/a") + "." }));
     const watchCount = data.watch_next ? data.watch_next.length : 0;
     nextSession.appendChild(el("p", { class: "chart-hint", text: "NEXT OPEN: refresh this analysis for live quotes/candles/option chain, then re-read " + (watchCount ? "the " + watchCount + " watch condition(s) below" : "the watch conditions below (none available this run)") + " against the new data -- trend, OI, IV, delta, and spread can all change materially between now and the next open." }));

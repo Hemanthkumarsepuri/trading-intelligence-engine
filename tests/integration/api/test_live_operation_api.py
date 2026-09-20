@@ -442,7 +442,9 @@ def test_dashboard_html_progressive_disclosure_quick_view_and_expert_view() -> N
     # decision status prominence + demoted raw seconds), Issue 3 (primary
     # vs secondary evidence split), Issue 4 (underlying move to
     # contractual breakeven), Issue 5 (nearby-strike trade-offs).
-    assert "CURRENT DECISION STATUS: MARKET CLOSED -- HISTORICAL SNAPSHOT ONLY" in html
+    assert "LAST OBSERVED — not live. Closed/pre-market research uses verified prints only." in html
+    assert "LIVE DISCOVER UNAVAILABLE" in html
+    assert 'id="research-mode-line"' in html
     assert "function summarizeGroupDirection(" in html
     assert "PRIMARY DIRECTION (price action" in html
     assert "SECONDARY POSITIONING (options OI/PCR, IV, futures, global context)" in html
@@ -576,7 +578,7 @@ def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> Non
     html = (static_dir / "index.html").read_text(encoding="utf-8")
     assert "function workspaceTiming(data)" in html
     assert "if (data.timing_stage) return data.timing_stage;" in html
-    assert "LAST MARKET OBSERVATION" in html
+    assert "[obsKind, marketObs]" in html
     assert "data.market_observed_at" in html
     assert "Insufficient evidence to classify timing." in html
     assert "EXPLICIT · ANALYSING" in html or "SELECTED SYMBOLS" in html
@@ -585,7 +587,7 @@ def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> Non
     assert "Indian Market Options Intelligence" in html
     assert "What TIRE has observed" in html
     assert "surface-workspace" in html
-    assert "LAST MARKET OBSERVATION" in html
+    assert "obsKind" in html
     assert "data.market_observed_at" in html
     assert "Report generated at" in html
     assert "Scan audit — coverage only, not a ranking" in html

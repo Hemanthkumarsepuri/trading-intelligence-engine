@@ -78,6 +78,8 @@ def _run_node_harness(js_source: str, calls: list[tuple[str, list[object]]]) -> 
         _extract_const(js_source, "_LIVE_AGING_MAX_SECONDS"),
         _extract_function(js_source, "freshnessState"),
         _extract_function(js_source, "humanDuration"),
+        _extract_function(js_source, "compactDataLabel"),
+        _extract_function(js_source, "displayResearchMode"),
         _extract_function(js_source, "classifyContractState"),
         _extract_const(js_source, "_PRIMARY_EVIDENCE_GROUPS"),
         _extract_const(js_source, "_SECONDARY_EVIDENCE_GROUPS"),
@@ -93,7 +95,10 @@ def _run_node_harness(js_source: str, calls: list[tuple[str, list[object]]]) -> 
         f"results.push({name}({', '.join(json.dumps(a) for a in args)}));" for name, args in calls
     )
     script = "\n".join(pieces) + "\nconst results = [];\n" + call_lines + "\nconsole.log(JSON.stringify(results));\n"
-    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30, check=False)
+    proc = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
+    )
     assert proc.returncode == 0, f"node harness failed: {proc.stderr}"
     parsed: list[Any] = json.loads(proc.stdout)
     return parsed
@@ -135,8 +140,25 @@ def test_freshness_state_live_thresholds(js_source: str, node_available: bool) -
         ("freshnessState", ["LIVE_SNAPSHOT", 400]),
         ("freshnessState", ["STALE_DATA", 30]),
         ("freshnessState", ["PROVIDER_UNAVAILABLE", None]),
+        ("freshnessState", ["PRE_MARKET", 30]),
     ])
-    assert [r["state"] for r in results] == ["FRESH", "AGING", "STALE", "STALE", "UNAVAILABLE"]
+    assert [r["state"] for r in results] == ["FRESH", "AGING", "STALE", "STALE", "UNAVAILABLE", "PRE_MARKET"]
+
+
+def test_compact_data_label_never_says_live_when_session_is_closed(js_source: str, node_available: bool) -> None:
+    if not node_available:
+        pytest.skip("node not available in this environment")
+    results = _run_node_harness(js_source, [
+        ("compactDataLabel", [[{"state": "GREEN"}, {"state": "GREEN"}], "CLOSED"]),
+        ("compactDataLabel", [[{"state": "GREEN"}, {"state": "GREEN"}], "OPEN"]),
+        ("displayResearchMode", ["CLOSED"]),
+        ("displayResearchMode", ["PRE_MARKET"]),
+        ("displayResearchMode", ["POST_MARKET"]),
+        ("displayResearchMode", ["LIVE"]),
+    ])
+    assert results[0]["code"] == "LAST OBSERVED"
+    assert results[1]["code"] == "LIVE"
+    assert results[2:] == ["PRE-MARKET", "PRE-MARKET", "POST-MARKET", "LIVE"]
 
 
 def test_classify_contract_state_poor_contract_overrides_everything(js_source: str, node_available: bool) -> None:

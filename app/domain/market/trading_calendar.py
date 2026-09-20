@@ -32,8 +32,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Any
 
-from app.utils.time import to_ist
+from app.utils.time import IST, to_ist
 
 # Deliberately empty -- see module docstring's HOLIDAY DETECTION section.
 # Populate only from a real, authorized NSE holiday-calendar source; never
@@ -219,9 +220,12 @@ _NSE_REGULAR_CLOSE = time(15, 30)
 class SessionWindow:
     """Clock+calendar session label for the UI.
 
-    This is NOT MarketDataState and NOT a live exchange ping. A special
-    (Muhurat) session that falls outside 09:15–15:30 IST is reported as
-    CLOSED with `is_special_session=True` rather than inventing hours.
+    `session_window` stays OPEN / PRE_OPEN / CLOSED so live-F&O
+    certification can keep treating only OPEN as a live session.
+
+    `research_session_mode` is the closed/pre-market research context:
+    LIVE, PRE_MARKET, POST_MARKET, or CLOSED. It never upgrades last
+    observed prints into live evidence.
     """
 
     session_window: str
@@ -230,7 +234,38 @@ class SessionWindow:
     is_weekend: bool
     is_holiday: bool
     is_special_session: bool
+    research_session_mode: str
+    next_session_open_ist: datetime
     basis: str = "NSE trading calendar plus IST clock. Not a live exchange ping."
+
+
+def next_regular_session_open(as_of: datetime, holidays: frozenset[date] | None = None) -> datetime:
+    """Next regular NSE cash/F&O open (09:15 IST). Does not invent special-session hours."""
+    ist = to_ist(as_of)
+    day = classify_session(ist.date(), holidays)
+    clock = ist.time()
+    if day.is_trading_day and clock < _NSE_REGULAR_OPEN:
+        return datetime.combine(day.calendar_date, _NSE_REGULAR_OPEN, tzinfo=IST)
+    nxt = next_trading_day(ist.date(), holidays)
+    return datetime.combine(nxt, _NSE_REGULAR_OPEN, tzinfo=IST)
+
+
+def classify_research_session_mode(
+    session_window: str,
+    *,
+    is_trading_day: bool,
+    clock: time,
+) -> str:
+    """Research context. Independent of live Discover / Gate 1 OPEN checks."""
+    if session_window == "OPEN":
+        return "LIVE"
+    if session_window == "PRE_OPEN":
+        return "PRE_MARKET"
+    if is_trading_day and clock > _NSE_REGULAR_CLOSE:
+        return "POST_MARKET"
+    if is_trading_day and clock < _NSE_PRE_OPEN:
+        return "PRE_MARKET"
+    return "CLOSED"
 
 
 def classify_session_window(as_of: datetime, holidays: frozenset[date] | None = None) -> SessionWindow:
@@ -253,4 +288,28 @@ def classify_session_window(as_of: datetime, holidays: frozenset[date] | None = 
         is_weekend=day.is_weekend,
         is_holiday=day.is_holiday,
         is_special_session=day.is_special_session,
+        research_session_mode=classify_research_session_mode(
+            window, is_trading_day=day.is_trading_day, clock=clock,
+        ),
+        next_session_open_ist=next_regular_session_open(as_of, holidays),
     )
+
+
+def session_window_payload(window: SessionWindow) -> dict[str, Any]:
+    next_open = window.next_session_open_ist
+    next_ist = to_ist(next_open)
+    observation_kind = "LIVE" if window.session_window == "OPEN" else "LAST_OBSERVED"
+    return {
+        "session_window": window.session_window,
+        "calendar_date_ist": window.calendar_date_ist.isoformat(),
+        "is_trading_day": window.is_trading_day,
+        "is_weekend": window.is_weekend,
+        "is_holiday": window.is_holiday,
+        "is_special_session": window.is_special_session,
+        "basis": window.basis,
+        "research_session_mode": window.research_session_mode,
+        "next_session_open_ist": next_open.isoformat(),
+        "next_session_open_ist_label": next_ist.strftime("%d %b %Y · %H:%M IST"),
+        "live_discover_available": window.session_window == "OPEN",
+        "observation_kind": observation_kind,
+    }

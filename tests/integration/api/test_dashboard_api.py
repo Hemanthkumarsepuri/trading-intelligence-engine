@@ -173,6 +173,9 @@ def test_health_reports_token_configured_state(tmp_path: Path) -> None:
     assert names["Option Chain"] != "GREEN"
     assert names["5paisa"] == "UNKNOWN"
     assert body["session_window"]["session_window"] in ("OPEN", "PRE_OPEN", "CLOSED")
+    assert body["session_window"]["research_session_mode"] in ("LIVE", "PRE_MARKET", "POST_MARKET", "CLOSED")
+    assert "next_session_open_ist" in body["session_window"]
+    assert body["session_window"]["live_discover_available"] == (body["session_window"]["session_window"] == "OPEN")
     assert "Not a live exchange ping" in body["session_window"]["basis"]
 
 

@@ -59,6 +59,8 @@ def test_observed_market_returns_persisted_print_as_last_observed_when_closed(tm
     assert payload["indices"]["banknifty"]["observation_kind"] == "UNAVAILABLE"
     assert payload["breadth"]["observation_kind"] == "UNAVAILABLE"
     assert payload["indices"]["nifty"]["freshness_label"] == "MARKET_CLOSED"
+    assert payload["research_session_mode"] == "CLOSED"
+    assert payload["live_discover_available"] is False
 
 
 def test_observed_market_never_invents_an_index_without_a_master_match(tmp_path: Path) -> None:

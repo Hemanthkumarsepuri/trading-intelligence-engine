@@ -68,6 +68,7 @@ from app.domain.market.trading_calendar import (
     apply_nse_calendar_file,
     classify_session,
     classify_session_window,
+    session_window_payload,
 )
 from app.domain.research.watch_record import same_instrument_scope
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
@@ -348,15 +349,7 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
         payload = as_health_payload(
             view,
             server_time_utc=now.isoformat(),
-            session_window={
-                "session_window": window.session_window,
-                "calendar_date_ist": window.calendar_date_ist.isoformat(),
-                "is_trading_day": window.is_trading_day,
-                "is_weekend": window.is_weekend,
-                "is_holiday": window.is_holiday,
-                "is_special_session": window.is_special_session,
-                "basis": window.basis,
-            },
+            session_window=session_window_payload(window),
         )
         payload["data_root"] = settings.tire_data_root
         payload["qwen_enabled"] = settings.qwen_enabled
@@ -901,7 +894,22 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
 
     @app.post("/api/research/jobs/discover")
     async def start_discover_job(symbols: str | None = None) -> dict[str, object]:
-        """Start discovery as a background job. Does not occupy the HTTP request."""
+        """Start discovery as a background job. Does not occupy the HTTP request.
+
+        Whole-market live Discover stays blocked unless the calendar session
+        is OPEN. Closed-session last prints are not a live F&O scan (Gate 1).
+        Symbol analyze remains available separately.
+        """
+        window = classify_session_window(utc_now())
+        if window.session_window != "OPEN":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LIVE_DISCOVER_UNAVAILABLE",
+                    "message": "LIVE DISCOVER UNAVAILABLE — MARKET CLOSED",
+                    **session_window_payload(window),
+                },
+            )
         provider: UpstoxProvider | None = getattr(app.state, "provider", None)
         instrument_master: Sequence[dict[str, object]] | None = getattr(app.state, "instrument_master", None)
         if provider is None or instrument_master is None:
@@ -917,10 +925,19 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
     @app.get("/api/research/jobs/latest")
     async def latest_discover_job() -> dict[str, object]:
         registry: ResearchJobRegistry = app.state.research_jobs
+        window = classify_session_window(utc_now())
+        session = session_window_payload(window)
         job = registry.latest()
         if job is None:
-            return {"status": "NONE", "message": "Ready to scan the market", "result": None}
-        return job.as_dict()
+            message = (
+                "LIVE DISCOVER UNAVAILABLE — MARKET CLOSED"
+                if window.session_window != "OPEN"
+                else "Ready to scan the market"
+            )
+            return {"status": "NONE", "message": message, "result": None, **session}
+        payload = job.as_dict()
+        payload.update(session)
+        return payload
 
     @app.get("/api/research/jobs/{job_id}")
     async def get_discover_job(job_id: str) -> dict[str, object]:

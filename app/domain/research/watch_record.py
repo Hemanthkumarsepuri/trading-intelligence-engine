@@ -94,6 +94,7 @@ class ObservationSnapshot(BaseModel):
     delta_oi: int | None = None
     iv: str | None = None
     liquidity_state: str | None = None
+    underlying_last: str | None = None
 
 
 class WatchChange(BaseModel):
@@ -281,6 +282,13 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
             if _norm(row.get("expiry")) == expiry and isinstance(row.get("days_remaining"), int):
                 dte = row["days_remaining"]
                 break
+    underlying_last = None
+    for price in _as_sequence(_as_mapping(visual.get("price_consistency")).get("prices")):
+        if not isinstance(price, dict):
+            continue
+        if price.get("source") == "LATEST_QUOTE" and price.get("price") is not None:
+            underlying_last = _dec(price.get("price"))
+            break
     return ObservationSnapshot(
         observation_id=_norm(payload.get("audit_id")),
         observation_timestamp=obs_ts,
@@ -315,6 +323,7 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
         ),
         iv=_dec(assessment.get("implied_volatility")),
         liquidity_state=_norm(assessment.get("liquidity_grade")),
+        underlying_last=underlying_last,
     )
 
 
@@ -424,6 +433,14 @@ def compare_snapshots(t0: ObservationSnapshot | None, latest: ObservationSnapsho
                 after=",".join(latest_groups) or None,
             )
         )
+    if t0.ltp is not None and latest.ltp is not None:
+        add(WatchChangeCategory.EVIDENCE_CHANGED, "ltp", t0.ltp, latest.ltp)
+    if t0.oi is not None and latest.oi is not None:
+        add(WatchChangeCategory.EVIDENCE_CHANGED, "oi", t0.oi, latest.oi)
+    if t0.iv is not None and latest.iv is not None:
+        add(WatchChangeCategory.EVIDENCE_CHANGED, "iv", t0.iv, latest.iv)
+    if t0.underlying_last is not None and latest.underlying_last is not None:
+        add(WatchChangeCategory.EVIDENCE_CHANGED, "underlying_last", t0.underlying_last, latest.underlying_last)
 
     latest_state = (latest.research_state or "").upper()
     t0_state = (t0.research_state or "").upper()
