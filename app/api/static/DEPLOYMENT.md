@@ -16,10 +16,10 @@ the file:
   `apiUrl("/api/analyze")` call resolves to the relative path
   `/api/analyze`, which only works when this file is served by the same
   FastAPI app that owns those routes -- today's actual setup.
-- **Separately-hosted frontend (e.g. Netlify):** set `content` to the
-  backend's real HTTPS origin, e.g.
-  `<meta name="api-base" content="https://your-backend.example.com">`.
-  No rebuild step -- just edit the file and republish it.
+- **Separately-hosted frontend (e.g. Netlify):** set Netlify env
+  `TIRE_API_BASE` to the backend HTTPS origin. `scripts/prepare_netlify_static.py`
+  injects it into `dist-netlify` at build time. Never put tokens in that
+  variable -- it is a public URL only.
 
 ## What must never go in this file
 

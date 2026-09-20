@@ -4,6 +4,16 @@ version = "0.1.0"
 description = "NSE equity and F&O research and risk decision-support engine"
 requires-python = ">=3.12"
 
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["data/*.txt", "api/static/*"]
+
 dependencies = [
     "fastapi",
     "uvicorn[standard]",

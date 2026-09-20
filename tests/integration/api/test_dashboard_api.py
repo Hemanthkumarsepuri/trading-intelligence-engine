@@ -167,6 +167,8 @@ def test_health_reports_token_configured_state(tmp_path: Path) -> None:
     body = resp.json()
     assert body["token_configured"] is True
     assert body["broker_execution"] == "impossible"
+    assert "data_root" in body
+    assert body["data_root"]
     names = {s["name"]: s["state"] for s in body["streams"]}
     assert names["Option Chain"] != "GREEN"
     assert names["5paisa"] == "UNKNOWN"

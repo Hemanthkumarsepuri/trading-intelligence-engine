@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     analysis_interval_minutes: int = Field(default=5, alias="ANALYSIS_INTERVAL_MINUTES")
     timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")
 
+    # Split frontend/backend deploy. Empty means same-origin only (local FastAPI).
+    # Comma-separated HTTPS origins, never "*".
+    cors_allow_origins: str = Field(default="", alias="CORS_ALLOW_ORIGINS")
+    # JSONL/reference cache root. Railway volume should be mounted here.
+    tire_data_root: str = Field(default="data", alias="TIRE_DATA_ROOT")
+
     # Data freshness thresholds — ARCHITECTURE.md Addendum A2/A3
     freshness_max_age_real_time_seconds: int = Field(default=15, alias="FRESHNESS_MAX_AGE_REAL_TIME_SECONDS")
     freshness_max_age_short_interval_seconds: int = Field(default=60, alias="FRESHNESS_MAX_AGE_SHORT_INTERVAL_SECONDS")

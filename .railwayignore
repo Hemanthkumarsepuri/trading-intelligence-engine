@@ -1,0 +1,16 @@
+.venv/
+venv/
+.git/
+/data/
+dist-netlify/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.playwright-mcp/
+docs/uat/
+.scratch_uat/
+_tmp_debug_daily/
+*.pyc
+__pycache__/
+.env
+.env.*

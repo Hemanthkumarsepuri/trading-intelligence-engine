@@ -12,6 +12,7 @@ env/
 .env
 .env.*
 !.env.example
+.railway/
 
 # Downloaded/cached market reference and historical data (real, large,
 # regenerable via scripts/fetch_upstox_historical.py and
@@ -38,6 +39,9 @@ htmlcov/
 
 # Ruff
 .ruff_cache/
+
+# Netlify publish copy (api-base injected at build time)
+dist-netlify/
 
 # OS
 .DS_Store

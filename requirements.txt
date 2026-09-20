@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+pydantic>=2.0
+pydantic-settings
+httpx
+pandas
+numpy
+sqlalchemy
+asyncpg
+redis
+apscheduler
+python-dotenv
+protobuf>=7.35.1
+websockets>=13.0
+pypdf>=5.0

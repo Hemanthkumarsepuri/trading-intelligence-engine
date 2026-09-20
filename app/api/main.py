@@ -26,6 +26,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.api.schemas import (
@@ -131,21 +132,23 @@ from app.utils.time import to_ist, utc_now
 
 _APP_DIR = Path(__file__).resolve().parent
 _STATIC_DIR = _APP_DIR / "static"
-_MASTER_CACHE_PATH = Path("data/reference/upstox_nse_instruments.json")
-_MCX_MASTER_CACHE_PATH = Path("data/reference/upstox_mcx_instruments.json")
+_DATA_ROOT = Path(settings.tire_data_root)
+_PACKAGED_HOLIDAY_FILE = _APP_DIR.parent / "data" / "nse_trading_holidays.txt"
+_MASTER_CACHE_PATH = _DATA_ROOT / "reference" / "upstox_nse_instruments.json"
+_MCX_MASTER_CACHE_PATH = _DATA_ROOT / "reference" / "upstox_mcx_instruments.json"
 _MCX_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/MCX.json.gz"
-_SECTOR_INDEX_CACHE_PATH = Path("data/reference/nse_sector_index.csv")
-_NIFTY50_CACHE_PATH = Path("data/reference/nse_nifty50_constituents.csv")
-_DELIVERY_CACHE_DIR = Path("data/reference/nse_delivery")
-_NSE_HOLIDAY_FILE = Path("data/reference/nse_trading_holidays.txt")
-_PERSISTENCE_DIR = Path("data/persistence")
-_JOURNAL_DIR = Path("data/persistence/audit_journal")
-_IPO_JOURNAL_DIR = Path("data/persistence/ipo_audit_journal")
-_RESEARCH_JOURNAL_DIR = Path("data/persistence/research_journal")
-_RESEARCH_OUTCOME_DIR = Path("data/persistence/research_outcomes")
-_PERSONAL_JOURNAL_DIR = Path("data/persistence/personal_journal")
-_REPLAY_DATASET_DIR = Path("data/research_dataset")
-_REPLAY_OUTCOME_DIR = Path("data/persistence/replay_research_outcomes")
+_SECTOR_INDEX_CACHE_PATH = _DATA_ROOT / "reference" / "nse_sector_index.csv"
+_NIFTY50_CACHE_PATH = _DATA_ROOT / "reference" / "nse_nifty50_constituents.csv"
+_DELIVERY_CACHE_DIR = _DATA_ROOT / "reference" / "nse_delivery"
+_NSE_HOLIDAY_FILE = _PACKAGED_HOLIDAY_FILE if _PACKAGED_HOLIDAY_FILE.is_file() else (_DATA_ROOT / "reference" / "nse_trading_holidays.txt")
+_PERSISTENCE_DIR = _DATA_ROOT / "persistence"
+_JOURNAL_DIR = _DATA_ROOT / "persistence" / "audit_journal"
+_IPO_JOURNAL_DIR = _DATA_ROOT / "persistence" / "ipo_audit_journal"
+_RESEARCH_JOURNAL_DIR = _DATA_ROOT / "persistence" / "research_journal"
+_RESEARCH_OUTCOME_DIR = _DATA_ROOT / "persistence" / "research_outcomes"
+_PERSONAL_JOURNAL_DIR = _DATA_ROOT / "persistence" / "personal_journal"
+_REPLAY_DATASET_DIR = _DATA_ROOT / "research_dataset"
+_REPLAY_OUTCOME_DIR = _DATA_ROOT / "persistence" / "replay_research_outcomes"
 
 
 @asynccontextmanager
@@ -243,6 +246,17 @@ LifespanFactory = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
     app = FastAPI(title="Options Intelligence Terminal", lifespan=lifespan)
+    origins = [item.strip() for item in settings.cors_allow_origins.split(",") if item.strip()]
+    if origins:
+        if "*" in origins:
+            raise RuntimeError("CORS_ALLOW_ORIGINS must not include '*' — set explicit frontend origins.")
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "Accept"],
+        )
     app.state.research_jobs = ResearchJobRegistry()
 
     async def _discover_job_runner(job: ResearchJob) -> dict[str, object]:
@@ -318,7 +332,7 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
             fivepaisa_configured=False,
         )
         window = classify_session_window(now)
-        return as_health_payload(
+        payload = as_health_payload(
             view,
             server_time_utc=now.isoformat(),
             session_window={
@@ -331,6 +345,9 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
                 "basis": window.basis,
             },
         )
+        payload["data_root"] = settings.tire_data_root
+        payload["qwen_enabled"] = settings.qwen_enabled
+        return payload
 
     @app.get("/api/market/observed")
     async def market_observed() -> dict[str, object]:

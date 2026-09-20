@@ -1,9 +1,6 @@
 [build]
-  # No build step -- app/api/static/index.html is a single plain
-  # HTML+CSS+JS file with no bundler/framework (no package.json in this
-  # repo). This just publishes it as-is.
-  command = "echo 'static site, no build step required'"
-  publish = "app/api/static"
+  command = "python scripts/prepare_netlify_static.py"
+  publish = "dist-netlify"
 
 # The FastAPI backend (Upstox integration, live analysis, live checkpoint
 # capture, JSONL persistence) is NOT deployed here and is not affected by
