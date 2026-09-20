@@ -2,7 +2,11 @@
 
 Date: 2026-09-20 IST. Product commit: `e71afc5` (`feat: add observation-backed research watch`). Deploy hygiene: `849403a` (`chore: ignore Netlify local CLI state`).
 
-TIRE remains read-only. Visual system and research engine were not rewritten. No new product features were added in this certification pass.
+v1 scope hardening: `b7b16f7` (`fix: separate observation scope from contract change`). Production cert: `docs/release/OBSERVATION_WATCH_V1_CERTIFICATION.md`. Railway `ba3628eb`. Netlify `6aaf9a2d98b6c0d5e748d4cb`.
+
+TIRE remains read-only. Visual system and research engine were not rewritten.
+
+`instrument_type` (`UNDERLYING` / `OPTION_CONTRACT` / `FUTURES_CONTRACT`) is stored on the snapshot when derivable. Option vs underlying is `OBSERVATION_SCOPE_CHANGED`, not `CONTRACT_CHANGED`. Same-option strike / right / expiry have their own categories. Analyze auto-refresh is same-instrument only. Error observations cannot mint a watch.
 
 ## Architecture
 
@@ -216,3 +220,5 @@ CONDITIONAL GREEN — FULL F&O LIVE VALIDATION PENDING
 ```
 
 Not FINAL GREEN. Not UNFROZEN.
+
+v1 follow-up (`b7b16f7`): scope vs contract change is certified in `OBSERVATION_WATCH_V1_CERTIFICATION.md`. Full F&O remains the open live-session gate.
