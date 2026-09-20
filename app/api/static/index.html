@@ -1422,11 +1422,7 @@ function renderSymbolHero(data) {
   top.appendChild(el("span", { style: "font-family:var(--mono);font-size:20px", text: move }));
   host.appendChild(top);
   const meta = el("div", { class: "hero-grid" });
-  let analysisGen = "n/a";
-  if (data.generated_at) {
-    analysisGen = new Date(data.generated_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " IST";
-  }
-  [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs], ["ANALYSIS GENERATED", analysisGen]].forEach(([k, val]) => {
+  [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs]].forEach(([k, val]) => {
     const b = el("div", { class: "hero-block" });
     b.appendChild(el("div", { class: "k", text: k }));
     b.appendChild(el("div", { class: "v", text: val }));
@@ -2036,6 +2032,14 @@ function renderDiscoverResults(data) {
     data.rejected.forEach((r) => ul.appendChild(el("li", { text: r.symbol + ": " + r.reason })));
     rejectedDetails.appendChild(ul);
     results.appendChild(rejectedDetails);
+  }
+  const kids = Array.from(results.childNodes);
+  if (kids.length) {
+    results.innerHTML = "";
+    const audit = el("details", { id: "scan-audit" });
+    audit.appendChild(el("summary", { text: "Scan audit — coverage only, not a ranking" }));
+    kids.forEach((node) => audit.appendChild(node));
+    results.appendChild(audit);
   }
 }
 

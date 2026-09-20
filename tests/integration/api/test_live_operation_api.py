@@ -584,7 +584,10 @@ def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> Non
     assert "Indian Market Options Intelligence" in html
     assert "What TIRE has observed" in html
     assert "surface-workspace" in html
-    assert "ANALYSIS GENERATED" in html
+    assert "LAST MARKET OBSERVATION" in html
+    assert "data.market_observed_at" in html
+    assert "Report generated at" in html
+    assert "Scan audit — coverage only, not a ranking" in html
     assert "if (analyzingQuery !== wanted)" in html
     # Per-stream glance times come from the observed-market payload.
     assert "cell.observed_at_ist" in html
