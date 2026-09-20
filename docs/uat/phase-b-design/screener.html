@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TIRE — Screener</title>
+<style>
+  :root {
+    --bg: #0c0e11;
+    --bg-elev: #12151a;
+    --surface: #161a20;
+    --line: #262c35;
+    --ink: #e8edf2;
+    --ink-dim: #8b93a0;
+    --ink-faint: #5c6570;
+    --accent: #6a9ee8;
+    --accent-ink: #071018;
+    --conflict: #c9a15b;
+    --setup: #6a9ee8;
+    --watch: #9aa8b8;
+    --confirmed: #7d9a84;
+    --muted-state: #6b7380;
+    --extended: #b8894a;
+    --pad: 16px;
+    --header-h: 56px;
+    --max: 1120px;
+    --radius: 4px;
+    --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--ui); font-size: 13px; line-height: 1.45; }
+  button, input, select { font: inherit; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .app { min-height: 100vh; }
+
+  header.chrome {
+    position: sticky; top: 0; z-index: 8;
+    height: var(--header-h);
+    display: flex; align-items: center; gap: 20px;
+    padding: 0 var(--pad);
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.16em;
+    width: 64px; flex-shrink: 0;
+  }
+  nav.primary { display: flex; gap: 4px; }
+  nav.primary a {
+    text-decoration: none;
+    padding: 6px 10px;
+    color: var(--ink-dim);
+    border-radius: var(--radius);
+  }
+  nav.primary a[aria-current="page"] {
+    color: var(--ink);
+    background: var(--surface);
+  }
+  .meta { display: flex; align-items: center; gap: 8px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    color: var(--ink);
+    font-size: 11px; letter-spacing: 0.04em;
+  }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--conflict); }
+  .pill.live .dot { background: var(--confirmed); }
+  .pill button {
+    background: none; border: 0; color: inherit; padding: 0; cursor: pointer;
+  }
+
+  .streams {
+    display: none;
+    position: absolute; right: var(--pad); top: calc(var(--header-h) + 8px);
+    width: 280px; padding: 10px 12px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    z-index: 9;
+  }
+  .streams.open { display: block; }
+  .streams li { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--line); list-style: none; font-size: 12px; color: var(--ink-dim); }
+  .streams ul { margin: 0; padding: 0; }
+  .streams li:last-child { border-bottom: 0; }
+  .streams p { margin: 0 0 8px; font-size: 11px; color: var(--ink-faint); }
+
+  .glance {
+    max-width: var(--max); margin: 0 auto;
+    padding: 14px var(--pad) 4px;
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px;
+  }
+  .glance .k { font-size: 10px; letter-spacing: 0.08em; color: var(--ink-faint); text-transform: uppercase; }
+  .glance .v { font-family: var(--mono); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .glance .s { font-size: 11px; color: var(--ink-dim); margin-top: 2px; }
+
+  main { max-width: var(--max); margin: 0 auto; padding: 12px var(--pad) 64px; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0 16px; }
+  .toolbar h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  .note { color: var(--ink-dim); font-size: 12px; width: 100%; }
+  .toolbar .seg { width: 100%; }
+  input[type="search"], select {
+    height: 32px; padding: 0 10px;
+    background: var(--bg-elev); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    min-width: 0;
+  }
+  input[type="search"] { flex: 1 1 160px; }
+  .seg { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg button {
+    height: 32px; padding: 0 10px; border: 0; border-right: 1px solid var(--line);
+    background: var(--bg-elev); color: var(--ink-dim); cursor: pointer;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); }
+
+  table.scr { width: 100%; border-collapse: collapse; }
+  table.scr th {
+    text-align: left; font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line);
+  }
+  table.scr td { padding: 11px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.scr td:nth-child(4) { white-space: normal; max-width: 14em; }
+  table.scr tbody tr { cursor: pointer; }
+  table.scr tbody tr:hover { background: var(--bg-elev); }
+  table.scr tbody tr:focus-visible { background: var(--surface); }
+  .sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; }
+  .move { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .tag {
+    display: inline-block; font-size: 10px; letter-spacing: 0.05em;
+    padding: 3px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink-dim);
+  }
+  .tag.CONFLICT { color: var(--conflict); border-color: #5a4a28; }
+  .tag.EARLY_SETUP { color: var(--setup); border-color: #2a3d55; }
+  .tag.WATCH { color: var(--watch); }
+  .tag.DATA_INSUFFICIENT { color: var(--muted-state); }
+  .tag.EXTENDED { color: var(--extended); border-color: #4a3a22; }
+  .tag.CONFIRMED_SETUP { color: var(--confirmed); border-color: #2d3a30; }
+
+  .empty { padding: 36px 8px; max-width: 36em; }
+  .empty h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  .empty p { margin: 0; color: var(--ink-dim); }
+
+  .cards { display: none; }
+  .card {
+    padding: 12px 0; border-bottom: 1px solid var(--line);
+  }
+  .card h3 { margin: 0 0 6px; font-size: 15px; letter-spacing: 0.04em; }
+  .card p { margin: 4px 0 0; color: var(--ink-dim); font-size: 12px; }
+
+  .drawer {
+    display: none; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
+  }
+  .drawer.open { display: block; }
+  .hero-top { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: baseline; margin-bottom: 12px; }
+  .hero-top h2 { margin: 0; font-size: 20px; letter-spacing: 0.06em; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+  .blk .k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); }
+  .blk .v { margin-top: 2px; }
+
+  @media (max-width: 720px) {
+    header.chrome { height: auto; min-height: 48px; flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+    .brand { width: auto; }
+    nav.primary { order: 3; width: 100%; }
+    nav.primary a { flex: 1; text-align: center; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; }
+    .glance { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 12px 0; }
+    main { padding: 8px 12px 48px; }
+    table.scr { display: none; }
+    .cards { display: block; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="chrome">
+    <div class="brand">TIRE</div>
+    <div class="meta">
+      <span class="pill" title="NSE calendar plus IST clock. Not a live exchange ping.">Session closed</span>
+      <span class="pill" id="data-pill">
+        <span class="dot" aria-hidden="true"></span>
+        <button type="button" id="data-btn" aria-expanded="false" aria-controls="streams">Data partial</button>
+      </span>
+    </div>
+    <nav class="primary" aria-label="Primary">
+      <a href="#market">Market</a>
+      <a href="#screener" aria-current="page">Screener</a>
+      <a href="#history">History</a>
+      <a href="#patterns">Patterns</a>
+    </nav>
+  </header>
+  <div class="streams" id="streams">
+    <p>Stream availability this process — not a quality score.</p>
+    <ul>
+      <li><span>Market data</span><span>Live</span></li>
+      <li><span>Option chain</span><span>Stale</span></li>
+      <li><span>Technical</span><span>Live</span></li>
+      <li><span>Futures</span><span>Available</span></li>
+      <li><span>News</span><span>Unavailable</span></li>
+    </ul>
+  </div>
+
+  <section class="glance" aria-label="Market at a glance">
+    <div><div class="k">Nifty</div><div class="v">+0.33%</div><div class="s">Observed in analysis</div></div>
+    <div><div class="k">Banknifty</div><div class="v">+0.54%</div><div class="s">Observed in analysis</div></div>
+    <div><div class="k">India VIX</div><div class="v">−7.32%</div><div class="s">Observed in analysis</div></div>
+    <div><div class="k">Breadth</div><div class="v">26 / 24</div><div class="s">Sample, not NSE A/D</div></div>
+    <div><div class="k">Session</div><div class="v">Closed</div><div class="s">Calendar + IST</div></div>
+    <div><div class="k">Data</div><div class="v">Partial</div><div class="s">Not a score</div></div>
+  </section>
+
+  <main id="screener">
+    <div class="toolbar">
+      <h1>Screener</h1>
+      <p class="note" id="source-note">Observed analyses from this session — not a market scan.</p>
+      <input type="search" id="q" placeholder="RELIANCE" aria-label="Search symbols">
+      <div class="seg" role="group" aria-label="State filter">
+        <button type="button" data-f="all" aria-pressed="true">All</button>
+        <button type="button" data-f="developing">Developing</button>
+        <button type="button" data-f="conflict">Conflict</button>
+        <button type="button" data-f="empty">No scan</button>
+      </div>
+    </div>
+
+    <div id="empty" class="empty" hidden>
+      <h2>No latest market scan</h2>
+      <p>The screener has no current scan to display. Run a market scan to populate it. Rows are never invented.</p>
+    </div>
+
+    <table class="scr" id="table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>State</th>
+          <th>Move</th>
+          <th>Pattern</th>
+          <th>Evidence</th>
+          <th>Contract</th>
+          <th>Freshness</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr tabindex="0" data-f="conflict" data-sym="RELIANCE">
+          <td class="sym">RELIANCE</td>
+          <td><span class="tag CONFLICT">Conflict</span></td>
+          <td class="move">−1.41%</td>
+          <td>—</td>
+          <td>Moderate</td>
+          <td>Untradeable</td>
+          <td>Latest available</td>
+        </tr>
+        <tr tabindex="0" data-f="developing" data-sym="KAYNES">
+          <td class="sym">KAYNES</td>
+          <td><span class="tag EARLY_SETUP">Early setup</span></td>
+          <td class="move">−0.14%</td>
+          <td>Failed breakdown reclaim</td>
+          <td>Moderate</td>
+          <td>n/a</td>
+          <td>Latest available</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="cards" id="cards">
+      <article class="card" data-f="conflict" data-sym="RELIANCE">
+        <h3>RELIANCE <span class="tag CONFLICT">Conflict</span></h3>
+        <p>−1.41% · no named pattern · contract untradeable · latest available</p>
+      </article>
+      <article class="card" data-f="developing" data-sym="KAYNES">
+        <h3>KAYNES <span class="tag EARLY_SETUP">Early setup</span></h3>
+        <p>−0.14% · failed breakdown reclaim · contract n/a · latest available</p>
+      </article>
+    </div>
+
+    <section class="drawer" id="drawer" aria-live="polite"></section>
+  </main>
+</div>
+<script>
+const ROWS = {
+  RELIANCE: {
+    state: "CONFLICT",
+    why: "No single directional interpretation is currently dominant.",
+    move: "−1.41%",
+    timing: "Latest available / market closed",
+    pattern: "None",
+    data: "Moderate — not a score",
+    missing: "Independent evidence groups disagree — not an early setup.",
+    confirm: "A named pattern appears with current required streams and no independent conflict.",
+    invalidate: "Independent evidence groups remain in conflict, or required streams become unusable.",
+    contract: "Untradeable — no sufficiently liquid option candidate."
+  },
+  KAYNES: {
+    state: "EARLY SETUP",
+    why: "Named developing pattern detected. Confirmation is still missing.",
+    move: "−0.14%",
+    timing: "Latest available / market closed",
+    pattern: "Failed breakdown reclaim",
+    data: "Moderate — not a score",
+    missing: "Independent confirmation from relative strength, chain positioning, or futures structure.",
+    confirm: "The reclaimed level continues to hold on current M15 and independent groups do not conflict.",
+    invalidate: "Reclaimed level fails, or independent groups enter conflict.",
+    contract: "n/a — no first-class liquid candidate stated on this observation."
+  }
+};
+
+const dataBtn = document.getElementById("data-btn");
+const streams = document.getElementById("streams");
+dataBtn.addEventListener("click", () => {
+  const open = streams.classList.toggle("open");
+  dataBtn.setAttribute("aria-expanded", open ? "true" : "false");
+});
+
+function applyFilter(key, query) {
+  const q = (query || "").trim().toUpperCase();
+  const empty = key === "empty";
+  document.getElementById("empty").hidden = !empty;
+  document.getElementById("table").hidden = empty;
+  document.getElementById("source-note").textContent = empty
+    ? "The screener has no current scan to display."
+    : "Observed analyses from this session — not a market scan.";
+  document.querySelectorAll("#table tbody tr, #cards .card").forEach((node) => {
+    const f = node.getAttribute("data-f");
+    const sym = (node.getAttribute("data-sym") || "").toUpperCase();
+    const show = !empty && (key === "all" || f === key) && (!q || sym.includes(q));
+    node.hidden = !show;
+  });
+}
+
+document.querySelectorAll(".seg button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", "false"));
+    btn.setAttribute("aria-pressed", "true");
+    applyFilter(btn.getAttribute("data-f"), document.getElementById("q").value);
+  });
+});
+document.getElementById("q").addEventListener("input", (e) => {
+  const active = document.querySelector('.seg button[aria-pressed="true"]');
+  applyFilter(active.getAttribute("data-f"), e.target.value);
+});
+
+function openSymbol(sym) {
+  const d = ROWS[sym];
+  if (!d) return;
+  const box = document.getElementById("drawer");
+  box.classList.add("open");
+  box.innerHTML = "";
+  const top = document.createElement("div");
+  top.className = "hero-top";
+  const h = document.createElement("h2");
+  h.textContent = sym;
+  const tag = document.createElement("span");
+  tag.className = "tag " + d.state.replace(" ", "_");
+  tag.textContent = d.state === "EARLY SETUP" ? "Early setup" : "Conflict";
+  const why = document.createElement("span");
+  why.style.color = "var(--ink-dim)";
+  why.textContent = d.why;
+  top.append(h, tag, why);
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  [
+    ["Move", d.move], ["Timing", d.timing], ["Pattern", d.pattern], ["Data", d.data],
+    ["Why", d.why === d.missing ? d.why : d.why],
+    ["Missing", d.missing],
+    ["Confirm if", d.confirm],
+    ["Invalidate if", d.invalidate],
+    ["Contract", d.contract]
+  ].forEach(([k, v]) => {
+    if (k === "Why" && v === d.missing) {
+      /* still show why — it is L2 */
+    }
+    const b = document.createElement("div");
+    b.className = "blk";
+    const kk = document.createElement("div"); kk.className = "k"; kk.textContent = k;
+    const vv = document.createElement("div"); vv.className = "v"; vv.textContent = v;
+    b.append(kk, vv);
+    grid.appendChild(b);
+  });
+  box.append(top, grid);
+  box.scrollIntoView({ block: "nearest" });
+}
+
+document.querySelectorAll("#table tbody tr, #cards .card").forEach((node) => {
+  const go = () => openSymbol(node.getAttribute("data-sym"));
+  node.addEventListener("click", go);
+  node.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+});
+</script>
+</body>
+</html>

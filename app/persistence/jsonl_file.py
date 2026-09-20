@@ -219,15 +219,27 @@ class JsonlQuoteRepository:
         self._store.append_line(quote.model_dump_json())
 
     async def latest(self, *, instrument_id: str, as_of: datetime) -> Quote | None:
-        candidates = [
-            q
-            for line in self._store.read_lines()
-            if (q := Quote.model_validate_json(line)).instrument_id == instrument_id
-            and q.freshness.data_timestamp <= as_of
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda q: q.freshness.data_timestamp)
+        found = await self.latest_for_ids(frozenset({instrument_id}), as_of=as_of)
+        return found.get(instrument_id)
+
+    async def latest_for_ids(self, instrument_ids: frozenset[str], *, as_of: datetime) -> dict[str, Quote]:
+        """One pass over the quote file. Presentation-only helper — does not
+        invent a quote that `latest()` would not also return."""
+        if not instrument_ids:
+            return {}
+        latest: dict[str, Quote] = {}
+        for line in self._store.read_lines():
+            if not any(instrument_id in line for instrument_id in instrument_ids):
+                continue
+            quote = Quote.model_validate_json(line)
+            if quote.instrument_id not in instrument_ids:
+                continue
+            if quote.freshness.data_timestamp > as_of:
+                continue
+            previous = latest.get(quote.instrument_id)
+            if previous is None or quote.freshness.data_timestamp > previous.freshness.data_timestamp:
+                latest[quote.instrument_id] = quote
+        return latest
 
 
 class JsonlOptionChainRepository:

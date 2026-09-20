@@ -19,31 +19,45 @@
 <style>
   :root {
     color-scheme: dark;
-    --bg: #0b0f14;
-    --panel: #11161d;
-    --panel2: #161d26;
-    --border: #232b36;
-    --text: #d8e0ea;
-    --muted: #7c8896;
-    --accent: #4fa3ff;
-    --warn: #e0a53c;
+    --bg: #0c0e11;
+    --bg-elev: #12151a;
+    --panel: #161a20;
+    --panel2: #1a1f27;
+    --border: #262c35;
+    --text: #e8edf2;
+    --muted: #8b93a0;
+    --ink-faint: #5c6570;
+    --accent: #6a9ee8;
+    --accent-ink: #071018;
+    --warn: #c9a15b;
     --bad: #e05555;
-    --good: #4fbf73;
-    --ce: #4fbf73;
+    --good: #7d9a84;
+    --ce: #7d9a84;
     --pe: #e05555;
-    --ema9: #4fa3ff;
-    --ema21: #e0a53c;
+    --ema9: #6a9ee8;
+    --ema21: #c9a15b;
     --ema50: #b980f0;
     --vwap: #4fd0e0;
+    --conflict: #c9a15b;
+    --setup: #6a9ee8;
+    --watch: #9aa8b8;
+    --confirmed: #7d9a84;
+    --muted-state: #6b7380;
+    --extended: #b8894a;
+    --radius: 4px;
+    --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
+    --max: 1120px;
+    --header-h: 56px;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
+    font-family: var(--ui);
     font-size: 13px;
-    line-height: 1.5;
+    line-height: 1.45;
   }
   header {
     padding: 10px 20px;
@@ -58,7 +72,7 @@
   header p.sub { margin: 2px 0 0 0; color: var(--muted); font-size: 11px; }
   #header-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
-  main { max-width: 1400px; margin: 0 auto; padding: 16px 20px 60px; }
+  main { max-width: var(--max); margin: 0 auto; padding: 12px 16px 64px; }
 
   /* Release gate (Section 18) -- measured at a real 390px-wide viewport:
      without `flex-wrap`, a filter row (symbol + date + two selects +
@@ -69,7 +83,7 @@
   .table-scroll { overflow-x: auto; max-width: 100%; }
   #query { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; font-family: inherit; font-size: 13px; border-radius: 4px; }
   #query:focus { outline: 1px solid var(--accent); }
-  button { background: var(--accent); color: #04101f; border: none; padding: 9px 16px; font-family: inherit; font-weight: 600; font-size: 12px; border-radius: 4px; cursor: pointer; }
+  button { background: var(--accent); color: var(--accent-ink); border: none; padding: 9px 16px; font-family: inherit; font-weight: 600; font-size: 12px; border-radius: var(--radius); cursor: pointer; }
   button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
   button:disabled { opacity: 0.5; cursor: default; }
   .hint { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
@@ -184,65 +198,284 @@
   .status-chip.GREEN { color: var(--good); border-color: var(--good); }
   .status-chip.YELLOW { color: var(--warn); border-color: var(--warn); }
   .status-chip.RED { color: var(--bad); border-color: var(--bad); }
-  .primary-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  .primary-nav button { padding: 6px 12px; }
+  .primary-nav { display: flex; gap: 4px; }
+  .primary-nav button {
+    padding: 6px 10px;
+    background: transparent;
+    color: var(--muted);
+    border: 0;
+    font-weight: 400;
+  }
+  .primary-nav button:not(.secondary) {
+    color: var(--text);
+    background: var(--panel);
+  }
   .market-strip { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 11px; color: var(--muted); }
-  .discover-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .discover-filters { display: flex; flex-wrap: wrap; gap: 0; margin: 10px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .discover-filters .chip {
+    height: 32px; border-radius: 0; border: 0; border-right: 1px solid var(--border);
+    background: var(--bg-elev); color: var(--muted);
+  }
+  .discover-filters .chip:last-child { border-right: 0; }
   footer.meta { color: var(--muted); font-size: 10px; margin-top: 8px; }
+  #panel-final { display: none; }
+  #panel-research-context { display: none; }
+
+  header.app-chrome {
+    height: var(--header-h);
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+  }
+  header.app-chrome .chrome-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+  header.app-chrome h1 { font-size: 13px; letter-spacing: 0.16em; font-weight: 600; }
+  header.app-chrome .sub { display: none; }
+  .chrome-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .session-pill, .data-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 400;
+  }
+  .data-pill[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .data-popover {
+    display: none;
+    position: absolute;
+    right: 16px;
+    top: calc(var(--header-h) + 8px);
+    width: 280px;
+    margin-top: 0;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    z-index: 12;
+  }
+  .data-popover.is-open { display: block; }
+  .data-popover .stream-row { display: flex; justify-content: space-between; gap: 16px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .data-popover .stream-row:last-child { border-bottom: none; }
+  .market-glance {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 14px 16px 4px;
+    background: var(--bg);
+    border-bottom: 0;
+  }
+  .glance-cell { min-width: 0; background: transparent; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; }
+  .glance-cell.clickable { cursor: pointer; }
+  .glance-cell.clickable:focus { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .glance-cell .k { color: var(--ink-faint); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .glance-cell .v { font-family: var(--mono); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .glance-cell .d { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .why-block { margin: 16px 0 18px; }
+  .why-block .k { color: var(--ink-faint); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+  .why-block .v { font-size: 13px; max-width: 42em; }
+  .dim-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+  .dim-cell .k { color: var(--ink-faint); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .dim-cell .v { font-size: 13px; font-weight: 600; margin-top: 4px; }
+  .timing-track { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; font-size: 10px; color: var(--ink-faint); letter-spacing: 0.04em; }
+  .timing-track span.is-now { color: var(--text); border-bottom: 1px solid var(--accent); }
+  .ws-block { margin: 14px 0; }
+  .ws-block h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; }
+  .watch-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 4px; }
+  .watch-chip { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; border: 1px solid var(--border); background: var(--bg-elev); color: var(--text); padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
+  .scan-stage { font-size: 13px; margin: 8px 0; color: var(--muted); }
+  .scan-stage.is-now { color: var(--text); }
+  .app-view { display: none; }
+  .app-view.is-active { display: block; }
+  #view-symbol.is-active { display: flex; flex-direction: column; }
+  #view-symbol #symbol-research { order: 0; }
+  #view-symbol #loading, #view-symbol #loading-workspace, #view-symbol #error-box, #view-symbol #warnings-box, #view-symbol #stale-box { order: 1; }
+  #view-symbol #report { order: 2; }
+  #view-symbol #query-identity-row, #view-symbol #panel-ai-explain, #view-symbol .refresh-row { order: 3; }
+  #view-symbol #outcome-report, #view-symbol #journal-report { order: 4; }
+  #view-symbol #symbol-secondary { order: 8; }
+  #header-badges { display: none; }
+  #system-status { display: none; }
+  .screener-toolbar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 12px 0 16px; }
+  .screener-toolbar h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  .screener-toolbar .note { color: var(--muted); font-size: 12px; width: 100%; }
+  .screener-toolbar input[type="search"], .screener-toolbar select {
+    height: 32px; flex: 1 1 160px; min-width: 0;
+    background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
+    padding: 0 10px; font-family: inherit; font-size: 13px; border-radius: var(--radius);
+  }
+  table.screener { font-size: 13px; }
+  table.screener th {
+    text-align: left; font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border);
+  }
+  table.screener td { padding: 11px 10px; vertical-align: middle; border-bottom: 1px solid var(--border); }
+  table.screener td:nth-child(1) { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; }
+  table.screener td:nth-child(3) { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.screener td:nth-child(4) { white-space: normal; max-width: 14em; }
+  table.screener tbody tr { cursor: pointer; }
+  table.screener tbody tr:hover { background: var(--bg-elev); }
+  .state-tag { display: inline-block; font-size: 10px; letter-spacing: 0.05em; padding: 3px 7px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted); }
+  .state-tag.EARLY_SETUP { color: var(--setup); border-color: #2a3d55; }
+  .state-tag.CONFIRMED_SETUP { color: var(--confirmed); border-color: #2d3a30; }
+  .state-tag.WATCH, .state-tag.CONFIRMATION_PENDING { color: var(--watch); }
+  .state-tag.CONFLICT { color: var(--conflict); border-color: #5a4a28; }
+  .state-tag.DATA_INSUFFICIENT, .state-tag.UNKNOWN { color: var(--muted-state); }
+  .state-tag.EXTENDED, .state-tag.NO_TRADE { color: var(--extended); border-color: #4a3a22; }
+  .empty-state { padding: 36px 8px; max-width: 36em; }
+  .empty-state h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  .symbol-hero { margin-bottom: 14px; }
+  .symbol-hero .hero-top { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline; margin-bottom: 10px; }
+  .symbol-hero h2 { margin: 0; font-size: 22px; letter-spacing: 0.04em; }
+  .hero-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+  .hero-block .k { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 2px; }
+  .hero-block .v { font-size: 13px; }
+  .loading-workspace { display: none; padding: 20px 4px; }
+  .loading-workspace.is-on { display: block; }
+  .load-step { color: var(--muted); font-size: 12px; margin: 4px 0; }
+  .history-cards { display: none; }
+  .screener-cards { display: none; }
+  .primary-nav button[data-view="symbol"] { display: none; }
+  @media (max-width: 900px) {
+    .market-glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .hero-grid { grid-template-columns: 1fr; }
+    .dim-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 720px) {
+    header.app-chrome { height: auto; min-height: 48px; padding: 8px 12px; }
+    header.app-chrome .chrome-row { flex-wrap: wrap; gap: 8px; }
+    .primary-nav { order: 3; width: 100%; }
+    .primary-nav button { flex: 1; min-height: 32px; }
+    .market-glance { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 12px 0; }
+    table.screener, table.history-desktop { display: none; }
+    .history-cards, .screener-cards { display: block; }
+    .screener-cards .simple-card { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 12px 0; }
+    .screener-cards .simple-card h3 { font-size: 15px; letter-spacing: 0.04em; }
+    .symbol-hero h2 { font-size: 20px; }
+  }
+  @media (min-width: 721px) {
+    .screener-cards, .history-cards { display: none; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <div class="title-row">
+<header class="app-chrome">
+  <div class="chrome-row">
     <div>
       <h1>TIRE</h1>
       <p class="sub">Indian Market Intelligence — read-only research terminal — no order execution</p>
     </div>
+    <div class="chrome-meta">
+      <span class="session-pill" id="session-pill" title="NSE calendar plus IST clock. Not a live exchange ping.">Session …</span>
+      <button type="button" class="data-pill" id="data-pill" aria-expanded="false" aria-controls="data-popover">Data unknown</button>
+    </div>
+    <nav class="primary-nav" aria-label="Primary">
+      <button type="button" data-view="market" class="secondary">Market</button>
+      <button type="button" data-view="screener">Screener</button>
+      <button type="button" class="secondary" data-view="symbol">Symbol</button>
+      <button type="button" class="secondary" data-view="history">History</button>
+      <button type="button" class="secondary" data-view="patterns">Patterns</button>
+    </nav>
   </div>
-  <div class="market-strip" id="market-strip">
-    <span>MARKET 09:15–15:30 IST</span>
-    <span>NIFTY — after Discover</span>
-    <span>Sector / Volatility / Breadth — on a researched card</span>
-  </div>
-  <nav class="primary-nav" aria-label="Primary">
-    <button type="button" data-jump="daily-research">DISCOVER</button>
-    <button type="button" class="secondary" data-jump="watchlist-details">WATCHLIST</button>
-    <button type="button" class="secondary" data-jump="system-status">MARKET</button>
-    <button type="button" class="secondary" data-jump="symbol-research">RESEARCH</button>
-    <button type="button" class="secondary" data-jump="research-history">HISTORY</button>
-  </nav>
+  <div class="market-strip" id="market-strip" hidden></div>
+  <div id="data-popover" class="data-popover"></div>
   <div id="header-badges"></div>
   <div id="system-status" class="status-row"></div>
 </header>
+<div class="market-glance" id="market-glance" aria-label="Market at a glance">
+  <button type="button" class="glance-cell clickable" data-analyze="NIFTY"><div class="k">Nifty</div><div class="v" id="glance-nifty">UNAVAILABLE</div><div class="d" id="glance-nifty-d">not observed yet</div></button>
+  <button type="button" class="glance-cell clickable" data-analyze="BANKNIFTY"><div class="k">Banknifty</div><div class="v" id="glance-banknifty">UNAVAILABLE</div><div class="d" id="glance-banknifty-d">not observed yet</div></button>
+  <button type="button" class="glance-cell clickable" data-analyze="INDIA VIX"><div class="k">India VIX</div><div class="v" id="glance-vix">UNAVAILABLE</div><div class="d" id="glance-vix-d">not observed yet</div></button>
+  <div class="glance-cell"><div class="k">Breadth</div><div class="v" id="glance-breadth">UNAVAILABLE</div><div class="d" id="glance-breadth-d">sample only when observed</div></div>
+  <div class="glance-cell"><div class="k">Session</div><div class="v" id="glance-session">…</div><div class="d" id="glance-session-d">calendar + IST clock</div></div>
+  <div class="glance-cell"><div class="k">Data</div><div class="v" id="glance-data">UNKNOWN</div><div class="d" id="glance-data-d">not a score</div></div>
+</div>
 
 <main>
+  <section class="app-view is-active" id="view-screener" data-view="screener">
   <!-- Daily Market Researcher -- scans a universe, reuses the exact same
        /api/analyze pipeline per symbol, and ranks the results. This is a
        research-priority ordering, never a recommendation: the real
        ACTIONABILITY shown per opportunity is copied verbatim from that
        symbol's own decision engine result, never upgraded here. -->
   <section id="daily-research">
-    <h2 class="section-label">HOME <span class="note">Market status, Developing Now, Events to Monitor, Already Moved, Data Quality, Your Open Decisions</span></h2>
-    <p class="hint" id="market-status-line">Market Status: loading…</p>
-    <p class="hint" id="last-scan-line">Last scan: none yet</p>
-    <p class="hint" id="scan-progress-line">Ready to scan the market</p>
-    <h2 class="section-label">TODAY'S DEVELOPING OPPORTUNITIES <span class="note">blank symbols = whole F&amp;O universe — not a prediction, not BUY/SELL</span></h2>
-    <div class="search-row">
-      <input id="research-symbols" type="text" placeholder="leave blank to scan the supported F&amp;O universe, or type symbols (e.g. RELIANCE,KAYNES)" autocomplete="off">
-      <button id="research-btn">SCAN MARKET</button>
+    <div class="screener-toolbar">
+      <h1>Screener</h1>
+      <p class="note" id="source-note">Latest market scan only — not a prediction, not BUY/SELL</p>
+      <p class="hint" id="market-status-line" hidden>Market Status: loading…</p>
+      <p class="hint" id="last-scan-line" hidden>Last scan: none yet</p>
+      <p class="hint" id="scan-progress-line" hidden>Ready to scan the market</p>
+      <input id="screener-search" type="search" placeholder="RELIANCE" autocomplete="off" aria-label="Search symbols">
+      <select id="screener-sort" aria-label="Sort screener">
+        <option value="symbol">Sort: symbol</option>
+        <option value="state">Sort: state</option>
+        <option value="move">Sort: day move</option>
+        <option value="freshness">Sort: freshness</option>
+        <option value="liquidity">Sort: liquidity</option>
+      </select>
     </div>
     <div class="discover-filters" id="discover-filters">
       <button type="button" class="chip" data-filter="all">All</button>
+      <button type="button" class="chip" data-filter="early">Early</button>
       <button type="button" class="chip" data-filter="developing">Developing</button>
-      <button type="button" class="chip" data-filter="event">Event Driven</button>
       <button type="button" class="chip" data-filter="confirmed">Confirmed</button>
+      <button type="button" class="chip" data-filter="watch">Watch</button>
+      <button type="button" class="chip" data-filter="pending">Pending</button>
+      <button type="button" class="chip" data-filter="conflict">Conflict</button>
       <button type="button" class="chip" data-filter="extended">Extended</button>
-      <button type="button" class="chip" data-filter="conflict">Conflicts</button>
-      <button type="button" class="chip" data-filter="data">Needs Data</button>
+      <button type="button" class="chip" data-filter="data">Data insufficient</button>
+      <button type="button" class="chip" data-filter="event">Event</button>
     </div>
+    <div class="screener-toolbar">
+      <select id="screener-pattern" aria-label="Filter pattern">
+        <option value="">Pattern: all observed</option>
+      </select>
+      <select id="screener-contract" aria-label="Filter contract">
+        <option value="">Contract: all</option>
+        <option value="AVAILABLE">Available</option>
+        <option value="UNTRADEABLE">Untradeable</option>
+        <option value="UNAVAILABLE">Unavailable</option>
+      </select>
+      <select id="screener-fresh" aria-label="Filter freshness">
+        <option value="">Freshness: all</option>
+        <option value="LIVE">Live</option>
+        <option value="PARTIAL">Partial</option>
+        <option value="STALE">Stale</option>
+      </select>
+    </div>
+    <div class="watch-bar" id="personal-watchlist" hidden></div>
+    <div id="screener-table-host"></div>
+    <div class="search-row" style="margin-top:16px">
+      <button id="research-btn">RUN MARKET SCAN</button>
+    </div>
+    <details id="scan-details">
+    <summary>Scan options</summary>
+    <p class="hint">Blank symbols = whole F&amp;O universe — not a prediction, not BUY/SELL. Named symbols run the same research pipeline, not invented rows.</p>
+    <div class="search-row">
+      <input id="research-symbols" type="text" placeholder="optional: RELIANCE,KAYNES" autocomplete="off">
+    </div>
+    </details>
     <div id="research-results"></div>
   </section>
+  </section>
 
+  <section class="app-view" id="view-history" data-view="history" hidden aria-hidden="true">
   <section id="personal-journal">
     <h2 class="section-label">YOUR OPEN DECISIONS <span class="note">PERSONAL RESEARCH JOURNAL — what you thought vs what happened -- never an order, never inferred emotion</span></h2>
     <div class="search-row">
@@ -261,7 +494,7 @@
        win rate or score, and this history never changes today's shortlist
        above (see build_research_history()'s own docstring). -->
   <section id="research-history">
-    <h2 class="section-label">RESEARCH HISTORY <span class="note">what happened to previously researched candidates -- research validation only, never a trade result or a ranking input</span></h2>
+    <h2 class="section-label">RESEARCH HISTORY <span class="note">archive of stored observations — HISTORICAL JOURNAL METADATA, never a current ranking, win rate, or opportunity score</span></h2>
     <div class="search-row">
       <input id="history-symbol" type="text" placeholder="symbol (optional)" autocomplete="off" style="max-width:140px">
       <input id="history-date" type="date" autocomplete="off">
@@ -277,7 +510,10 @@
       <button id="history-btn">LOAD HISTORY</button>
     </div>
     <div id="history-results"></div>
+  </section>
+  </section>
 
+  <section class="app-view" id="view-patterns" data-view="patterns" hidden aria-hidden="true">
     <!-- Final 95% sprint (Sections 8/9/25) -- PATTERN HISTORY: "when this
          named pattern appeared historically, what actually happened
          afterward?" Descriptive counts only. Every number here is an
@@ -285,7 +521,7 @@
          derives a rate, and the sample-size disclaimer is rendered
          FIRST, above any count, so the operator reads how little the
          sample proves before they read the numbers. -->
-    <h2 class="section-label" style="margin-top:14px">PATTERN HISTORY <span class="note">what happened after this type of observation -- descriptive counts over real observations, never a win rate, probability, or prediction</span></h2>
+    <h2 class="section-label" style="margin-top:14px">PATTERN HISTORY <span class="note">PRICE-ONLY HISTORICAL REPLAY — DERIVATIVES HISTORY UNAVAILABLE — descriptive counts, never a win rate</span></h2>
     <div class="search-row">
       <select id="patterns-source" aria-label="Pattern history source">
         <option value="replay">Historical replay dataset (real price history)</option>
@@ -312,11 +548,37 @@
     </div>
   </section>
 
+  <section class="app-view" id="view-market" data-view="market" hidden aria-hidden="true">
+    <p class="hint">Session, Nifty, Banknifty, VIX, and breadth are in the strip above when those facts exist. They stay UNAVAILABLE until a scan or symbol analysis observes them — they are never invented.</p>
+    <p class="hint" id="market-view-note"></p>
+  </section>
+
+  <section class="app-view" id="view-symbol" data-view="symbol" hidden aria-hidden="true">
   <div class="search-row" id="symbol-research">
     <input id="query" type="text" placeholder="e.g. RELIANCE, KAYNES 4000 CE, NIFTY 25000 CE SEP" autocomplete="off">
     <button id="analyze-btn">ANALYZE</button>
   </div>
   <p class="hint">Enter a symbol, optionally followed by strike and CE/PE (and an optional expiry-month hint). The strike/right you enter is a request to analyse, not a recommendation.</p>
+  <div id="loading" class="loading-workspace">ANALYZING…</div>
+  <div id="loading-workspace" class="loading-workspace"></div>
+  <div id="error-box"></div>
+  <div id="warnings-box"></div>
+  <div id="stale-box"></div>
+  <div class="refresh-row">
+    <span id="last-analysis-label">no analysis yet</span>
+    <button id="manual-refresh-btn" class="secondary" disabled>REFRESH NOW</button>
+    <label>auto-refresh:
+      <select id="refresh-interval">
+        <option value="0" selected>off</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+        <option value="300">5m</option>
+      </select>
+    </label>
+    <span id="auto-refresh-hint">Auto refresh: OFF</span>
+  </div>
+  <details id="symbol-secondary">
+  <summary>Examples, follow-up, watchlist, IPO</summary>
   <div class="chip-row" id="query-examples">
     <span class="chip-label">Try:</span>
     <button class="chip" data-example-query="RELIANCE">RELIANCE</button>
@@ -342,19 +604,6 @@
     <button class="chip" data-example-followup="show alternatives">Show alternatives</button>
   </div>
   <div id="followup-result"></div>
-
-  <div class="refresh-row">
-    <span id="last-analysis-label">no analysis yet</span>
-    <button id="manual-refresh-btn" class="secondary" disabled>REFRESH NOW</button>
-    <label>auto-refresh:
-      <select id="refresh-interval">
-        <option value="0">off</option>
-        <option value="30">30s</option>
-        <option value="60" selected>60s</option>
-        <option value="300">5m</option>
-      </select>
-    </label>
-  </div>
 
   <!-- Part 4H: multi-symbol watchlist comparison -- each row is an
        independent analysis (its own audit_id), never a ranking. -->
@@ -408,11 +657,7 @@
     <p class="hint">Each IPO is compared across explicit evidence dimensions -- never a single opaque score, never a ranking.</p>
     <div id="ipo-compare-results"></div>
   </details>
-
-  <div id="loading">Running real pipeline against live Upstox data…</div>
-  <div id="error-box"></div>
-  <div id="warnings-box"></div>
-  <div id="stale-box"></div>
+  </details>
 
   <!-- Sprint 5, Phase 13: makes it structurally obvious that an
        underlying-only query ("KAYNES") is a DIFFERENT observation from a
@@ -423,7 +668,12 @@
   <div class="panel" id="panel-ai-explain"><h2>AI explanation <span class="note">optional — never the source of truth</span></h2><div class="body"><p class="chart-hint">Research a symbol, then click Explain simply if you want a paraphrase of TIRE evidence.</p><button type="button" class="secondary" id="explain-simply-btn" disabled data-explain-ready="0">Explain simply</button></div></div>
 
   <section class="report" id="report">
-    <h2 class="section-label">QUICK VIEW <span class="note">simple first -- technical details stay under View Evidence / MORE DETAILS</span></h2>
+    <h2 class="section-label">CURRENT ANALYSIS <span class="note">transient workspace — one symbol at a time</span></h2>
+    <div id="symbol-hero" class="symbol-hero"></div>
+    <details id="symbol-l4">
+    <summary>Technical details ▼ Options details ▼ Futures ▼ News ▼ Regime ▼ Audit ▼ Journal ▼</summary>
+    <h2 class="section-label">DETAIL <span class="note">collapsed by default — charts, chain, news, regime, audit</span></h2>
+    <h2 class="section-label">QUICK VIEW <span class="note">secondary copy of fields already shown in the workspace — not a second Why</span></h2>
 
     <div class="panel" id="panel-research-context"><h2>What is happening <span class="note">research state — not a buy/sell instruction</span></h2><div class="body"></div></div>
 
@@ -537,6 +787,7 @@
     </div>
 
     </details>
+    </details>
 
   </section>
 
@@ -552,6 +803,7 @@
   <section class="report" id="journal-report">
     <h2 class="section-label">HISTORICAL OBSERVATIONS <span class="note">raw counts only -- no accuracy/win-rate calculation</span></h2>
     <div class="panel" id="panel-journal"><div class="body"></div></div>
+  </section>
   </section>
 </main>
 
@@ -704,6 +956,502 @@ function badge(label, value) {
 const state = { lastResponse: null, lastFetchedAt: null, inFlight: false, pendingQuery: null, refreshTimer: null, priceChart: null };
 let lastResearchDashboard = null;
 let discoverPollTimer = null;
+let lastDiscoverResult = null;
+let lastHealth = null;
+let lastObserved = null;
+let screenerRows = [];
+let screenerFilter = "all";
+let analyzingQuery = null;
+let historyLoadedOnce = false;
+let patternsLoadedOnce = false;
+const WATCH_KEY = "TIRE_PERSONAL_WATCHLIST";
+
+function showView(name) {
+  document.querySelectorAll(".app-view").forEach((node) => {
+    const on = node.getAttribute("data-view") === name;
+    node.classList.toggle("is-active", on);
+    node.hidden = !on;
+    node.setAttribute("aria-hidden", on ? "false" : "true");
+  });
+  document.querySelectorAll(".primary-nav [data-view]").forEach((btn) => {
+    const on = btn.getAttribute("data-view") === name;
+    btn.classList.toggle("secondary", !on);
+  });
+  if (name === "history") {
+    refreshJournalStatus();
+    if (!historyLoadedOnce) { historyLoadedOnce = true; runResearchHistory(); }
+  }
+  if (name === "patterns" && !patternsLoadedOnce) {
+    patternsLoadedOnce = true;
+    runPatternAggregation();
+  }
+  if (location.hash !== "#" + name) {
+    try { history.replaceState(null, "", "#" + name); } catch (e) { /* ignore */ }
+  }
+}
+
+function compactDataLabel(streams) {
+  if (!streams || !streams.length) return { code: "UNKNOWN", text: "DATA ? UNKNOWN" };
+  const states = streams.map((s) => s.state);
+  if (states.every((s) => s === "GREEN")) return { code: "LIVE", text: "DATA ● LIVE" };
+  if (states.some((s) => s === "RED")) return { code: "STALE", text: "DATA △ STALE" };
+  if (states.some((s) => s === "YELLOW")) return { code: "PARTIAL", text: "DATA ◐ PARTIAL" };
+  if (states.every((s) => s === "UNKNOWN")) return { code: "UNKNOWN", text: "DATA ? UNKNOWN" };
+  return { code: "PARTIAL", text: "DATA ◐ PARTIAL" };
+}
+
+function renderDataPopover(streams) {
+  const box = document.getElementById("data-popover");
+  if (!box) return;
+  box.innerHTML = "";
+  box.appendChild(el("p", { class: "chart-hint", text: "Stream availability this process — not a quality score." }));
+  (streams || []).forEach((s) => {
+    const row = el("div", { class: "stream-row" });
+    row.appendChild(el("span", { text: s.name }));
+    row.appendChild(el("span", { text: s.state + (s.detail ? " — " + s.detail : "") }));
+    box.appendChild(row);
+  });
+}
+
+function applyGlanceFromHealth(data) {
+  lastHealth = data;
+  const win = data.session_window || {};
+  const session = win.session_window || "UNKNOWN";
+  const pill = document.getElementById("session-pill");
+  if (pill) {
+    pill.textContent = "Session " + String(session).toLowerCase().replace(/_/g, " ");
+    pill.title = win.basis || "";
+  }
+  const gs = document.getElementById("glance-session");
+  if (gs) gs.textContent = session;
+  const gsd = document.getElementById("glance-session-d");
+  if (gsd) {
+    const bits = [];
+    if (win.is_weekend) bits.push("weekend");
+    if (win.is_holiday) bits.push("holiday");
+    if (win.is_special_session) bits.push("special session listed; regular hours not assumed");
+    if (win.calendar_date_ist) bits.push(win.calendar_date_ist);
+    gsd.textContent = bits.join(" · ") || (win.basis || "calendar + IST clock");
+  }
+  const compact = compactDataLabel(data.streams);
+  const dp = document.getElementById("data-pill");
+  if (dp) dp.textContent = compact.text;
+  const gd = document.getElementById("glance-data");
+  if (gd) gd.textContent = compact.code;
+  renderDataPopover(data.streams);
+  const note = document.getElementById("market-view-note");
+  if (note) note.textContent = win.basis || "";
+}
+
+function setGlanceIndex(id, value, detail) {
+  const v = document.getElementById("glance-" + id);
+  const d = document.getElementById("glance-" + id + "-d");
+  if (v) v.textContent = value;
+  if (d && detail) d.textContent = detail;
+}
+
+function formatObservedCell(cell) {
+  if (!cell || cell.observation_kind === "UNAVAILABLE" || cell.last_price === null || cell.last_price === undefined) {
+    return { v: "UNAVAILABLE", d: (cell && cell.unavailable_reason) || "no trustworthy observation" };
+  }
+  const n = Number(cell.last_price);
+  const price = Number.isFinite(n) ? n.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : String(cell.last_price);
+  let move = "";
+  if (cell.day_change_pct !== null && cell.day_change_pct !== undefined) {
+    const p = Number(cell.day_change_pct);
+    if (Number.isFinite(p)) move = (p >= 0 ? "+" : "") + p.toFixed(2) + "%";
+  }
+  const kind = cell.observation_kind === "LIVE" ? "LIVE" : "LAST OBSERVED";
+  const fresh = cell.freshness_label && cell.freshness_label !== "MARKET_CLOSED" && cell.freshness_label !== "LIVE"
+    ? cell.freshness_label.replace(/_/g, " ")
+    : "";
+  return { v: price, d: [move, cell.observed_at_ist, kind, fresh].filter(Boolean).join(" · ") };
+}
+
+function applyObservedMarket(data) {
+  lastObserved = data;
+  if (!data || !data.indices) return;
+  ["nifty", "banknifty", "vix"].forEach((id) => {
+    const formatted = formatObservedCell(data.indices[id]);
+    setGlanceIndex(id, formatted.v, formatted.d);
+  });
+  const br = data.breadth;
+  if (br && br.advances !== null && br.advances !== undefined) {
+    setGlanceIndex("breadth", br.advances + " / " + br.declines, "LAST OBSERVED sample — not official NSE A/D");
+  }
+}
+
+function loadPersonalWatch() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WATCH_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((s) => typeof s === "string") : [];
+  } catch (e) { return []; }
+}
+function savePersonalWatch(list) {
+  localStorage.setItem(WATCH_KEY, JSON.stringify(list));
+}
+function toggleWatch(symbol) {
+  const list = loadPersonalWatch();
+  const i = list.indexOf(symbol);
+  if (i >= 0) list.splice(i, 1);
+  else list.push(symbol);
+  savePersonalWatch(list);
+  renderPersonalWatch();
+  renderScreenerTable();
+}
+function renderPersonalWatch() {
+  const host = document.getElementById("personal-watchlist");
+  if (!host) return;
+  const list = loadPersonalWatch();
+  host.innerHTML = "";
+  if (!list.length) { host.hidden = true; return; }
+  host.hidden = false;
+  host.appendChild(el("span", { class: "chip-label", text: "MY WATCHLIST" }));
+  list.forEach((sym) => {
+    const row = screenerRows.find((o) => o.symbol === sym);
+    const btn = el("button", { type: "button", class: "watch-chip", text: row
+      ? (sym + " " + stateLabel(row.research_state || "UNKNOWN"))
+      : (sym + " — watched, no current scan row") });
+    btn.addEventListener("click", () => openSymbol(sym));
+    host.appendChild(btn);
+  });
+}
+function openSymbol(symbol) {
+  document.getElementById("query").value = symbol;
+  showView("symbol");
+  analyze(symbol);
+}
+
+function applyGlanceFromVisual(visual) {
+  if (!visual) return;
+  const inputs = (visual.global_context && visual.global_context.inputs) || [];
+  const pick = (label) => inputs.find((i) => i.label === label);
+  const fmtIdx = (inp) => {
+    if (!inp || inp.day_change_pct === null || inp.day_change_pct === undefined) return { v: "UNAVAILABLE", d: "not observed in this payload" };
+    const n = Number(inp.day_change_pct);
+    const sign = n > 0 ? "+" : "";
+    return { v: sign + n.toFixed(2) + "%", d: inp.detail || "from this analysis / scan" };
+  };
+  const mergeIdx = (id, inp) => {
+    const formatted = fmtIdx(inp);
+    const prior = lastObserved && lastObserved.indices && lastObserved.indices[id];
+    if (prior && prior.last_price) {
+      const kept = formatObservedCell(prior);
+      const extra = (formatted.v !== "UNAVAILABLE") ? formatted.v + " this scan" : kept.d;
+      setGlanceIndex(id, kept.v, extra);
+      return;
+    }
+    setGlanceIndex(id, formatted.v, formatted.d);
+  };
+  mergeIdx("nifty", pick("NIFTY 50") || pick("NIFTY"));
+  mergeIdx("banknifty", pick("Nifty Bank") || pick("BANKNIFTY"));
+  mergeIdx("vix", pick("India VIX") || pick("VIX"));
+  const br = visual.sample_breadth;
+  if (br && br.advances !== null && br.advances !== undefined) {
+    setGlanceIndex("breadth", br.advances + " / " + br.declines, (br.observed_count || "") + " observed (sample, not official NSE A/D)");
+  }
+}
+
+function stateLabel(raw) {
+  const s = raw || "UNKNOWN";
+  return s.replace(/_/g, " ");
+}
+
+function screenerFilterKey(o) {
+  const st = o.research_state || "";
+  const bucket = o.research_bucket || "";
+  const timing = o.timing_stage || "";
+  if (st === "EARLY_SETUP" || timing === "EARLY" || timing === "VERY_EARLY") return "early";
+  if (st === "EARLY_SETUP" || bucket === "DEVELOPING" || bucket === "HIGH_QUALITY_DEVELOPING" || timing === "DEVELOPING") return "developing";
+  if (bucket === "EVENT_DRIVEN") return "event";
+  if (st === "CONFIRMED_SETUP" || bucket === "CONFIRMED" || timing === "CONFIRMED") return "confirmed";
+  if (st === "WATCH") return "watch";
+  if (st === "CONFIRMATION_PENDING" || timing === "CONFIRMING") return "pending";
+  if (st === "EXTENDED" || o.already_moved || timing === "EXTENDED" || timing === "ALREADY_MOVED") return "extended";
+  if (st === "CONFLICT" || bucket === "CONFLICT") return "conflict";
+  if (st === "DATA_INSUFFICIENT") return "data";
+  return "other";
+}
+
+function contractLabel(o) {
+  const raw = String(o.contract_usability || o.liquidity_grade || "").toUpperCase();
+  if (!raw) return "n/a";
+  if (raw.includes("UNTRADEABLE") || raw.includes("UNUSABLE") || raw.includes("ILLIQUID")) return "UNTRADEABLE";
+  if (raw.includes("UNAVAILABLE") || raw.includes("NONE") || raw.includes("MISSING")) return "UNAVAILABLE";
+  if (raw.includes("AVAILABLE") || raw.includes("TRADEABLE") || raw.includes("ACCEPTABLE")) return "AVAILABLE";
+  return raw;
+}
+
+function collectScreenerRows(data) {
+  const lists = [
+    data.developing_now, data.events_to_monitor, data.confirmed, data.confirmation_pending,
+    data.conflict, data.extended, data.already_moved, data.data_insufficient, data.opportunities,
+  ];
+  const bySym = new Map();
+  lists.forEach((arr) => {
+    (arr || []).forEach((o) => {
+      if (o && o.symbol && !bySym.has(o.symbol)) bySym.set(o.symbol, o);
+    });
+  });
+  return Array.from(bySym.values());
+}
+
+function renderScreenerTable() {
+  const host = document.getElementById("screener-table-host");
+  if (!host) return;
+  host.innerHTML = "";
+  if (lastDiscoverResult) {
+    const note = document.getElementById("source-note");
+    if (note) note.textContent = "Latest market scan only — not a prediction, not BUY/SELL";
+  }
+  if (!lastDiscoverResult) {
+    const empty = el("div", { class: "empty-state" });
+    empty.appendChild(el("h3", { text: "NO LATEST MARKET SCAN" }));
+    empty.appendChild(el("p", { class: "hint", text: "Run Market Scan to populate the screener. Rows are never invented." }));
+    const run = el("button", { type: "button", text: "RUN MARKET SCAN" });
+    run.addEventListener("click", () => document.getElementById("research-btn").click());
+    empty.appendChild(run);
+    const note = document.getElementById("source-note");
+    if (note) note.textContent = "The screener has no current scan to display.";
+    host.appendChild(empty);
+    renderPersonalWatch();
+    return;
+  }
+  const q = ((document.getElementById("screener-search") || {}).value || "").trim().toUpperCase();
+  const sort = ((document.getElementById("screener-sort") || {}).value) || "symbol";
+  const patternSel = ((document.getElementById("screener-pattern") || {}).value) || "";
+  const contractSel = ((document.getElementById("screener-contract") || {}).value) || "";
+  const freshSel = ((document.getElementById("screener-fresh") || {}).value) || "";
+  const patternBox = document.getElementById("screener-pattern");
+  if (patternBox && patternBox.options.length <= 1) {
+    const seen = new Set();
+    screenerRows.forEach((o) => {
+      if (o.developing_pattern && o.developing_pattern !== "NONE") seen.add(o.developing_pattern);
+    });
+    Array.from(seen).sort().forEach((p) => patternBox.appendChild(el("option", { value: p, text: p.replace(/_/g, " ") })));
+  }
+  let rows = screenerRows.filter((o) => {
+    if (q && !(o.symbol || "").toUpperCase().includes(q)) return false;
+    if (screenerFilter !== "all" && screenerFilterKey(o) !== screenerFilter) return false;
+    if (patternSel && o.developing_pattern !== patternSel) return false;
+    if (contractSel && contractLabel(o) !== contractSel) return false;
+    if (freshSel && String(o.options_data_quality || "").toUpperCase().indexOf(freshSel) < 0) return false;
+    return true;
+  });
+  const moveN = (o) => (o.day_change_pct === null || o.day_change_pct === undefined ? null : Number(o.day_change_pct));
+  rows.sort((a, b) => {
+    if (sort === "move") return Math.abs(moveN(b) || 0) - Math.abs(moveN(a) || 0);
+    if (sort === "state") return String(a.research_state || "").localeCompare(String(b.research_state || ""));
+    if (sort === "liquidity") return String(a.liquidity_grade || "").localeCompare(String(b.liquidity_grade || ""));
+    if (sort === "freshness") return String(a.options_data_quality || "").localeCompare(String(b.options_data_quality || ""));
+    return String(a.symbol).localeCompare(String(b.symbol));
+  });
+  if (!rows.length) {
+    host.appendChild(el("p", { class: "hint", text: "No symbols match this search or filter. This is an empty filter result, not missing market data." }));
+    return;
+  }
+  const table = el("table", { class: "plain screener" });
+  table.appendChild(el("thead", {}, [el("tr", {}, ["Symbol", "State", "Move", "Pattern", "Evidence", "Contract", "Freshness"].map((h) => el("th", { text: h })))]));
+  const tbody = el("tbody");
+  const cards = el("div", { class: "screener-cards" });
+  rows.forEach((o) => {
+    const move = moveN(o);
+    const moveTxt = (move === null || Number.isNaN(move)) ? "n/a" : ((move > 0 ? "+" : "") + move.toFixed(2) + "%");
+    const pat = (!o.developing_pattern || o.developing_pattern === "NONE") ? "—" : o.developing_pattern.replace(/_/g, " ");
+    const ev = o.research_confidence || "n/a";
+    const contract = contractLabel(o);
+    const fresh = o.options_data_quality || "n/a";
+    const st = o.research_state || "UNKNOWN";
+    const watched = loadPersonalWatch().indexOf(o.symbol) >= 0;
+    const open = () => openSymbol(o.symbol);
+    const tr = el("tr");
+    tr.addEventListener("click", open);
+    const tdSym = el("td");
+    tdSym.appendChild(document.createTextNode(o.symbol + " "));
+    const star = el("button", { type: "button", class: "secondary", text: watched ? "WATCHED" : "WATCH" });
+    star.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
+    tdSym.appendChild(star);
+    tr.appendChild(tdSym);
+    const tdS = el("td"); tdS.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) })); tr.appendChild(tdS);
+    tr.appendChild(el("td", { text: moveTxt }));
+    tr.appendChild(el("td", { text: pat }));
+    tr.appendChild(el("td", { text: ev }));
+    tr.appendChild(el("td", { text: contract }));
+    tr.appendChild(el("td", { text: fresh }));
+    tbody.appendChild(tr);
+    const card = el("div", { class: "simple-card" });
+    const title = el("h3");
+    title.appendChild(document.createTextNode(o.symbol + " "));
+    title.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) }));
+    card.appendChild(title);
+    card.appendChild(el("p", { class: "chart-hint", text: moveTxt }));
+    card.appendChild(el("p", { class: "chart-hint", text: "Pattern " + pat + " · Evidence " + ev + " · Contract " + contract + " · " + fresh }));
+    const starC = el("button", { type: "button", class: "secondary", text: watched ? "WATCHED" : "WATCH" });
+    starC.addEventListener("click", (ev) => { ev.stopPropagation(); toggleWatch(o.symbol); });
+    card.appendChild(starC);
+    card.addEventListener("click", open);
+    cards.appendChild(card);
+  });
+  table.appendChild(tbody);
+  host.appendChild(table);
+  host.appendChild(cards);
+  renderPersonalWatch();
+}
+
+function showAnalyzing(query) {
+  analyzingQuery = query;
+  const box = document.getElementById("loading");
+  const extra = document.getElementById("loading-workspace");
+  const report = document.getElementById("report");
+  const hero = document.getElementById("symbol-hero");
+  if (hero) {
+    hero.innerHTML = "";
+    hero.appendChild(el("h2", { text: query }));
+    hero.appendChild(el("p", { class: "state-tag", text: "ANALYSING" }));
+  }
+  if (report) report.style.display = "none";
+  document.getElementById("error-box").style.display = "none";
+  document.getElementById("warnings-box").style.display = "none";
+  lastResearchDashboard = null;
+  state.lastResponse = null;
+  if (box) {
+    box.style.display = "block";
+    box.classList.add("is-on");
+    box.textContent = "";
+    box.appendChild(el("p", { style: "font-weight:700;font-size:15px", text: query }));
+    box.appendChild(el("p", { text: "LOADING RESEARCH" }));
+    ["Market structure", "Derivatives", "Contract", "Confirmation"].forEach((step) => {
+      box.appendChild(el("p", { class: "load-step", text: step + "  …" }));
+    });
+    box.appendChild(el("p", { class: "chart-hint", text: "Waiting on the live analysis pipeline. No step is marked complete until the response arrives." }));
+  }
+  if (extra) extra.style.display = "none";
+}
+
+function hideAnalyzing() {
+  const box = document.getElementById("loading");
+  if (box) { box.style.display = "none"; box.classList.remove("is-on"); box.textContent = "ANALYZING…"; }
+}
+
+function workspaceContract(v) {
+  const blk = v.blockers;
+  if (blk && blk.primary && blk.primary.blocker_class === "CONTRACT_UNUSABLE") {
+    return { code: "UNTRADEABLE", detail: blk.primary.explanation || "No sufficiently liquid option candidate." };
+  }
+  if (blk && blk.secondary) {
+    const cu = blk.secondary.find((s) => s.blocker_class === "CONTRACT_UNUSABLE");
+    if (cu) return { code: "UNTRADEABLE", detail: cu.explanation || "No sufficiently liquid option candidate." };
+  }
+  if (v.requested_contract && v.requested_contract.usable === false) {
+    return { code: "UNTRADEABLE", detail: v.requested_contract.reason || "No sufficiently liquid option candidate." };
+  }
+  if (v.requested_contract && v.requested_contract.symbol) {
+    return { code: "AVAILABLE", detail: v.requested_contract.symbol + " — research contract, not an order" };
+  }
+  if (v.option_chain && v.option_chain.unavailable) {
+    return { code: "UNAVAILABLE", detail: v.option_chain.reason || "Option chain not observed." };
+  }
+  return { code: "UNAVAILABLE", detail: "No sufficiently liquid option candidate." };
+}
+
+function workspaceTiming(data) {
+  if (data.timing_stage) return data.timing_stage;
+  return "UNKNOWN";
+}
+
+function renderSymbolHero(data) {
+  const host = document.getElementById("symbol-hero");
+  if (!host) return;
+  host.innerHTML = "";
+  const v = data.visual || {};
+  const st = data.research_state || v.research_state || "UNKNOWN";
+  const ext = v.extension_distance;
+  const move = ext ? fmtPct(ext.day_change_pct) : "n/a";
+  const pat = (v.development && v.development.pattern && v.development.pattern !== "NONE") ? v.development.pattern.replace(/_/g, " ") : "";
+  const blk = v.blockers;
+  const whyText = (blk && blk.primary && blk.primary.explanation)
+    ? blk.primary.explanation
+    : ((v.development && v.development.why_it_matters) || STATE_PLAIN[st] || st);
+  const missing = (v.development && v.development.what_is_missing) || (blk && blk.missing_confirmation) || "n/a";
+  const confirm = (v.development && v.development.confirm_if) || "n/a";
+  const invalidate = (v.development && v.development.invalidate_if) || data.invalidation_condition || "n/a";
+  const contract = workspaceContract(v);
+  const timing = workspaceTiming(data);
+  const session = (lastHealth && lastHealth.session_window && lastHealth.session_window.session_window) || "UNKNOWN";
+  const dataCode = compactDataLabel((lastHealth && lastHealth.streams) || []).code;
+  let marketObs = "n/a";
+  const quoteStamp = data.market_observed_at
+    || ((v.freshness && v.freshness.streams || []).find((s) => s.stream === "underlying_quote") || {}).data_timestamp;
+  if (quoteStamp) {
+    marketObs = new Date(quoteStamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " IST";
+  }
+
+  const top = el("div", { class: "hero-top" });
+  top.appendChild(el("h2", { text: data.symbol || analyzingQuery || "n/a" }));
+  top.appendChild(el("span", { class: "state-tag " + st, text: stateLabel(st) }));
+  top.appendChild(el("span", { style: "font-family:var(--mono);font-size:20px", text: move }));
+  host.appendChild(top);
+  const meta = el("div", { class: "hero-grid" });
+  [["SESSION", session], ["DATA", dataCode], ["LAST MARKET OBSERVATION", marketObs]].forEach(([k, val]) => {
+    const b = el("div", { class: "hero-block" });
+    b.appendChild(el("div", { class: "k", text: k }));
+    b.appendChild(el("div", { class: "v", text: val }));
+    meta.appendChild(b);
+  });
+  host.appendChild(meta);
+
+  const why = el("div", { class: "why-block" });
+  why.appendChild(el("div", { class: "k", text: "WHY" }));
+  why.appendChild(el("div", { class: "v", text: whyText }));
+  host.appendChild(why);
+
+  if (pat) {
+    const pb = el("div", { class: "ws-block" });
+    pb.appendChild(el("h3", { text: "PATTERN" }));
+    pb.appendChild(el("p", { text: pat }));
+    host.appendChild(pb);
+  }
+
+  const dims = el("div", { class: "dim-grid" });
+  [["DIRECTION", stateLabel(st)], ["TIMING", timing.replace(/_/g, " ")], ["CONTRACT", contract.code], ["CONFIRMATION", (st === "CONFIRMED_SETUP") ? "CONFIRMED" : "PENDING"]].forEach(([k, val]) => {
+    const c = el("div", { class: "dim-cell" });
+    c.appendChild(el("div", { class: "k", text: k }));
+    c.appendChild(el("div", { class: "v", text: val }));
+    dims.appendChild(c);
+  });
+  if (timing === "UNKNOWN") {
+    host.appendChild(el("p", { class: "chart-hint", text: "Reason: " + (data.timing_reason || "Insufficient evidence to classify timing.") }));
+  }
+  host.appendChild(dims);
+  const track = el("div", { class: "timing-track" });
+  ["EARLY", "DEVELOPING", "CONFIRMING", "CONFIRMED", "ALREADY MOVED", "EXTENDED"].forEach((step) => {
+    const map = { "ALREADY MOVED": "ALREADY_MOVED" };
+    const code = map[step] || step;
+    track.appendChild(el("span", { class: (timing === code || timing === "VERY_EARLY" && step === "EARLY") ? "is-now" : "", text: step }));
+  });
+  host.appendChild(track);
+
+  const evid = (v.evidence || []).filter((e) => e && (e.name || e.detail));
+  const voted = evid.filter((e) => e.direction && e.direction !== "NEUTRAL" && e.direction !== "INSUFFICIENT");
+  const silent = evid.filter((e) => !e.direction || e.direction === "NEUTRAL" || e.direction === "INSUFFICIENT");
+  const evb = el("div", { class: "ws-block" });
+  evb.appendChild(el("h3", { text: "EVIDENCE" }));
+  evb.appendChild(el("p", { text: voted.length ? ("Voted: " + voted.map((e) => e.name).join(" · ")) : "No evidence group currently votes." }));
+  evb.appendChild(el("p", { class: "chart-hint", text: silent.length ? ("Could not vote: " + silent.map((e) => e.name).join(" · ")) : "No silent groups recorded." }));
+  host.appendChild(evb);
+
+  [["MISSING", missing], ["CONFIRM IF", confirm], ["INVALIDATE IF", invalidate]].forEach(([k, val]) => {
+    const b = el("div", { class: "ws-block" });
+    b.appendChild(el("h3", { text: k }));
+    b.appendChild(el("p", { text: val }));
+    host.appendChild(b);
+  });
+  const cb = el("div", { class: "ws-block" });
+  cb.appendChild(el("h3", { text: "CONTRACT" }));
+  cb.appendChild(el("p", { style: "font-weight:700", text: contract.code }));
+  cb.appendChild(el("p", { text: contract.detail }));
+  host.appendChild(cb);
+}
 
 // ============================================================
 // networking / refresh controller
@@ -720,15 +1468,15 @@ function enableExplainSimply() {
 async function analyze(query) {
   if (state.inFlight) {
     state.pendingQuery = query;
+    showView("symbol");
+    showAnalyzing(query);
     return;
   }
   state.inFlight = true;
   document.getElementById("analyze-btn").disabled = true;
   document.getElementById("manual-refresh-btn").disabled = true;
-  document.getElementById("loading").style.display = "block";
-  document.getElementById("error-box").style.display = "none";
-  document.getElementById("warnings-box").style.display = "none";
-  document.getElementById("stale-box").style.display = "none";
+  showView("symbol");
+  showAnalyzing(query);
 
   let data = null;
   let failed = null;
@@ -744,26 +1492,42 @@ async function analyze(query) {
   }
 
   state.inFlight = false;
-  document.getElementById("loading").style.display = "none";
+  hideAnalyzing();
   document.getElementById("analyze-btn").disabled = false;
   document.getElementById("manual-refresh-btn").disabled = false;
 
+  if (state.pendingQuery) {
+    const next = state.pendingQuery;
+    state.pendingQuery = null;
+    if (failed) {
+      document.getElementById("error-box").textContent = "ANALYSIS UNAVAILABLE for " + query + ": " + failed.message + "\n\nThe previous workspace was cleared. Retry this symbol, or continue with the queued request.";
+      document.getElementById("error-box").style.display = "block";
+      document.getElementById("report").style.display = "none";
+    }
+    return analyze(next);
+  }
+
   if (failed) {
-    // A failed refresh must NEVER replace previously-good data with
-    // nothing -- keep showing the last good render, just surface the
-    // error and mark it stale.
-    document.getElementById("error-box").textContent = "REFRESH FAILED: " + failed.message + (state.lastResponse ? " (showing last successful analysis)" : "");
+    const host = document.getElementById("symbol-hero");
+    if (host) {
+      host.innerHTML = "";
+      host.appendChild(el("h2", { text: query }));
+      host.appendChild(el("p", { class: "state-tag", text: "ANALYSIS UNAVAILABLE" }));
+      host.appendChild(el("p", { text: "Reason: " + failed.message }));
+      const retry = el("button", { type: "button", text: "Retry" });
+      retry.addEventListener("click", () => analyze(query));
+      host.appendChild(retry);
+    }
+    document.getElementById("error-box").textContent = "ANALYSIS UNAVAILABLE for " + query + ": " + failed.message +
+      "\n\nThis box only accepts a market symbol, optionally with a strike and CE/PE -- not a question. Try:\nRELIANCE\nRELIANCE 1300 CE\nRELIANCE 1300 PE";
     document.getElementById("error-box").style.display = "block";
-    if (state.lastResponse) markStale();
+    document.getElementById("report").style.display = "none";
+    state.lastResponse = null;
+    lastResearchDashboard = null;
   } else {
     state.lastResponse = data;
     state.lastFetchedAt = new Date();
     renderDashboard(data);
-  }
-  if (state.pendingQuery) {
-    const next = state.pendingQuery;
-    state.pendingQuery = null;
-    return analyze(next);
   }
 }
 
@@ -777,9 +1541,16 @@ function markStale() {
 function scheduleRefresh() {
   if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; }
   const seconds = Number(document.getElementById("refresh-interval").value);
-  if (!seconds) return;
+  const hint = document.getElementById("auto-refresh-hint");
+  if (!seconds) {
+    if (hint) hint.textContent = "Auto refresh: OFF";
+    return;
+  }
+  const next = new Date(Date.now() + seconds * 1000);
+  if (hint) hint.textContent = "Auto refresh: ON · Next update: " + next.toLocaleTimeString();
   state.refreshTimer = setInterval(() => {
     const q = document.getElementById("query").value.trim();
+    if (hint) hint.textContent = "Auto refresh: ON · Next update: " + new Date(Date.now() + seconds * 1000).toLocaleTimeString();
     if (q && !state.inFlight) analyze(q);
   }, seconds * 1000);
 }
@@ -822,14 +1593,14 @@ document.getElementById("refresh-interval").addEventListener("change", scheduleR
 // ============================================================
 
 const STATE_PLAIN = {
-  EARLY_SETUP: "Developing opportunity",
+  EARLY_SETUP: "Named developing pattern detected. Confirmation is still missing.",
   CONFIRMED_SETUP: "Confirmed setup — not a buy instruction",
   CONFIRMATION_PENDING: "Waiting for confirmation",
   DATA_INSUFFICIENT: "Not enough reliable data",
-  CONFLICT: "Independent evidence groups disagree",
+  CONFLICT: "No single directional interpretation is currently dominant.",
   NO_TRADE: "Nothing compelling is developing",
   EXTENDED: "The move is already extended",
-  WATCH: "Watch — confirmation is incomplete",
+  WATCH: "Watch — confirmation is still missing.",
   UNKNOWN: "Unknown"
 };
 const BLOCKER_PLAIN = {
@@ -883,20 +1654,50 @@ function updateScanProgress(job) {
   if (job.status === "QUEUED" || job.status === "RUNNING") {
     const total = job.total || 0;
     const processed = job.processed || 0;
-    line.textContent = "Market scan running" + (total ? ("  " + processed + " / " + total + " checked") : "");
+    const explicit = job.scan_kind === "EXPLICIT" || (job.symbols && job.symbols.length);
+    const selected = explicit ? (job.symbols ? job.symbols.length : total) : 0;
+    let stageLabel = explicit ? ("EXPLICIT · ANALYSING " + selected + " SELECTED SYMBOLS") : "F&O UNIVERSE";
+    if (!explicit) {
+      const stage = job.stage || "";
+      if (stage === "stage1" || stage === "starting" || stage === "queued") stageLabel = "F&O UNIVERSE · Stage 1 — F&O universe";
+      else if (stage === "stage2") stageLabel = "F&O UNIVERSE · Stage 2 — Research candidates";
+    }
+    line.hidden = false;
+    line.textContent = stageLabel + (total && !explicit ? ("  " + processed + " / " + total) : (explicit && total ? ("  " + processed + " / " + total) : ""));
+    const results = document.getElementById("research-results");
+    if (results && !results.dataset.scanUi) {
+      results.dataset.scanUi = "1";
+      results.innerHTML = "";
+      results.appendChild(el("p", { class: "scan-stage is-now", text: explicit ? ("ANALYSING  " + selected + " SELECTED SYMBOLS") : "SCANNING MARKET" }));
+      if (explicit) {
+        results.appendChild(el("p", { class: "scan-stage", text: "Mode EXPLICIT — not a full-market F&O scan" }));
+      } else {
+        results.appendChild(el("p", { class: "scan-stage", text: "Mode F&O UNIVERSE" }));
+        results.appendChild(el("p", { class: "scan-stage", text: "Stage 1  F&O universe" }));
+        results.appendChild(el("p", { class: "scan-stage", text: "Stage 2  Research candidates" }));
+      }
+    }
     return;
   }
   if (job.status === "FAILED") {
     line.textContent = "Scan could not finish" + (job.error ? (" — " + job.error) : "");
     return;
   }
-  line.textContent = "Scan complete";
+  const mode = (job.result && job.result.scan_mode) || (job.scan_kind === "EXPLICIT" ? "EXPLICIT" : "F&O UNIVERSE");
+  const modeLabel = (mode === "EXPLICIT_SYMBOL_QUERY" || mode === "EXPLICIT") ? "EXPLICIT" : "F&O UNIVERSE";
+  line.textContent = "Scan complete · " + modeLabel;
   if (last && job.result && job.result.generated_at) {
-    last.textContent = "Last scan: " + new Date(job.result.generated_at).toLocaleString();
+    last.textContent = "Last scan (" + modeLabel + "): " + new Date(job.result.generated_at).toLocaleString();
   }
 }
 
 function renderDiscoverResults(data) {
+  lastDiscoverResult = data;
+  screenerRows = collectScreenerRows(data);
+  renderScreenerTable();
+  const resultsEl = document.getElementById("research-results");
+  if (resultsEl) delete resultsEl.dataset.scanUi;
+  applyGlanceFromVisual((data.opportunities && data.opportunities[0] && data.opportunities[0].visual) || null);
   const results = document.getElementById("research-results");
   const btn = document.getElementById("research-btn");
   if (btn) btn.disabled = false;
@@ -1028,7 +1829,7 @@ function renderDiscoverResults(data) {
       const openResearch = el("button", { class: "secondary", text: "RESEARCH" });
       openResearch.addEventListener("click", () => {
         document.getElementById("query").value = o.symbol;
-        document.getElementById("symbol-research").scrollIntoView({ behavior: "smooth" });
+        showView("symbol");
         document.getElementById("analyze-btn").click();
       });
       card.appendChild(openResearch);
@@ -1345,32 +2146,37 @@ async function runResearchHistory() {
     PENDING: "PENDING", FOLLOW_THROUGH_OBSERVED: "FOLLOW-THROUGH OBSERVED", NO_FOLLOW_THROUGH: "NO FOLLOW-THROUGH",
     FAILED_SETUP: "FAILED SETUP", INSUFFICIENT_OUTCOME_DATA: "INSUFFICIENT OUTCOME DATA",
   };
-  const table = el("table", { class: "checkpoint-table" });
+  results.appendChild(el("p", { class: "hint", text: "HISTORICAL JOURNAL METADATA — evidence completeness and compatibility labels from the stored observation. Not a current ranking or opportunity score." }));
+  const scroller = el("div", { class: "table-scroll" });
+  const table = el("table", { class: "checkpoint-table history-desktop" });
   table.appendChild(el("thead", {}, [el("tr", {}, [
-    "Generated (UTC)", "Symbol", "Direction", "Contract", "Early-Stage State", "Research Confidence", "Final Decision", "Outcome", "First Follow-Through",
+    "Generated", "Symbol", "State", "Pattern", "Direction", "Outcome",
   ].map((h) => el("th", { text: h })))]));
   const tbody = el("tbody");
+  const cards = el("div", { class: "history-cards" });
   data.entries.forEach((entry) => {
     const o = entry.observation;
     const out = entry.outcome;
+    const when = o.generated_at ? new Date(o.generated_at).toLocaleString() : "n/a";
+    const pat = o.developing_pattern || o.early_stage_state || "—";
     tbody.appendChild(el("tr", {}, [
-      el("td", { text: o.generated_at }),
+      el("td", { text: when }),
       el("td", { text: o.symbol }),
+      el("td", { text: o.research_state || o.early_stage_state || "n/a" }),
+      el("td", { text: String(pat) }),
       el("td", { text: o.direction }),
-      // A price-only (replay) observation genuinely has no selected
-      // contract -- both fields are null. Rendering that as the string
-      // "null null" would read as corrupt data rather than as the honest
-      // "no contract was evaluated" this actually is.
-      el("td", { text: (o.selected_right && o.selected_strike) ? (o.selected_right + " " + o.selected_strike) : "no contract (price-only)" }),
-      el("td", { text: o.early_stage_state }),
-      el("td", { text: o.research_confidence }),
-      el("td", { text: o.actionability }),
       el("td", {}, [badge("", OUTCOME_LABELS[out.outcome_status] || out.outcome_status)]),
-      el("td", { text: out.earliest_follow_through_session || "n/a" }),
     ]));
+    const card = el("div", { class: "simple-card" });
+    card.appendChild(el("h3", { text: o.symbol }));
+    card.appendChild(el("p", { class: "chart-hint", text: when + " · " + (o.direction || "") + " · " + (OUTCOME_LABELS[out.outcome_status] || out.outcome_status) }));
+    card.appendChild(el("p", { class: "chart-hint", text: "Journal metadata: " + (o.research_confidence || "n/a") + " / " + (o.actionability || "n/a") + " — stored labels, not a live ranking." }));
+    cards.appendChild(card);
   });
   table.appendChild(tbody);
-  results.appendChild(table);
+  scroller.appendChild(table);
+  results.appendChild(scroller);
+  results.appendChild(cards);
 
   const explain = el("details", { style: "margin-top:8px" });
   explain.appendChild(el("summary", { text: "Why each outcome status (real, factual explanations)" }));
@@ -1394,26 +2200,35 @@ function patternCountsTable(patterns) {
   // 636px. It scrolls inside its own container instead, so the page never
   // scrolls sideways and the table stays usable.
   const scroller = el("div", { class: "table-scroll", style: "overflow-x:auto;max-width:100%" });
-  const table = el("table", { class: "checkpoint-table" });
+  const table = el("table", { class: "checkpoint-table history-desktop" });
   table.appendChild(el("thead", {}, [el("tr", {}, [
-    "Pattern", "Observed", "Follow-through", "No follow-through", "Failed setup", "Pending", "Insufficient data", "Symbols",
+    "Pattern", "Observed", "Determined", "Follow-through", "No follow-through", "Failed setup", "Pending", "Insufficient data",
   ].map((h) => el("th", { text: h })))]));
   const tbody = el("tbody");
+  const cards = el("div", { class: "history-cards" });
   (patterns || []).forEach((p) => {
+    const determined = (p.follow_through_observed || 0) + (p.no_follow_through || 0) + (p.failed_setup || 0);
     tbody.appendChild(el("tr", {}, [
       el("td", { text: p.pattern }),
       el("td", { text: String(p.observations) }),
+      el("td", { text: String(determined) }),
       el("td", { text: String(p.follow_through_observed) }),
       el("td", { text: String(p.no_follow_through) }),
       el("td", { text: String(p.failed_setup) }),
       el("td", { text: String(p.pending) }),
       el("td", { text: String(p.insufficient_outcome_data) }),
-      el("td", { text: (p.symbols && p.symbols.length) ? p.symbols.join(", ") : "n/a" }),
     ]));
+    const card = el("div", { class: "simple-card" });
+    card.appendChild(el("h3", { text: p.pattern }));
+    card.appendChild(el("p", { class: "chart-hint", text: "Observed " + p.observations + " · determined " + determined + " · pending " + p.pending + " · insufficient " + p.insufficient_outcome_data }));
+    cards.appendChild(card);
   });
   table.appendChild(tbody);
   scroller.appendChild(table);
-  return scroller;
+  const wrap = el("div");
+  wrap.appendChild(scroller);
+  wrap.appendChild(cards);
+  return wrap;
 }
 
 async function runPatternAggregation() {
@@ -1444,7 +2259,9 @@ async function runPatternAggregation() {
 
   // Sample size FIRST -- before any count.
   const honesty = el("div", { class: "list-block", style: "margin-bottom:10px" });
-  honesty.appendChild(el("p", { style: "font-weight:600;margin-top:0", text: data.sample_size_note }));
+  honesty.appendChild(el("p", { style: "font-weight:700", text: "PRICE-ONLY HISTORICAL REPLAY" }));
+  honesty.appendChild(el("p", { class: "hint", text: "DERIVATIVES HISTORY UNAVAILABLE" }));
+  if (data.derivatives_history) honesty.appendChild(el("p", { class: "hint", text: "Backend coverage label: " + String(data.derivatives_history).replace(/_/g, " ") }));
   const covRow = el("div", { style: "margin:4px 0" });
   covRow.appendChild(badge("PRICE HISTORY", data.price_history));
   covRow.appendChild(badge("DERIVATIVES HISTORY", data.derivatives_history));
@@ -2012,6 +2829,8 @@ function renderDashboard(data) {
     "last analysis: " + (data.generated_at ? new Date(data.generated_at).toLocaleString() : "n/a") + "  (fetched " + state.lastFetchedAt.toLocaleTimeString() + ")";
 
   renderHeaderBadges(data);
+  renderSymbolHero(data);
+  applyGlanceFromVisual(data.visual);
 
   if (data.parse_warnings && data.parse_warnings.length) {
     document.getElementById("warnings-box").textContent = "QUERY NOTES: " + data.parse_warnings.join("; ");
@@ -2019,6 +2838,16 @@ function renderDashboard(data) {
   }
 
   if (data.error) {
+    const host = document.getElementById("symbol-hero");
+    if (host) {
+      host.innerHTML = "";
+      host.appendChild(el("h2", { text: data.symbol || data.parsed_symbol || analyzingQuery || "n/a" }));
+      host.appendChild(el("p", { class: "state-tag", text: "ANALYSIS UNAVAILABLE" }));
+      host.appendChild(el("p", { text: "Reason: " + data.error }));
+      const retry = el("button", { type: "button", text: "Retry" });
+      retry.addEventListener("click", () => analyze(document.getElementById("query").value.trim()));
+      host.appendChild(retry);
+    }
     document.getElementById("error-box").textContent = "ANALYSIS UNAVAILABLE: " + data.error +
       "\n\nThis box only accepts a market symbol, optionally with a strike and CE/PE -- not a question. Try:\nRELIANCE\nRELIANCE 1300 CE\nRELIANCE 1300 PE";
     document.getElementById("error-box").style.display = "block";
@@ -2065,8 +2894,6 @@ function renderDashboard(data) {
 
   renderSection("renderQueryIdentity", () => renderQueryIdentity(data));
   renderOutcomeTracking(data);
-  refreshJournalStatus();
-
   scheduleRefresh();
 }
 
@@ -4105,43 +4932,108 @@ document.getElementById("followup-query").addEventListener("keydown", (e) => { i
 async function loadSystemStatus() {
   const box = document.getElementById("system-status");
   const marketLine = document.getElementById("market-status-line");
-  if (!box) return;
   try {
     const resp = await fetch(apiUrl("/api/health"));
     const data = await resp.json();
-    box.innerHTML = "";
-    (data.streams || []).forEach((s) => {
-      const chip = el("span", { class: "status-chip " + (s.state || "UNKNOWN"), text: s.name + "  " + s.state });
-      box.appendChild(chip);
-    });
+    applyGlanceFromHealth(data);
+    try {
+      const obs = await fetch(apiUrl("/api/market/observed"));
+      if (obs.ok) applyObservedMarket(await obs.json());
+    } catch (ignore) { /* glance stays UNAVAILABLE */ }
+    if (box) {
+      box.innerHTML = "";
+      (data.streams || []).forEach((s) => {
+        const chip = el("span", { class: "status-chip " + (s.state || "UNKNOWN"), text: s.name + "  " + s.state });
+        box.appendChild(chip);
+      });
+    }
     if (marketLine) {
-      marketLine.textContent = "Market Status: " + (data.token_configured ? "market-data account configured" : "market-data account not configured") +
+      marketLine.textContent = "Market Status: " + ((data.session_window && data.session_window.session_window) || "UNKNOWN") +
         " · broker execution " + (data.broker_execution || "unknown") +
         " · primary " + (data.primary_provider || "n/a");
     }
   } catch (e) {
-    box.appendChild(el("span", { class: "status-chip UNKNOWN", text: "System status unavailable" }));
+    if (box) box.appendChild(el("span", { class: "status-chip UNKNOWN", text: "System status unavailable" }));
     if (marketLine) marketLine.textContent = "Market Status: status fetch failed -- " + e;
   }
 }
 loadSystemStatus().finally(() => {
-  document.querySelectorAll(".primary-nav [data-jump]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const target = document.getElementById(btn.getAttribute("data-jump"));
-      if (target) target.scrollIntoView({ behavior: "smooth" });
-    });
+  document.querySelectorAll(".primary-nav [data-view]").forEach((btn) => {
+    btn.addEventListener("click", () => showView(btn.getAttribute("data-view")));
   });
+  const dataPill = document.getElementById("data-pill");
+  if (dataPill) {
+    dataPill.addEventListener("click", () => {
+      const pop = document.getElementById("data-popover");
+      const open = pop.classList.toggle("is-open");
+      dataPill.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  }
+  const search = document.getElementById("screener-search");
+  if (search) search.addEventListener("input", renderScreenerTable);
+  const analyzeFromScreener = () => {
+    const q = ((document.getElementById("screener-analyze") || {}).value || "").trim();
+    if (!q) return;
+    document.getElementById("query").value = q;
+    analyze(q);
+  };
+  const sa = document.getElementById("screener-analyze-btn");
+  if (sa) sa.addEventListener("click", analyzeFromScreener);
+  const sai = document.getElementById("screener-analyze");
+  if (sai) sai.addEventListener("keydown", (e) => { if (e.key === "Enter") analyzeFromScreener(); });
+  const sort = document.getElementById("screener-sort");
+  if (sort) sort.addEventListener("change", renderScreenerTable);
+  ["screener-pattern", "screener-contract", "screener-fresh"].forEach((id) => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener("change", renderScreenerTable);
+  });
+  document.querySelectorAll("#market-glance [data-analyze]").forEach((cell) => {
+    cell.addEventListener("click", () => openSymbol(cell.getAttribute("data-analyze")));
+  });
+  document.addEventListener("keydown", (e) => {
+    const tag = (e.target && e.target.tagName) || "";
+    const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (e.key === "/" && !typing) {
+      e.preventDefault();
+      const search = document.getElementById("screener-search");
+      showView("screener");
+      if (search) search.focus();
+    }
+    if (e.key === "Escape") {
+      const pop = document.getElementById("data-popover");
+      if (pop && pop.classList.contains("is-open")) {
+        pop.classList.remove("is-open");
+        return;
+      }
+      showView("screener");
+    }
+    if (e.key === "Enter" && document.activeElement === document.getElementById("screener-search")) {
+      const q = (document.getElementById("screener-search").value || "").trim().toUpperCase();
+      const hit = screenerRows.find((o) => o.symbol === q);
+      if (hit) openSymbol(hit.symbol);
+    }
+  });
+  renderPersonalWatch();
   const filters = document.getElementById("discover-filters");
   if (filters) {
     filters.addEventListener("click", (ev) => {
       const chip = ev.target.closest("[data-filter]");
       if (!chip) return;
       const key = chip.getAttribute("data-filter");
+      screenerFilter = key;
+      renderScreenerTable();
       document.querySelectorAll("#research-results [data-discover-filter]").forEach((node) => {
         node.style.display = (key === "all" || node.getAttribute("data-discover-filter") === key) ? "" : "none";
       });
     });
   }
+  renderScreenerTable();
+  const initialView = (location.hash || "#screener").replace("#", "");
+  if (["market", "screener", "history", "patterns", "symbol"].includes(initialView)) showView(initialView);
+  window.addEventListener("hashchange", () => {
+    const vname = (location.hash || "#screener").replace("#", "");
+    if (["market", "screener", "history", "patterns", "symbol"].includes(vname)) showView(vname);
+  });
   if (!document.body.dataset.explainBound) {
     document.body.dataset.explainBound = "1";
     document.body.addEventListener("click", (ev) => {

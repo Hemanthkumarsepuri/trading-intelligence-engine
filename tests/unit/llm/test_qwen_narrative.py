@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -138,3 +140,33 @@ def test_validate_rejects_forbidden_claims_in_prose_under_allowed_keys(text: str
 )
 def test_validate_accepts_factual_paraphrase_of_deterministic_evidence(text: str) -> None:
     assert validate_qwen_payload({"summary": text}) is None
+
+
+@pytest.mark.asyncio
+async def test_a_slow_dribbling_model_cannot_outlast_the_documented_timeout() -> None:
+    """`timeout_seconds` is a WALL-CLOCK budget, not httpx's per-operation
+    read timeout.
+
+    Found in a real browser UAT (18 Sep 2026): with `timeout=8.0` the
+    panel took 32.8 s to fall back, because httpx's read timeout means
+    "no bytes for N seconds" and a model emitting tokens slowly resets it
+    on every token. This machine's Qwen runs at ~0.05 tok/s, so that is
+    not a hypothetical. The handler below never raises a timeout of its
+    own -- it just takes far longer than the budget, exactly like a real
+    slow generation -- so this test fails against a per-operation-only
+    timeout and passes against a wall-clock deadline.
+    """
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"summary": "too late"}'}}]})
+
+    adapter = QwenNarrativeAdapter(enabled=True, timeout_seconds=0.25)
+    transport = httpx.MockTransport(handler)
+    started = time.perf_counter()
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await adapter.explain(client, facts={"x": 1}, source_evidence_ids=("a",))
+    elapsed = time.perf_counter() - started
+
+    assert result.ok is False
+    assert result.status == "TIMEOUT"
+    assert elapsed < 2.0, f"the wall-clock budget was not honoured: waited {elapsed:.2f}s for a 0.25s timeout"

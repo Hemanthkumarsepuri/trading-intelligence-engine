@@ -28,6 +28,7 @@ env/
 .idea/
 
 # Testing
+.playwright-mcp/
 .pytest_cache/
 .coverage
 htmlcov/

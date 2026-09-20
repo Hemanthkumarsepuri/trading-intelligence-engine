@@ -11,6 +11,7 @@ import pytest
 
 from app.domain.market.trading_calendar import (
     classify_session,
+    classify_session_window,
     is_nse_holiday,
     is_trading_day,
     is_weekend,
@@ -158,3 +159,29 @@ def test_most_recent_trading_day_raises_if_no_trading_day_found_within_the_searc
     all_days_off = frozenset(_FRIDAY - timedelta(days=i) for i in range(20))  # today and the prior 19 days are all "off"
     with pytest.raises(ValueError, match="no trading day found"):
         most_recent_trading_day_at_or_before(_FRIDAY, all_days_off)
+
+
+def test_session_window_uses_ist_clock_on_a_trading_day() -> None:
+    from datetime import UTC, datetime
+
+    # Friday 28 Aug 2026 06:30 UTC = 12:00 IST — regular session.
+    open_window = classify_session_window(datetime(2026, 8, 28, 6, 30, tzinfo=UTC))
+    assert open_window.session_window == "OPEN"
+    assert open_window.is_trading_day is True
+
+    pre = classify_session_window(datetime(2026, 8, 28, 3, 40, tzinfo=UTC))  # 09:10 IST
+    assert pre.session_window == "PRE_OPEN"
+
+    closed_morning = classify_session_window(datetime(2026, 8, 28, 2, 0, tzinfo=UTC))  # 07:30 IST
+    assert closed_morning.session_window == "CLOSED"
+
+    closed_evening = classify_session_window(datetime(2026, 8, 28, 11, 0, tzinfo=UTC))  # 16:30 IST
+    assert closed_evening.session_window == "CLOSED"
+
+
+def test_session_window_is_closed_on_a_weekend_even_during_weekday_hours() -> None:
+    from datetime import UTC, datetime
+
+    saturday_noon_ist = classify_session_window(datetime(2026, 8, 29, 6, 30, tzinfo=UTC))
+    assert saturday_noon_ist.is_weekend is True
+    assert saturday_noon_ist.session_window == "CLOSED"

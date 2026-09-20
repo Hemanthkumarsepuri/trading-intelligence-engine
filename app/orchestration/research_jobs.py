@@ -55,6 +55,8 @@ class ResearchJob:
             "error": self.error,
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
+            "symbols": list(self.symbols) if self.symbols is not None else None,
+            "scan_kind": "EXPLICIT" if self.symbols is not None else "F&O_UNIVERSE",
             "result": self.result,
         }
 

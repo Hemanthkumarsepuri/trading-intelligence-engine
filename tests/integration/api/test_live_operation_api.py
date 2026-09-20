@@ -561,7 +561,28 @@ def test_dashboard_html_netlify_readiness_api_base() -> None:
     # apiUrl(), which is the property actually under test here.
     # Release gate -- +1 for GET /api/research/replay-dataset (COMPARE
     # HISTORICAL OBSERVATIONS), which also routes through apiUrl().
-    assert html.count('fetch(apiUrl(') == 17
+    assert html.count('fetch(apiUrl(') == 18
+
+
+def test_dashboard_html_does_not_infer_timing_or_confuse_analysis_clock() -> None:
+    """Release hardening -- Symbol workspace must print API timing and
+    market observation time, never invent a stage in JavaScript or label
+    generated_at as LAST OBSERVED."""
+    import app.api.main as main_module
+
+    static_dir = Path(main_module.__file__).resolve().parent / "static"
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    assert "function workspaceTiming(data)" in html
+    assert "if (data.timing_stage) return data.timing_stage;" in html
+    assert "LAST MARKET OBSERVATION" in html
+    assert "data.market_observed_at" in html
+    assert "Insufficient evidence to classify timing." in html
+    assert "EXPLICIT · ANALYSING" in html or "SELECTED SYMBOLS" in html
+    assert "F&O UNIVERSE" in html
+    assert "NO LATEST MARKET SCAN" in html
+    # Per-stream glance times come from the observed-market payload.
+    assert "cell.observed_at_ist" in html
+    assert "cell.freshness_label" in html
 
 
 def test_dashboard_html_includes_the_sprint6_ce_pe_and_chart_sections() -> None:

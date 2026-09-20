@@ -37,6 +37,8 @@ from app.domain.audit.snapshot_diff import (
     SnapshotChangeReport,
     build_snapshot_change_report,
 )
+from app.domain.options.early_opportunity import TimingStage, classify_research_bucket
+from app.domain.options.freshness_label import DataStream
 from app.domain.options.query_parser import ParsedQuery, parse_instrument_query
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.orchestration.audit_journal import build_analysis_snapshot
@@ -121,6 +123,9 @@ class AnalyzeResponse(BaseModel):
     decision_quality: str | None = None
     decision: str | None = None
     research_state: str | None = None
+    timing_stage: str | None = None
+    timing_reason: str | None = None
+    market_observed_at: datetime | None = None
 
     error: str | None = None
     compact_report: str | None = None
@@ -158,6 +163,52 @@ class AnalyzeResponse(BaseModel):
     invalidation_condition: str | None = None
 
     latency_seconds: float
+
+
+def timing_from_report(report: object) -> tuple[str, str | None]:
+    """Same `classify_research_bucket()` timing the screener already uses.
+
+    `early_stage_state` is not recomputed here: that gated daily-scan
+    ordinal needs a ranked candidate. Timing still comes from the same
+    classifier, with research state, named pattern, day-change, and
+    contract liquidity copied from this report. UNKNOWN is returned with
+    a reason when the classifier cannot determine a stage.
+    """
+    development = getattr(report, "development", None)
+    pattern = getattr(development, "pattern", None)
+    pattern_value = pattern.value if pattern is not None and hasattr(pattern, "value") else (str(pattern) if pattern else None)
+    research_state = getattr(report, "research_state", None)
+    state = research_state.value if research_state is not None and hasattr(research_state, "value") else research_state
+    liquidity_grade = None
+    candidates = getattr(report, "candidates", None) or []
+    if candidates:
+        liquidity = getattr(candidates[0], "liquidity", None)
+        grade = getattr(liquidity, "grade", None)
+        liquidity_grade = grade.value if grade is not None and hasattr(grade, "value") else (str(grade) if grade else None)
+    assessment = classify_research_bucket(
+        research_state=str(state) if state is not None else None,
+        early_stage_state="UNKNOWN",
+        development_pattern=pattern_value,
+        pre_breakout_signal=False,
+        event_risk="UNKNOWN",
+        liquidity_grade=liquidity_grade,
+        day_change_pct=getattr(report, "day_change_pct", None),
+    )
+    timing = assessment.timing.value
+    reason = None
+    if assessment.timing == TimingStage.UNKNOWN:
+        reason = "Insufficient evidence to classify timing."
+    return timing, reason
+
+
+def market_observed_at_from_report(report: object) -> datetime | None:
+    """Underlying quote print time — not `generated_at` (analysis clock)."""
+    for stream in getattr(report, "stream_freshness", None) or []:
+        name = getattr(getattr(stream, "stream", None), "value", getattr(stream, "stream", None))
+        stamp = getattr(stream, "data_timestamp", None)
+        if name == DataStream.UNDERLYING_QUOTE.value and isinstance(stamp, datetime):
+            return stamp
+    return None
 
 
 def _parsed_response_fields(parsed: ParsedQuery) -> dict[str, object]:
@@ -261,6 +312,7 @@ async def run_analysis(
     reasoning = report.decision.reasoning if report.decision is not None else None
     invalidation_level = str(report.invalidation_level) if report.invalidation_level is not None else None
     invalidation_condition = (report.candidates[0].invalidation_condition or None) if report.candidates else None
+    timing_stage, timing_reason = timing_from_report(report)
 
     return AnalyzeResponse(
         query=query, **_parsed_response_fields(parsed), symbol=report.symbol, generated_at=report.generated_at,
@@ -270,6 +322,9 @@ async def run_analysis(
         decision_quality=report.quality_tiers.decision_quality.value if report.quality_tiers is not None else None,
         decision=report.decision.decision.value if report.decision is not None else None,
         research_state=report.research_state.value if report.research_state is not None else None,
+        timing_stage=timing_stage,
+        timing_reason=timing_reason,
+        market_observed_at=market_observed_at_from_report(report),
         compact_report=report.render_compact(), detailed_report=report.render_text(),
         visual=build_visual_data(report), latency_seconds=latency,
         audit_id=audit_id, journal_status=journal_status, what_changed=what_changed, watch_next=watch_next,

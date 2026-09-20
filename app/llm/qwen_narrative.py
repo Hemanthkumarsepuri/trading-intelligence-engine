@@ -12,6 +12,7 @@ with deterministic research unchanged.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -329,13 +330,24 @@ class QwenNarrativeAdapter:
             ],
         }
         try:
-            response = await client.post(
-                self.endpoint,
-                json=body,
-                headers={"Content-Type": "application/json"},
-                timeout=self.timeout_seconds,
-            )
-        except httpx.TimeoutException:
+            # `timeout_seconds` has to be a WALL-CLOCK budget, because that
+            # is what it is documented as and what a person waiting for the
+            # panel actually experiences. httpx's own timeout is per
+            # OPERATION: its read timeout means "no bytes for N seconds",
+            # which a model emitting tokens slowly resets on every single
+            # token. Measured on this machine (~0.05 tok/s), a request with
+            # `timeout=8.0` kept the browser waiting 32.8 s before the
+            # deterministic fallback appeared. The outer deadline makes the
+            # documented number true; the httpx timeout is kept as the
+            # inner, per-operation guard (a dead socket still fails fast).
+            async with asyncio.timeout(self.timeout_seconds):
+                response = await client.post(
+                    self.endpoint,
+                    json=body,
+                    headers={"Content-Type": "application/json"},
+                    timeout=self.timeout_seconds,
+                )
+        except (httpx.TimeoutException, TimeoutError):
             latency_ms = int((time.perf_counter() - started) * 1000)
             return QwenResult(
                 ok=False, status="TIMEOUT", explanation=None, detail="Qwen request timed out",

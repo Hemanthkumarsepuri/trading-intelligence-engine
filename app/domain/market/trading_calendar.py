@@ -30,8 +30,10 @@ lines -- they ARE trading days even on a weekend.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+
+from app.utils.time import to_ist
 
 # Deliberately empty -- see module docstring's HOLIDAY DETECTION section.
 # Populate only from a real, authorized NSE holiday-calendar source; never
@@ -202,4 +204,53 @@ def classify_session(day: date, holidays: frozenset[date] | None = None) -> Mark
     return MarketSessionContext(
         calendar_date=day, is_weekend=weekend, is_holiday=holiday, is_special_session=special,
         is_trading_day=trading, next_trading_day=None if trading else next_trading_day(day, resolved),
+    )
+
+
+# Regular NSE cash/F&O session clock (IST). These hours are a documented
+# exchange fact, not a live ping. Pre-open is the 09:00–09:15 call auction
+# window Upstox reports as PRE_OPEN_START/PRE_OPEN_END.
+_NSE_PRE_OPEN = time(9, 0)
+_NSE_REGULAR_OPEN = time(9, 15)
+_NSE_REGULAR_CLOSE = time(15, 30)
+
+
+@dataclass(frozen=True)
+class SessionWindow:
+    """Clock+calendar session label for the UI.
+
+    This is NOT MarketDataState and NOT a live exchange ping. A special
+    (Muhurat) session that falls outside 09:15–15:30 IST is reported as
+    CLOSED with `is_special_session=True` rather than inventing hours.
+    """
+
+    session_window: str
+    calendar_date_ist: date
+    is_trading_day: bool
+    is_weekend: bool
+    is_holiday: bool
+    is_special_session: bool
+    basis: str = "NSE trading calendar plus IST clock. Not a live exchange ping."
+
+
+def classify_session_window(as_of: datetime, holidays: frozenset[date] | None = None) -> SessionWindow:
+    """OPEN / PRE_OPEN / CLOSED from the IST clock and `classify_session()`."""
+    ist = to_ist(as_of)
+    day = classify_session(ist.date(), holidays)
+    clock = ist.time()
+    if not day.is_trading_day or clock < _NSE_PRE_OPEN:
+        window = "CLOSED"
+    elif clock < _NSE_REGULAR_OPEN:
+        window = "PRE_OPEN"
+    elif clock <= _NSE_REGULAR_CLOSE:
+        window = "OPEN"
+    else:
+        window = "CLOSED"
+    return SessionWindow(
+        session_window=window,
+        calendar_date_ist=day.calendar_date,
+        is_trading_day=day.is_trading_day,
+        is_weekend=day.is_weekend,
+        is_holiday=day.is_holiday,
+        is_special_session=day.is_special_session,
     )

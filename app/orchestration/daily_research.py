@@ -2540,6 +2540,7 @@ class ResearchThesisView(BaseModel):
     options_data_quality: str = ""
     news_data_quality: str = ""
     observed_at: datetime | None = None
+    day_change_pct: Decimal | None = None
 
 
 def _atr_pct_from_visual(visual: VisualData | None) -> Decimal | None:
@@ -2711,6 +2712,11 @@ def build_research_thesis(candidate: RankedCandidate) -> ResearchThesisView:
         options_data_quality=_stream_quality_line(v, "option_chain"),
         news_data_quality=_stream_quality_line(v, "news"),
         observed_at=candidate.response.generated_at,
+        day_change_pct=(
+            v.extension_distance.day_change_pct
+            if v is not None and v.extension_distance is not None
+            else None
+        ),
     )
 
 

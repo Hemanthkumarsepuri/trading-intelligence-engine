@@ -211,8 +211,13 @@ def build_system_status(
     )
 
 
-def as_health_payload(view: SystemStatusView, *, server_time_utc: str) -> dict[str, Any]:
-    return {
+def as_health_payload(
+    view: SystemStatusView,
+    *,
+    server_time_utc: str,
+    session_window: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "token_configured": view.token_configured,
         "server_time_utc": server_time_utc,
         "qwen_enabled": view.qwen_enabled,
@@ -222,3 +227,6 @@ def as_health_payload(view: SystemStatusView, *, server_time_utc: str) -> dict[s
         "broker_execution": view.broker_execution,
         "streams": [s.model_dump(mode="json") for s in view.streams],
     }
+    if session_window is not None:
+        payload["session_window"] = session_window
+    return payload

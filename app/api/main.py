@@ -60,7 +60,11 @@ from app.domain.journal.personal_journal import (
     PersonalJournalOutcome,
 )
 from app.domain.market.models import OptionRight
-from app.domain.market.trading_calendar import apply_nse_calendar_file, classify_session
+from app.domain.market.trading_calendar import (
+    apply_nse_calendar_file,
+    classify_session,
+    classify_session_window,
+)
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.llm.qwen_narrative import QwenNarrativeAdapter
 from app.orchestration.daily_research import (
@@ -87,6 +91,7 @@ from app.orchestration.journal_views import (
     build_journal_status,
     build_outcome_tracking,
 )
+from app.orchestration.observed_market import build_observed_market
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
 from app.orchestration.pattern_views import (
     PatternAggregationView,
@@ -300,6 +305,7 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
         a valid response. This endpoint does not probe Qwen or option-chain
         (those would hide a slow/failing dependency behind a health call)."""
         qwen_verified: bool | None = getattr(app.state, "qwen_verified_ok", None)
+        now = utc_now()
         view = build_system_status(
             token_configured=getattr(app.state, "provider", None) is not None,
             instrument_master_loaded=getattr(app.state, "instrument_master", None) is not None,
@@ -311,7 +317,32 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
             dhan_configured=bool(settings.dhan_access_token),
             fivepaisa_configured=False,
         )
-        return as_health_payload(view, server_time_utc=utc_now().isoformat())
+        window = classify_session_window(now)
+        return as_health_payload(
+            view,
+            server_time_utc=now.isoformat(),
+            session_window={
+                "session_window": window.session_window,
+                "calendar_date_ist": window.calendar_date_ist.isoformat(),
+                "is_trading_day": window.is_trading_day,
+                "is_weekend": window.is_weekend,
+                "is_holiday": window.is_holiday,
+                "is_special_session": window.is_special_session,
+                "basis": window.basis,
+            },
+        )
+
+    @app.get("/api/market/observed")
+    async def market_observed() -> dict[str, object]:
+        """Latest persisted index prints. Never calls a provider. Missing
+        observations stay UNAVAILABLE. Closed session still returns last
+        observed values when they exist."""
+        repos = getattr(app.state, "repositories", None)
+        return await build_observed_market(
+            instrument_master=getattr(app.state, "instrument_master", None),
+            quotes=getattr(repos, "quotes", None),
+            as_of=utc_now(),
+        )
 
     @app.get("/api/qwen/health")
     async def qwen_health() -> dict[str, object]:

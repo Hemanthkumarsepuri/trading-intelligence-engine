@@ -170,6 +170,19 @@ def test_health_reports_token_configured_state(tmp_path: Path) -> None:
     names = {s["name"]: s["state"] for s in body["streams"]}
     assert names["Option Chain"] != "GREEN"
     assert names["5paisa"] == "UNKNOWN"
+    assert body["session_window"]["session_window"] in ("OPEN", "PRE_OPEN", "CLOSED")
+    assert "Not a live exchange ping" in body["session_window"]["basis"]
+
+
+def test_market_observed_never_fabricates_an_index_print(tmp_path: Path) -> None:
+    app = _configured_app(tmp_path, provider=_provider(_router()), instrument_master=_MASTER)
+    client = TestClient(app)
+    resp = client.get("/api/market/observed")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["indices"]["nifty"]["last_price"] is None
+    assert body["indices"]["nifty"]["observation_kind"] == "UNAVAILABLE"
+    assert body["breadth"]["observation_kind"] == "UNAVAILABLE"
 
 
 def test_analyze_returns_503_when_token_not_configured(tmp_path: Path) -> None:
@@ -191,6 +204,13 @@ def test_analyze_full_real_pipeline_via_http(tmp_path: Path) -> None:
     assert "OPTIONS INTELLIGENCE" in body["compact_report"]
     assert body["market_state"] is not None
     assert body["latency_seconds"] > 0
+    assert body["timing_stage"] in {
+        "VERY_EARLY", "EARLY", "DEVELOPING", "CONFIRMING", "CONFIRMED",
+        "MATURE", "ALREADY_MOVED", "EXTENDED", "UNKNOWN",
+    }
+    if body["timing_stage"] == "UNKNOWN":
+        assert body["timing_reason"] == "Insufficient evidence to classify timing."
+    assert "market_observed_at" in body
 
 
 def test_analyze_surfaces_parsed_strike_and_right(tmp_path: Path) -> None:

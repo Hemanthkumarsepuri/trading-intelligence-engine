@@ -19,6 +19,8 @@ async def test_registry_runs_one_job_and_records_progress() -> None:
         return {"ok": True}
 
     first = await registry.start(symbols=None, runner=runner)
+    assert first.as_dict()["scan_kind"] == "F&O_UNIVERSE"
+    assert first.as_dict()["symbols"] is None
     second = await registry.start(symbols=None, runner=runner)
     assert first.job_id == second.job_id
     await asyncio.sleep(0.15)
@@ -26,6 +28,23 @@ async def test_registry_runs_one_job_and_records_progress() -> None:
     assert latest is not None
     assert latest.status == "COMPLETE"
     assert latest.result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_explicit_symbol_job_is_labeled_explicit_not_universe() -> None:
+    registry = ResearchJobRegistry()
+
+    async def runner(job: ResearchJob) -> dict[str, object]:
+        return {"scan_mode": "EXPLICIT_SYMBOL_QUERY"}
+
+    job = await registry.start(symbols=("RELIANCE", "KAYNES"), runner=runner)
+    payload = job.as_dict()
+    assert payload["scan_kind"] == "EXPLICIT"
+    assert payload["symbols"] == ["RELIANCE", "KAYNES"]
+    await asyncio.sleep(0.05)
+    latest = registry.latest()
+    assert latest is not None
+    assert latest.as_dict()["scan_kind"] == "EXPLICIT"
 
 
 @pytest.mark.asyncio
