@@ -1852,7 +1852,12 @@ function renderSymbolHero(data) {
     const expiryTxt = rc.expiry || "UNKNOWN";
     cblock.appendChild(el("p", { text: [assess.right || rc.requested_right, assess.strike || rc.requested_strike, expiryTxt].filter(Boolean).join(" ") }));
     cblock.appendChild(el("p", { style: "font-weight:700", text: contract.code }));
-    const dteTxt = (tw && tw.contract_dte != null) ? String(tw.contract_dte) : "UNKNOWN";
+    const chainExpiry = (v.option_chain && v.option_chain.expiry) || rc.expiry || null;
+    const tsRows = (v.term_structure && v.term_structure.expiries) || [];
+    const tsMatch = chainExpiry ? tsRows.find((e) => e && e.expiry === chainExpiry) : null;
+    const dteTxt = (tsMatch && tsMatch.days_remaining != null)
+      ? String(tsMatch.days_remaining)
+      : ((tw && tw.contract_dte != null) ? String(tw.contract_dte) : "UNKNOWN");
     cblock.appendChild(el("p", { class: "chart-hint", text: obsKind + " · LTP " + (assess.ltp != null ? assess.ltp : "UNKNOWN") + " · OI " + (assess.open_interest != null ? assess.open_interest : "UNKNOWN") + " · ΔOI " + (assess.change_in_open_interest != null ? assess.change_in_open_interest : "UNKNOWN") + " · Volume " + (assess.volume != null ? assess.volume : "UNKNOWN") + " · IV " + (assess.implied_volatility != null ? assess.implied_volatility : "UNKNOWN") }));
     cblock.appendChild(el("p", { class: "chart-hint", text: "Bid " + (assess.bid != null ? assess.bid : "UNKNOWN") + " · Ask " + (assess.ask != null ? assess.ask : "UNKNOWN") + " · DTE " + dteTxt }));
   } else {
