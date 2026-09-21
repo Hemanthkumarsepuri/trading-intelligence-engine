@@ -110,3 +110,13 @@ def test_order_independent_beyond_the_first_token() -> None:
     assert result.symbol == "NIFTY"
     assert result.right == OptionRight.CE
     assert result.strike == Decimal("25000")
+
+
+def test_october_full_name_and_year_are_not_a_second_strike() -> None:
+    result = parse_instrument_query("RELIANCE 1270 PE OCTOBER 2026")
+    assert result.symbol == "RELIANCE"
+    assert result.strike == Decimal("1270")
+    assert result.right == OptionRight.PE
+    assert result.expiry_hint == "OCT"
+    assert result.expiry_year == 2026
+    assert result.errors == []

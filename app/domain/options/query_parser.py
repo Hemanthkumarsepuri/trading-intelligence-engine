@@ -22,6 +22,11 @@ from decimal import Decimal, InvalidOperation
 from app.domain.market.models import OptionRight
 
 _MONTH_ABBREVIATIONS = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"}
+_MONTH_NAMES = {
+    "JANUARY": "JAN", "FEBRUARY": "FEB", "MARCH": "MAR", "APRIL": "APR",
+    "MAY": "MAY", "JUNE": "JUN", "JULY": "JUL", "AUGUST": "AUG",
+    "SEPTEMBER": "SEP", "OCTOBER": "OCT", "NOVEMBER": "NOV", "DECEMBER": "DEC",
+}
 _RIGHT_TOKENS = {"CE": OptionRight.CE, "PE": OptionRight.PE}
 
 
@@ -32,6 +37,7 @@ class ParsedQuery:
     strike: Decimal | None
     right: OptionRight | None
     expiry_hint: str | None  # a month abbreviation the user typed, e.g. "SEP" -- never a resolved date
+    expiry_year: int | None = None
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -45,15 +51,18 @@ class ParsedQuery:
 def parse_instrument_query(text: str) -> ParsedQuery:
     tokens = text.strip().upper().split()
     if not tokens:
-        return ParsedQuery(raw_text=text, symbol=None, strike=None, right=None, expiry_hint=None, errors=["empty query"])
+        return ParsedQuery(raw_text=text, symbol=None, strike=None, right=None, expiry_hint=None, expiry_year=None, errors=["empty query"])
 
     symbol = tokens[0]
     strike: Decimal | None = None
     right: OptionRight | None = None
     expiry_hint: str | None = None
+    expiry_year: int | None = None
     errors: list[str] = []
 
     for tok in tokens[1:]:
+        if tok in _MONTH_NAMES:
+            tok = _MONTH_NAMES[tok]
         if tok in _RIGHT_TOKENS:
             if right is not None:
                 errors.append(f"multiple option-right tokens found ('{right.value}' and '{tok}')")
@@ -64,6 +73,12 @@ def parse_instrument_query(text: str) -> ParsedQuery:
                 errors.append(f"multiple expiry hints found ('{expiry_hint}' and '{tok}')")
             else:
                 expiry_hint = tok
+        elif tok.isdigit() and len(tok) == 4 and 1990 <= int(tok) <= 2100:
+            year_value = int(tok)
+            if expiry_year is not None:
+                errors.append(f"multiple year tokens found ({expiry_year} and {year_value})")
+            else:
+                expiry_year = year_value
         else:
             try:
                 value = Decimal(tok)
@@ -82,4 +97,7 @@ def parse_instrument_query(text: str) -> ParsedQuery:
     if right is not None and strike is None:
         errors.append("CE/PE was given without a strike -- cannot determine which contract")
 
-    return ParsedQuery(raw_text=text, symbol=symbol, strike=strike, right=right, expiry_hint=expiry_hint, errors=errors)
+    return ParsedQuery(
+        raw_text=text, symbol=symbol, strike=strike, right=right,
+        expiry_hint=expiry_hint, expiry_year=expiry_year, errors=errors,
+    )

@@ -49,6 +49,7 @@ from app.data.providers.upstox_fo_master import (
     is_fo_eligible,
     nearest_expiry,
     nearest_futures_instrument_key,
+    resolve_expiry_for_hint,
     select_relevant_expiries,
 )
 from app.data.providers.upstox_instrument_master import resolve_symbol
@@ -410,6 +411,8 @@ async def analyze_symbol(
     mcx_instrument_master: Sequence[dict[str, object]] | None = None,
     requested_strike: Decimal | None = None,
     requested_right: OptionRight | None = None,
+    requested_expiry_hint: str | None = None,
+    requested_expiry_year: int | None = None,
     # Sprint 8, Objective P1 -- the real `{trading_symbol: industry}`
     # mapping from `nse_sector_index.fetch_sector_index()`. Optional and
     # caller-supplied (same pattern as `mcx_instrument_master`): when
@@ -583,7 +586,23 @@ async def analyze_symbol(
 
     # -- 7. expiry selection ------------------------------------------------
     t = time.perf_counter()
-    expiry_info = nearest_expiry(instrument_master, ref.trading_symbol, as_of=as_of.date())
+    if requested_expiry_hint:
+        expiry_info = resolve_expiry_for_hint(
+            instrument_master, ref.trading_symbol, hint=requested_expiry_hint,
+            as_of=as_of.date(), year=requested_expiry_year,
+        )
+        if expiry_info is None:
+            _measure("expiry_selection", t)
+            report.stage_latencies = stage_latencies
+            report.total_latency_seconds = time.perf_counter() - total_started
+            year_bit = f" {requested_expiry_year}" if requested_expiry_year is not None else ""
+            report.error = (
+                f"CONTRACT UNAVAILABLE — no verified {requested_expiry_hint}{year_bit} expiry "
+                f"in the instrument master for {ref.trading_symbol}. Another expiry was not substituted."
+            )
+            return report
+    else:
+        expiry_info = nearest_expiry(instrument_master, ref.trading_symbol, as_of=as_of.date())
     _measure("expiry_selection", t)
     if expiry_info is None:
         report.stage_latencies = stage_latencies
@@ -1003,6 +1022,8 @@ async def analyze_symbol(
                     report.futures_instrument_key = fut_key
                     report.futures_ltp = fut_quote.last_price
                     report.futures_oi = Decimal(fut_quote.open_interest) if fut_quote.open_interest is not None else None
+                    report.futures_volume = fut_quote.volume
+                    report.futures_expiry = expiry_info.expiry.isoformat()
                     report.futures_basis_pct = (fut_quote.last_price - quote.last_price) / quote.last_price * Decimal(100)
                     # Final Hardening Pass, Phase 6 -- real prior basis,
                     # computed only when BOTH real prior quotes (futures
@@ -1028,6 +1049,7 @@ async def analyze_symbol(
                         price_flat_threshold=config.futures_price_flat_threshold,
                     )
                     report.futures_oi_observation = futures_oi_observation
+                    report.futures_oi_change = futures_oi_observation.oi_change
                     report.futures_timestamp = fut_quote.freshness.data_timestamp
             else:
                 report.data_warnings.append("futures instrument key resolved but no quote was returned")

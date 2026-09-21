@@ -97,6 +97,53 @@ def test_get_ohlcv_never_returns_candle_beyond_as_of() -> None:
     assert len(candles) == 1
 
 
+def test_get_ohlcv_merges_intraday_current_day_bars() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/intraday/" in request.url.path:
+            return httpx.Response(200, json={
+                "status": "success",
+                "data": {"candles": [["2026-09-21T14:45:00+05:30", 1245.0, 1246.0, 1244.0, 1245.5, 9000, 0]]},
+            })
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"candles": [["2026-09-18T15:15:00+05:30", 1226.0, 1227.0, 1225.0, 1226.4, 1000, 0]]},
+        })
+
+    provider = _provider(handler)
+
+    async def run() -> list[RawCandle]:
+        return await provider.get_ohlcv(
+            security_id=INSTRUMENT_KEY,
+            exchange_segment=ExchangeSegment.NSE_EQ,
+            timeframe=Timeframe.M15,
+            start=datetime(2026, 9, 1, tzinfo=UTC),
+            end=datetime(2026, 9, 21, 9, 30, tzinfo=UTC),
+            as_of=datetime(2026, 9, 21, 9, 30, tzinfo=UTC),
+        )
+
+    candles = asyncio.run(run())
+    assert [c.close for c in candles] == [1226.4, 1245.5]
+
+
+def test_get_ohlcv_keeps_historical_when_intraday_fails() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/intraday/" in request.url.path:
+            return httpx.Response(503, text="intraday unavailable")
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"candles": [["2026-09-18T15:15:00+05:30", 1226.0, 1227.0, 1225.0, 1226.4, 1000, 0]]},
+        })
+
+    provider = _provider(handler)
+    candles = asyncio.run(provider.get_ohlcv(
+        security_id=INSTRUMENT_KEY, exchange_segment=ExchangeSegment.NSE_EQ, timeframe=Timeframe.M15,
+        start=datetime(2026, 9, 1, tzinfo=UTC), end=datetime(2026, 9, 21, 9, 30, tzinfo=UTC),
+        as_of=datetime(2026, 9, 21, 9, 30, tzinfo=UTC),
+    ))
+    assert len(candles) == 1
+    assert candles[0].close == 1226.4
+
+
 def test_get_ohlcv_sorts_ascending_regardless_of_response_order() -> None:
     body = {
         "status": "success",

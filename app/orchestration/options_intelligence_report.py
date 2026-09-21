@@ -135,6 +135,9 @@ class OptionsIntelligenceReport:
     futures_instrument_key: str | None = None
     futures_ltp: Decimal | None = None
     futures_oi: Decimal | None = None
+    futures_volume: int | None = None
+    futures_oi_change: int | None = None
+    futures_expiry: str | None = None
     futures_basis_pct: Decimal | None = None
     futures_oi_observation: PriceOIObservation | None = None
     futures_timestamp: datetime | None = None
@@ -454,9 +457,12 @@ class OptionsIntelligenceReport:
         if self.futures_instrument_key is None:
             add("No futures contract available for this underlying/expiry")
         else:
+            add(f"Expiry: {self.futures_expiry or 'n/a'}")
             add(f"LTP: {fmt(self.futures_ltp)}")
             add(f"Premium/discount: {self.futures_basis_pct:.2f}%" if self.futures_basis_pct is not None else "Premium/discount: n/a")
             add(f"OI: {self.futures_oi if self.futures_oi is not None else 'n/a'}")
+            add(f"ΔOI: {self.futures_oi_change if self.futures_oi_change is not None else 'n/a'}")
+            add(f"Volume: {self.futures_volume if self.futures_volume is not None else 'n/a'}")
             if self.futures_oi_observation is not None:
                 add(f"OI change: {self.futures_oi_observation.conventional_reading}")
             if self.futures_basis_change is not None:

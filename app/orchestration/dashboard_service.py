@@ -322,6 +322,8 @@ async def run_analysis(
         # no separate response fields are needed.
         requested_strike=parsed.strike if parsed.has_specific_contract else None,
         requested_right=parsed.right if parsed.has_specific_contract else None,
+        requested_expiry_hint=parsed.expiry_hint,
+        requested_expiry_year=parsed.expiry_year,
         nifty50_symbols=nifty50_symbols,
         http_client=http_client,
         delivery_cache_dir=delivery_cache_dir,

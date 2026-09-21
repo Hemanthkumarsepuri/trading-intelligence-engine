@@ -4808,9 +4808,12 @@ function renderFutures(futures) {
     return;
   }
   const kv = el("div", { class: "kv" });
-  const rows = [
+    const rows = [
+    ["Expiry", futures.expiry || "n/a"],
     ["LTP", futures.ltp !== null ? fmt(futures.ltp) : "n/a"],
     ["Open interest", futures.open_interest !== null ? fmtInt(futures.open_interest) : "n/a"],
+    ["ΔOI", futures.oi_change !== null && futures.oi_change !== undefined ? fmtInt(futures.oi_change) : "n/a"],
+    ["Volume", futures.volume !== null && futures.volume !== undefined ? fmtInt(futures.volume) : "n/a"],
     ["Basis vs spot", futures.basis_pct !== null ? fmtPct(futures.basis_pct) : "n/a"],
     ["OI interpretation", futures.oi_interpretation || "n/a"],
   ];

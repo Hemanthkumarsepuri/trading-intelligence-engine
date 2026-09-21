@@ -93,10 +93,10 @@ def _candle_rows(n: int, *, end: datetime, price: float = 1280.0) -> list[list[o
     return rows
 
 
-def _chain_body(*, spot: float = 1300.0, extra_strikes: tuple[float, ...] = ()) -> dict[str, object]:
+def _chain_body(*, spot: float = 1300.0, extra_strikes: tuple[float, ...] = (), expiry: date = EXPIRY) -> dict[str, object]:
     rows: list[dict[str, object]] = [
         {
-            "expiry": EXPIRY.isoformat(), "strike_price": 1300.0, "underlying_spot_price": spot,
+            "expiry": expiry.isoformat(), "strike_price": 1300.0, "underlying_spot_price": spot,
             "call_options": {
                 "instrument_key": CE_KEY,
                 "market_data": {"ltp": 30.0, "bid_price": 29.5, "ask_price": 30.5, "volume": 8000, "oi": 80000, "prev_oi": 75000},
@@ -117,7 +117,7 @@ def _chain_body(*, spot: float = 1300.0, extra_strikes: tuple[float, ...] = ()) 
     # as a real, stable level.
     for strike in extra_strikes:
         rows.append({
-            "expiry": EXPIRY.isoformat(), "strike_price": strike, "underlying_spot_price": spot,
+            "expiry": expiry.isoformat(), "strike_price": strike, "underlying_spot_price": spot,
             "call_options": {
                 "instrument_key": f"NSE_FO|extra-ce-{strike}",
                 "market_data": {"ltp": 5.0, "bid_price": 4.8, "ask_price": 5.2, "volume": 1000, "oi": 20000, "prev_oi": 19000},
@@ -208,7 +208,9 @@ def _router(
             calls["chain"] += 1
             if calls["chain"] <= chain_fails:
                 return httpx.Response(503, text="temporarily unavailable")
-            return httpx.Response(200, json=_chain_body(spot=chain_spot if chain_spot is not None else spot, extra_strikes=extra_chain_strikes))
+            exp_raw = request.url.params.get("expiry_date")
+            exp = date.fromisoformat(exp_raw) if exp_raw else EXPIRY
+            return httpx.Response(200, json=_chain_body(spot=chain_spot if chain_spot is not None else spot, extra_strikes=extra_chain_strikes, expiry=exp))
         raise AssertionError(f"unexpected path {path}")
 
     return handler
@@ -1930,3 +1932,66 @@ def test_sector_none_when_no_sector_map_supplied(tmp_path: Path) -> None:
     assert report.error is None
     assert report.sector_info is None
     assert report.sector_relative_strength is None
+
+
+_OCT_27_2026_MS = 1793125799000
+_OCT_EXPIRY = date(2026, 10, 27)
+
+
+def test_requested_october_hint_loads_october_chain_not_nearest(tmp_path: Path) -> None:
+    master = [
+        *_MASTER,
+        {
+            "segment": "NSE_FO", "underlying_symbol": "RELIANCE", "instrument_type": "CE",
+            "expiry": _OCT_27_2026_MS, "weekly": False, "lot_size": 500, "instrument_key": "NSE_FO|oct-ce",
+            "strike_price": 1270.0,
+        },
+        {
+            "segment": "NSE_FO", "underlying_symbol": "RELIANCE", "instrument_type": "PE",
+            "expiry": _OCT_27_2026_MS, "weekly": False, "lot_size": 500, "instrument_key": "NSE_FO|oct-pe",
+            "strike_price": 1270.0,
+        },
+        {
+            "segment": "NSE_FO", "underlying_symbol": "RELIANCE", "instrument_type": "FUT",
+            "expiry": _OCT_27_2026_MS, "weekly": False, "lot_size": 500, "instrument_key": FUT_KEY,
+        },
+    ]
+    captured: list[str] = []
+
+    base = _router(candle_count=60)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/option/chain":
+            captured.append(request.url.params.get("expiry_date") or "")
+        return base(request)
+
+    report = asyncio.run(
+        analyze_symbol(
+            "RELIANCE", provider=_provider(handler), instrument_master=master, strategy=EMAVWAPAlignmentStrategy(),
+            repositories=_repos(tmp_path), as_of=AS_OF, config=_FAST_CONFIG,
+            requested_strike=Decimal("1270"), requested_right=OptionRight.PE,
+            requested_expiry_hint="OCT", requested_expiry_year=2026,
+        )
+    )
+    assert report.error is None
+    assert report.expiry == _OCT_EXPIRY.isoformat()
+    assert report.option_chain is not None
+    assert report.option_chain.expiry == _OCT_EXPIRY
+    assert captured[0] == _OCT_EXPIRY.isoformat()
+    assert report.option_chain.expiry == _OCT_EXPIRY
+    assert report.requested_contract is not None
+    assert report.requested_contract.requested is None or report.option_chain.expiry == _OCT_EXPIRY
+
+
+def test_unavailable_expiry_hint_does_not_substitute_nearest(tmp_path: Path) -> None:
+    report = asyncio.run(
+        analyze_symbol(
+            "RELIANCE", provider=_provider(_router(candle_count=60)), instrument_master=_MASTER,
+            strategy=EMAVWAPAlignmentStrategy(), repositories=_repos(tmp_path), as_of=AS_OF, config=_FAST_CONFIG,
+            requested_expiry_hint="JAN", requested_expiry_year=2027,
+        )
+    )
+    assert report.error is not None
+    assert "CONTRACT UNAVAILABLE" in report.error
+    assert report.option_chain is None
+    assert report.expiry is None

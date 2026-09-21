@@ -163,6 +163,7 @@ def test_api_family_strips_keys_dates_and_parameters() -> None:
     assert api_family("/v2/market-quote/quotes") == "/v2/market-quote/quotes"
     assert api_family("/v3/historical-candle/NSE_EQ|INE002A01018/minutes/15/2026-09-16/2026-09-01") == "/v3/historical-candle"
     assert api_family("/v3/historical-candle/NSE_EQ%7CINE002A01018/days/1/2026-09-16/2025-09-01") == "/v3/historical-candle"
+    assert api_family("/v3/historical-candle/intraday/NSE_EQ%7CINE002A01018/minutes/15") == "/v3/historical-candle"
     assert api_family("/v2/option/chain") == "/v2/option/chain"
 
 

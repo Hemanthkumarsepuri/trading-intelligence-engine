@@ -51,6 +51,8 @@ def _candle_rows(n: int, *, end: datetime, price: float = 1280.0) -> list[list[o
 
 
 def _router(*, status: str = "NORMAL_OPEN") -> Callable[[httpx.Request], httpx.Response]:
+    candle_body: list[dict[str, object]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/v2/market/status/NSE":
@@ -93,7 +95,13 @@ def _router(*, status: str = "NORMAL_OPEN") -> Callable[[httpx.Request], httpx.R
             # last candle correctly filtered out by the provider's own
             # `timestamp > as_of` check -- a real, correct no-look-ahead
             # behavior, just not what this fixture intends to test.
-            return httpx.Response(200, json={"status": "success", "data": {"candles": _candle_rows(60, end=utc_now() - timedelta(minutes=1))}})
+            # Historical + intraday fetches must share one series: live
+            # Upstox current-day bars overlap; regenerating 60 new timestamps
+            # per call would inflate the chart without representing two
+            # sources.
+            if not candle_body:
+                candle_body.append({"status": "success", "data": {"candles": _candle_rows(60, end=utc_now() - timedelta(minutes=1))}})
+            return httpx.Response(200, json=candle_body[0])
         if path == "/v2/news":
             return httpx.Response(200, json={"status": "success", "data": {}, "metadata": {"page": {"total_records": 0}}})
         if path == "/v2/option/chain":

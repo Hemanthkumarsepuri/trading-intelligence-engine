@@ -425,6 +425,9 @@ class FuturesVisual(BaseModel):
     instrument_key: str | None
     ltp: Decimal | None
     open_interest: Decimal | None
+    volume: int | None = None
+    oi_change: int | None = None
+    expiry: str | None = None
     basis_pct: Decimal | None
     oi_interpretation: str | None
     # UAT finding (docs/TIRE_OPERATOR_UAT.md): when `instrument_key` is
@@ -982,6 +985,7 @@ def build_visual_data(report: OptionsIntelligenceReport) -> VisualData:
         )
     futures = FuturesVisual(
         instrument_key=report.futures_instrument_key, ltp=report.futures_ltp, open_interest=report.futures_oi,
+        volume=report.futures_volume, oi_change=report.futures_oi_change, expiry=report.futures_expiry,
         basis_pct=report.futures_basis_pct,
         oi_interpretation=report.futures_oi_observation.conventional_reading if report.futures_oi_observation is not None else None,
         no_futures_reason=no_futures_reason,

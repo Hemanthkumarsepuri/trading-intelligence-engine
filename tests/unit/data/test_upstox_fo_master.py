@@ -10,6 +10,7 @@ from app.data.providers.upstox_fo_master import (
     lot_size,
     nearest_expiry,
     nearest_futures_instrument_key,
+    resolve_expiry_for_hint,
     select_relevant_expiries,
 )
 
@@ -209,3 +210,30 @@ def test_nearest_futures_instrument_key_none_when_all_expired() -> None:
 
 def test_nearest_futures_instrument_key_none_for_unknown_underlying() -> None:
     assert nearest_futures_instrument_key(_CROSS_SEGMENT_MASTER, "NOT_REAL", segment="NCD_FO", as_of=date(2026, 9, 1)) is None
+
+
+_OCT_27_2026_MS = 1793125799000  # 2026-10-27 18:29:59 UTC
+
+
+def test_resolve_expiry_for_hint_selects_matching_month_not_nearest() -> None:
+    master = [
+        *_MASTER,
+        {
+            "segment": "NSE_FO",
+            "underlying_symbol": "RELIANCE",
+            "instrument_type": "CE",
+            "expiry": _OCT_27_2026_MS,
+            "weekly": False,
+            "lot_size": 500,
+            "instrument_key": "NSE_FO|oct",
+        },
+    ]
+    nearest = nearest_expiry(master, "RELIANCE", as_of=date(2026, 9, 1))
+    assert nearest is not None and nearest.expiry == date(2026, 9, 24)
+    october = resolve_expiry_for_hint(master, "RELIANCE", hint="OCT", as_of=date(2026, 9, 1), year=2026)
+    assert october is not None
+    assert october.expiry == date(2026, 10, 27)
+
+
+def test_resolve_expiry_for_hint_none_when_month_has_no_verified_expiry() -> None:
+    assert resolve_expiry_for_hint(_MASTER, "RELIANCE", hint="OCT", as_of=date(2026, 9, 1)) is None

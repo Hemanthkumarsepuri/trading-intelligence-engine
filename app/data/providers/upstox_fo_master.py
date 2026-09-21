@@ -72,6 +72,42 @@ def nearest_expiry(master: Sequence[dict[str, object]], underlying_symbol: str, 
     return None
 
 
+_MONTH_NUMBER: dict[str, int] = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
+def resolve_expiry_for_hint(
+    master: Sequence[dict[str, object]],
+    underlying_symbol: str,
+    *,
+    hint: str,
+    as_of: date,
+    year: int | None = None,
+) -> ExpiryInfo | None:
+    """Match a user-typed month (and optional year) to a real upcoming
+    expiry. Never falls back to the nearest expiry of a different month.
+
+    When several contracts share the month, the nearest monthly
+    (`is_weekly=False`) is preferred; otherwise the soonest expiry in that
+    month. `None` if no verified match exists — callers must not substitute.
+    """
+    month = _MONTH_NUMBER.get(hint.strip().upper())
+    if month is None:
+        return None
+    upcoming = [info for info in list_expiries(master, underlying_symbol) if info.expiry >= as_of]
+    matches = [
+        info for info in upcoming
+        if info.expiry.month == month and (year is None or info.expiry.year == year)
+    ]
+    if not matches:
+        return None
+    monthly = [info for info in matches if not info.is_weekly]
+    pool = monthly or matches
+    return min(pool, key=lambda info: info.expiry)
+
+
 def select_relevant_expiries(master: Sequence[dict[str, object]], underlying_symbol: str, *, as_of: date) -> list[ExpiryInfo]:
     """Up to three real, distinct expiries on/after `as_of`, ascending —
     the nearest, the next one after it, and the nearest MONTHLY

@@ -41,6 +41,7 @@ from app.data.providers.base import (
     RawQuote,
 )
 from app.data.providers.exceptions import (
+    ProviderError,
     ProviderMalformedResponse,
     ProviderRateLimited,
     ProviderTimeout,
@@ -189,6 +190,29 @@ class UpstoxProvider:
         )
 
         payload = self._expect_dict(await self._get(path), context=path)
+        candles = self._candles_from_payload(payload, path=path, as_of=as_of)
+
+        # Historical v3 does not include the current trading day's bars.
+        # Same vendor, documented sibling: GET /v3/historical-candle/intraday/...
+        # Fail-open: if that call fails, keep the historical series (STALE
+        # during live session) rather than inventing candles or widening
+        # the stale threshold.
+        if end.date() == as_of.date():
+            intra_path = f"/v3/historical-candle/intraday/{encoded_key}/{unit}/{interval}"
+            try:
+                intra_payload = self._expect_dict(await self._get(intra_path), context=intra_path)
+                intra = self._candles_from_payload(intra_payload, path=intra_path, as_of=as_of)
+            except ProviderError:
+                intra = []
+            by_ts = {c.timestamp: c for c in candles}
+            for candle in intra:
+                by_ts[candle.timestamp] = candle
+            candles = list(by_ts.values())
+
+        candles.sort(key=lambda c: c.timestamp)
+        return candles
+
+    def _candles_from_payload(self, payload: dict[str, object], *, path: str, as_of: datetime) -> list[RawCandle]:
         if payload.get("status") != "success":
             raise ProviderMalformedResponse(f"{path}: non-success status")
         data = payload.get("data")
@@ -205,7 +229,7 @@ class UpstoxProvider:
                     raise ProviderMalformedResponse(f"{path}: candle row has unexpected shape: {row!r}")
                 timestamp = ensure_utc(datetime.fromisoformat(str(row[0])))
                 if timestamp > as_of:
-                    continue  # never surface a candle from beyond the requested as_of instant
+                    continue
                 open_interest = _require_int(row[6]) if len(row) > 6 and row[6] is not None else None
                 candles.append(
                     RawCandle(
@@ -220,14 +244,6 @@ class UpstoxProvider:
                 )
         except (TypeError, ValueError) as exc:
             raise ProviderMalformedResponse(f"{path}: could not parse candle row: {exc}") from exc
-
-        # Upstox's documented response does not state candle ordering
-        # explicitly; sort ascending defensively (this is order
-        # canonicalization at the provider boundary, the same role
-        # `InMemoryCandleRepository.query()` already plays elsewhere in this
-        # codebase — it is not a repair of structurally invalid data, which
-        # this method never attempts).
-        candles.sort(key=lambda c: c.timestamp)
         return candles
 
     async def get_quote(self, *, security_id: str, exchange_segment: ExchangeSegment, as_of: datetime) -> RawQuote:

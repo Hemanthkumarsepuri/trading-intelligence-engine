@@ -50,7 +50,7 @@ RESERVED_REQUESTS_PER_API = 300
 STAGE_TWO_COST_PER_SYMBOL: Mapping[str, int] = {
     "/v2/market-quote/quotes": 3,
     "/v2/option/chain": 2,
-    "/v3/historical-candle": 2,
+    "/v3/historical-candle": 3,
     "/v2/news": 1,
 }
 
