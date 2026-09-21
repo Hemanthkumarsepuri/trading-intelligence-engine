@@ -88,11 +88,11 @@ def certify(api: str) -> int:
         st, latest = _req(api, "GET", "/api/research/jobs/latest")
         state = (latest or {}).get("status") if isinstance(latest, dict) else None
         print("poll", st, state, (latest or {}).get("message") if isinstance(latest, dict) else "")
-        if state in {"COMPLETED", "FAILED", "ERROR"}:
+        if state in {"COMPLETE", "COMPLETED", "FAILED", "ERROR"}:
             break
         time.sleep(10)
     print(json.dumps(latest, indent=2, default=str)[:12000])
-    if isinstance(latest, dict) and latest.get("status") == "COMPLETED":
+    if isinstance(latest, dict) and latest.get("status") in {"COMPLETE", "COMPLETED"}:
         return 0
     return 1
 

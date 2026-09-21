@@ -101,6 +101,20 @@ async def build_observed_market(
             continue
         observed_ist = to_ist(quote.freshness.data_timestamp)
         change = _day_change_pct(quote)
+        as_of_ist_date = to_ist(as_of).date()
+        same_session_day = observed_ist.date() == as_of_ist_date
+        if same_session_day:
+            kind = session_kind
+            freshness = FreshnessLabel.LIVE.value if session_kind == "LIVE" else FreshnessLabel.MARKET_CLOSED.value
+        else:
+            # Never relabel a previous-session print as LIVE just because
+            # the current clock is inside an OPEN window.
+            kind = "LAST_OBSERVED"
+            freshness = (
+                FreshnessLabel.STALE.value
+                if session_kind == "LIVE"
+                else FreshnessLabel.MARKET_CLOSED.value
+            )
         cells[cell_id] = {
             "label": label,
             "symbol": symbol,
@@ -109,10 +123,8 @@ async def build_observed_market(
             "day_change_pct": str(change) if change is not None else None,
             "observed_at": quote.freshness.data_timestamp.isoformat(),
             "observed_at_ist": observed_ist.strftime("%d %b · %H:%M IST"),
-            "observation_kind": session_kind,
-            "freshness_label": (
-                FreshnessLabel.LIVE.value if session_kind == "LIVE" else FreshnessLabel.MARKET_CLOSED.value
-            ),
+            "observation_kind": kind,
+            "freshness_label": freshness,
             "unavailable_reason": None,
             "instrument_id": instrument_id,
         }

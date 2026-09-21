@@ -101,3 +101,19 @@ def test_older_index_print_is_labeled_stale_relative_to_the_newest_observed_sess
     assert payload["indices"]["nifty"]["freshness_label"] == "MARKET_CLOSED"
     assert payload["indices"]["banknifty"]["freshness_label"] == "STALE"
     assert payload["indices"]["nifty"]["observed_at_ist"] != payload["indices"]["banknifty"]["observed_at_ist"]
+
+
+def test_previous_session_index_print_is_not_live_during_open_session(tmp_path: Path) -> None:
+    repo = JsonlQuoteRepository(tmp_path / "quotes.jsonl")
+    friday_close = datetime(2026, 9, 18, 10, 30, tzinfo=UTC)  # 16:00 IST
+    asyncio.run(repo.save(_quote(friday_close, price="23346.4", previous="23270.0")))
+    payload = asyncio.run(build_observed_market(
+        instrument_master=_MASTER, quotes=repo, as_of=datetime(2026, 9, 21, 9, 0, tzinfo=UTC),
+    ))
+    nifty = payload["indices"]["nifty"]
+    assert payload["session_window"] == "OPEN"
+    assert payload["observation_kind"] == "LIVE"
+    assert nifty["last_price"] == "23346.4"
+    assert nifty["observation_kind"] == "LAST_OBSERVED"
+    assert nifty["freshness_label"] == "STALE"
+    assert "18 Sep" in (nifty["observed_at_ist"] or "")
