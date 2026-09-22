@@ -130,6 +130,38 @@ def test_snapshot_from_analyze_payload_uses_audit_and_market_time() -> None:
     assert snap.observation_timestamp < snap.generated_at  # type: ignore[operator]
 
 
+def test_snapshot_canonical_expiry_ignores_month_hint() -> None:
+    """OCT/OCTOBER is a query hint. Watch identity must store 2026-10-27."""
+    snap = snapshot_from_analyze_payload(
+        {
+            "audit_id": "oct-hint",
+            "symbol": "RELIANCE",
+            "query": "RELIANCE 1270 PE OCTOBER 2026",
+            "parsed_expiry_hint": "OCT",
+            "has_specific_contract": True,
+            "visual": {
+                "requested_contract": {
+                    "found": True,
+                    "expiry": "2026-10-27",
+                    "assessment": {"strike": "1270", "right": "PE"},
+                },
+                "option_chain": {"expiry": "2026-10-27"},
+                "term_structure": {
+                    "expiries": [
+                        {"expiry": "2026-09-29", "days_remaining": 8},
+                        {"expiry": "2026-10-27", "days_remaining": 36},
+                    ]
+                },
+            },
+        }
+    )
+    assert snap.expiry == "2026-10-27"
+    assert snap.expiry != "OCT"
+    assert snap.dte == 36
+    assert snap.strike == "1270"
+    assert snap.option_type == "PE"
+
+
 def test_snapshot_copies_observed_chain_expiry_not_first_term_structure() -> None:
     """Synthetic: expiry comes from the fetched chain, never expiries[0]."""
     snap = snapshot_from_analyze_payload(

@@ -271,7 +271,9 @@ def snapshot_from_analyze_payload(payload: dict[str, Any]) -> ObservationSnapsho
     strike = assessment.get("strike") if assessment else payload.get("parsed_strike")
     right = assessment.get("right") if assessment else payload.get("parsed_right")
     kind = _kind_from_analyze_payload(payload, right, strike)
-    expiry = _norm(payload.get("parsed_expiry_hint")) or _norm(requested.get("expiry")) or _norm(
+    # Canonical expiry is the observed chain date, never the typed month hint
+    # (OCT / OCTOBER). Hint stays on parsed_expiry_hint for query display.
+    expiry = _norm(requested.get("expiry")) or _norm(
         _as_mapping(visual.get("option_chain")).get("expiry")
     )
     dte = payload.get("dte") if isinstance(payload.get("dte"), int) else None

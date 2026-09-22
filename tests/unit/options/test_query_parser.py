@@ -112,6 +112,23 @@ def test_order_independent_beyond_the_first_token() -> None:
     assert result.strike == Decimal("25000")
 
 
+def test_gate2_query_forms_extract_identity_tokens() -> None:
+    cases = [
+        ("RELIANCE 1270 PE", "1270", OptionRight.PE, None),
+        ("RELIANCE 1270 PE OCT", "1270", OptionRight.PE, "OCT"),
+        ("RELIANCE OCT 1270 PE", "1270", OptionRight.PE, "OCT"),
+        ("RELIANCE 1270 PE SEP", "1270", OptionRight.PE, "SEP"),
+        ("RELIANCE 1270 CE OCT", "1270", OptionRight.CE, "OCT"),
+    ]
+    for query, strike, right, hint in cases:
+        result = parse_instrument_query(query)
+        assert result.symbol == "RELIANCE", query
+        assert result.strike == Decimal(strike), query
+        assert result.right == right, query
+        assert result.expiry_hint == hint, query
+        assert result.errors == [], query
+
+
 def test_october_full_name_and_year_are_not_a_second_strike() -> None:
     result = parse_instrument_query("RELIANCE 1270 PE OCTOBER 2026")
     assert result.symbol == "RELIANCE"
