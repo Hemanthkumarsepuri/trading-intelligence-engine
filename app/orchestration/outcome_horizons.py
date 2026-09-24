@@ -47,14 +47,13 @@ the pattern name: this module only reads whether a level was recorded.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 
-from app.domain.audit.research_models import ResearchObservation
+from app.domain.audit.research_models import ResearchObservation, ResearchOutcomeStatus
 from app.domain.market.models import Candle
-from app.orchestration.research_outcome import target_trading_session_date
-from app.utils.time import IST, ensure_utc
+from app.orchestration.outcome_sessions import horizon_close_utc
 
 
 class OutcomeHorizonLabel(str, Enum):
@@ -90,16 +89,27 @@ _SESSION_OFFSETS: dict[OutcomeHorizonLabel, int] = {
     OutcomeHorizonLabel.PLUS_3D: 3,
     OutcomeHorizonLabel.PLUS_5D: 5,
 }
-# The real NSE cash-session close (same fact documented in
-# `app.orchestration.audit_journal`/`historical_replay_provider`) -- a
-# session-count horizon's target instant is that target session's own
-# close, the natural, deterministic "end of session N" instant.
-_SESSION_CLOSE = time(15, 30)
+# A session-count horizon's target instant is that target session's own
+# close (`outcome_sessions.horizon_close_utc`), the deterministic "end of
+# session N" instant -- one definition shared with the forward sweep.
 # How close the local candle series must reach to a horizon's target
 # instant to honestly count as "covers it" -- one M15 bar's worth of
 # slack, never treated as reaching all the way to a target it falls short
 # of by more than this.
 _COVERAGE_TOLERANCE = timedelta(minutes=20)
+
+
+@dataclass(frozen=True)
+class PriceBar:
+    """The four facts an outcome needs from one bar. Both paths reduce their
+    candles to this (replay: stored `Candle`s; forward sweep: the analysis's
+    `CandlePoint`s) so ONE computation defines MFE/MAE, confirmation and
+    invalidation for both."""
+
+    timestamp: datetime
+    high: Decimal
+    low: Decimal
+    close: Decimal
 
 
 @dataclass(frozen=True)
@@ -131,9 +141,7 @@ def horizon_target_timestamp(observation: ResearchObservation, horizon: OutcomeH
     intraday_offset = _INTRADAY_OFFSETS.get(horizon)
     if intraday_offset is not None:
         return observation.generated_at + intraday_offset
-    sessions_ahead = _SESSION_OFFSETS[horizon]
-    target_session = target_trading_session_date(observation.generated_at.date(), sessions_ahead)
-    return ensure_utc(datetime.combine(target_session, _SESSION_CLOSE, tzinfo=IST))
+    return horizon_close_utc(observation, _SESSION_OFFSETS[horizon])
 
 
 def _opposing_level_broken_through(
@@ -214,29 +222,51 @@ def _breakeven_reached(*, breakeven: str | None, right: str | None, window_high:
     return window_high >= be if right == "CE" else window_low <= be
 
 
+def bars_from_candles(candles: list[Candle]) -> list[PriceBar]:
+    return [
+        PriceBar(timestamp=c.freshness.data_timestamp, high=c.high, low=c.low, close=c.close)
+        for c in sorted(candles, key=lambda c: c.freshness.data_timestamp)
+    ]
+
+
 def compute_price_path_outcome(
     observation: ResearchObservation, horizon: OutcomeHorizonLabel, candles: list[Candle], *, as_of: datetime,
 ) -> PricePathOutcome:
-    """`candles` must be `observation.symbol`'s own real M15 series --
-    ordinarily the same locally persisted historical series a replay run
-    already holds on disk (never a live re-fetch). Every early return
-    below is an honest `data_sufficient=False`, never a guessed or
-    partial number (Section 16: "only calculate horizons for which enough
-    future data exists")."""
+    return compute_price_path_outcome_from_bars(observation, horizon, bars_from_candles(candles), as_of=as_of)
+
+
+def compute_price_path_outcome_from_bars(
+    observation: ResearchObservation, horizon: OutcomeHorizonLabel, bars: list[PriceBar], *, as_of: datetime,
+) -> PricePathOutcome:
+    """NO-LOOKAHEAD BY CONSTRUCTION: only bars with `generated_at <= timestamp
+    <= target_timestamp` are read, so the result for a horizon is identical
+    whether or not later bars exist in `bars` (proved by the adversarial
+    tests). MFE/MAE follow the existing direction convention: for a BULLISH
+    thesis favorable = (window high - spot) / spot and adverse = (spot -
+    window low) / spot; BEARISH mirrors it. They are research measurements
+    of the underlying's price path from the T0 spot, not option P&L and not
+    a performance claim.
+
+    `bars` must be `observation.symbol`'s own real M15 series (replay: the
+    locally persisted series; forward sweep: the analysis's price chart).
+    Every early return below is an honest `data_sufficient=False`, never a
+    guessed or partial number (Section 16: "only calculate horizons for
+    which enough future data exists").
+    """
     target_timestamp = horizon_target_timestamp(observation, horizon)
     if target_timestamp > as_of:
         return PricePathOutcome(
             horizon=horizon, target_timestamp=target_timestamp, data_sufficient=False,
             note="target instant has not been reached yet as of this evaluation",
         )
-    ordered = sorted(candles, key=lambda c: c.freshness.data_timestamp)
-    if not ordered or ordered[0].freshness.data_timestamp > observation.generated_at:
+    ordered = sorted(bars, key=lambda b: b.timestamp)
+    if not ordered or ordered[0].timestamp > observation.generated_at:
         return PricePathOutcome(
             horizon=horizon, target_timestamp=target_timestamp, data_sufficient=False,
             note="local historical candle series does not reach back to the observation instant",
         )
-    window = [c for c in ordered if observation.generated_at <= c.freshness.data_timestamp <= target_timestamp]
-    if not window or window[-1].freshness.data_timestamp < target_timestamp - _COVERAGE_TOLERANCE:
+    window = [c for c in ordered if observation.generated_at <= c.timestamp <= target_timestamp]
+    if not window or window[-1].timestamp < target_timestamp - _COVERAGE_TOLERANCE:
         return PricePathOutcome(
             horizon=horizon, target_timestamp=target_timestamp, data_sufficient=False,
             note="local historical candle series does not yet reach this horizon's target instant",
@@ -313,7 +343,7 @@ def compute_price_path_outcome(
     )
 
 
-def _first_bar_crossing(window: list[Candle], observation: ResearchObservation, *, confirmation: bool) -> datetime | None:
+def _first_bar_crossing(window: list[PriceBar], observation: ResearchObservation, *, confirmation: bool) -> datetime | None:
     """The first bar (window is time-ordered) whose OWN high/low crossed
     the confirmation-side (breakeven or opposing level) or the
     invalidation-side level -- the same predicates as the whole-window
@@ -339,7 +369,7 @@ def _first_bar_crossing(window: list[Candle], observation: ResearchObservation, 
                 )
             )
         if crossed:
-            return candle.freshness.data_timestamp
+            return candle.timestamp
     return None
 
 
@@ -354,3 +384,26 @@ def compute_all_horizons(observation: ResearchObservation, candles: list[Candle]
             OutcomeHorizonLabel.PLUS_3D, OutcomeHorizonLabel.PLUS_5D,
         )
     ]
+
+
+def resolve_first_event(outcome: PricePathOutcome) -> ResearchOutcomeStatus:
+    """The ONE rule turning a horizon's confirmation/invalidation facts into
+    an outcome status, for replay and forward checkpoints alike: whichever
+    event happened FIRST wins and a later reversal never rewrites it; both
+    inside the SAME M15 bar means the order is unknowable from M15 data ->
+    `INSUFFICIENT_OUTCOME_DATA`, never a guess. Insufficient price data is
+    `INSUFFICIENT_OUTCOME_DATA` too (callers that can tell "not reached yet"
+    from "reached but missing" decide `PENDING` themselves)."""
+    if not outcome.data_sufficient:
+        return ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
+    invalidated_at = outcome.first_invalidation_at if outcome.invalidation_outcome == InvalidationOutcome.INVALIDATED else None
+    confirmed_at = outcome.first_confirmation_at if outcome.confirmation_outcome == ConfirmationOutcome.CONFIRMED else None
+    if invalidated_at is not None and confirmed_at is not None:
+        if invalidated_at == confirmed_at:
+            return ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
+        return ResearchOutcomeStatus.FAILED_SETUP if invalidated_at < confirmed_at else ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
+    if invalidated_at is not None:
+        return ResearchOutcomeStatus.FAILED_SETUP
+    if confirmed_at is not None:
+        return ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
+    return ResearchOutcomeStatus.NO_FOLLOW_THROUGH

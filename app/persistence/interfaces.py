@@ -193,6 +193,13 @@ class ResearchOutcomeRepository(Protocol):
 
     async def save_checkpoint(self, checkpoint: ResearchOutcomeCheckpoint) -> None: ...
 
+    async def save_checkpoint_once(self, checkpoint: ResearchOutcomeCheckpoint) -> bool:
+        """Sprint 3.4 -- append `checkpoint` only if none exists for the same
+        (`observation_id`, `checkpoint_label`); returns whether it was written.
+        Never overwrites: the first persisted checkpoint for a horizon is
+        final, so a retry, restart or overlapping sweep cannot duplicate it."""
+        ...
+
     async def query_observations_by_date(self, day: date) -> list[ResearchObservation]:
         """Every observation whose `generated_at` (IST calendar date)
         equals `day`, ordered ascending."""

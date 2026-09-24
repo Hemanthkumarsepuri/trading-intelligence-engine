@@ -241,7 +241,10 @@ def test_checkpoint_capture_succeeds_once_due_and_computes_real_facts(tmp_path: 
     assert checkpoint.observation_id == observation.observation_id
     assert checkpoint.checkpoint_label == ResearchCheckpointLabel.PLUS_1_SESSION
     assert checkpoint.captured_at == CHECKPOINT_AS_OF
-    assert checkpoint.spot_at_checkpoint == str(Decimal(str(Q_SPOT_CHECKPOINT)))
+    # Sprint 3.4 -- the checkpoint's spot is the underlying's close AT THE HORIZON (the
+    # last bar at/before the target session's close, exactly replay's `subsequent_close`),
+    # not the live quote "now" (this fixture's quote and candles deliberately differ).
+    assert checkpoint.spot_at_checkpoint == str(Decimal(str(_candle_rows()[-1][4])))
     assert checkpoint.move_pct_from_observation is not None
     # The real fixture rises after the observation instant -- a real
     # positive move for a BULLISH thesis, negative for a BEARISH one.

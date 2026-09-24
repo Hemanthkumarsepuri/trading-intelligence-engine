@@ -114,16 +114,21 @@ def test_no_checkpoint_due_before_the_first_target_session() -> None:
     assert due == []
 
 
-def test_plus_one_session_becomes_due_once_monday_is_reached() -> None:
+def test_plus_one_session_becomes_due_only_once_monday_has_closed() -> None:
+    """Sprint 3.4 correction: this previously asserted "due" at 11:30 IST on the
+    target Monday -- mid-session -- which froze a partial-session checkpoint into
+    the append-only journal. A horizon is available at the target session's close."""
     observation = _obs(datetime(2026, 8, 28, 10, 0, tzinfo=UTC))
-    due = due_research_checkpoints(observation, set(), as_of=datetime(2026, 8, 31, 6, 0, tzinfo=UTC))
+    assert due_research_checkpoints(observation, set(), as_of=datetime(2026, 8, 31, 6, 0, tzinfo=UTC)) == []
+    assert due_research_checkpoints(observation, set(), as_of=datetime(2026, 8, 31, 9, 59, tzinfo=UTC)) == []
+    due = due_research_checkpoints(observation, set(), as_of=datetime(2026, 8, 31, 10, 0, tzinfo=UTC))  # 15:30 IST
     assert due == [ResearchCheckpointLabel.PLUS_1_SESSION]
 
 
 def test_already_captured_checkpoint_is_never_due_again() -> None:
     observation = _obs(datetime(2026, 8, 28, 10, 0, tzinfo=UTC))
     due = due_research_checkpoints(
-        observation, {ResearchCheckpointLabel.PLUS_1_SESSION}, as_of=datetime(2026, 8, 31, 6, 0, tzinfo=UTC),
+        observation, {ResearchCheckpointLabel.PLUS_1_SESSION}, as_of=datetime(2026, 8, 31, 11, 0, tzinfo=UTC),
     )
     assert due == []
 
@@ -426,7 +431,8 @@ def test_outcome_summary_pending_when_nothing_is_due_yet() -> None:
 
 def test_outcome_summary_pending_when_due_but_not_yet_captured() -> None:
     observation = _obs(datetime(2026, 8, 28, 10, 0, tzinfo=UTC))
-    summary = summarize_research_outcome(observation, [], as_of=datetime(2026, 8, 31, 6, 0, tzinfo=UTC))
+    # Monday 15:30 IST -- the +1 session has closed (Sprint 3.4: not merely started).
+    summary = summarize_research_outcome(observation, [], as_of=datetime(2026, 8, 31, 10, 0, tzinfo=UTC))
     assert summary.outcome_status == ResearchOutcomeStatus.PENDING
     assert "+1" in summary.explanation
     assert "due but has not yet been captured" in summary.explanation

@@ -21,6 +21,7 @@ it for the opposite (backward) direction.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -32,16 +33,29 @@ from pydantic import BaseModel, Field
 
 from app.domain.audit.research_models import (
     RESEARCH_CHECKPOINT_SESSIONS_AHEAD,
+    HorizonState,
     ResearchCheckpointLabel,
+    ResearchHorizonProgress,
     ResearchObservation,
     ResearchOutcomeCheckpoint,
     ResearchOutcomeStatus,
     ResearchOutcomeSummary,
     ResearchProgression,
 )
-from app.domain.market.trading_calendar import NSE_HOLIDAYS, next_trading_day
 from app.orchestration.daily_research import _GatedCandidate, classify_early_stage_state
 from app.orchestration.dashboard_service import run_analysis
+from app.orchestration.outcome_horizons import (
+    OutcomeHorizonLabel,
+    PriceBar,
+    compute_price_path_outcome_from_bars,
+)
+from app.orchestration.outcome_sessions import (
+    horizon_close_utc,
+    horizon_session_date,
+    next_session_open_after,
+    session_close_utc,
+    target_trading_session_date,
+)
 from app.utils.time import to_ist
 
 if TYPE_CHECKING:
@@ -54,38 +68,42 @@ if TYPE_CHECKING:
         JsonlResearchOutcomeRepository,
     )
 
+_LOG = logging.getLogger(__name__)
 
-def target_trading_session_date(observation_date: date, sessions_ahead: int, holidays: frozenset[date] = NSE_HOLIDAYS) -> date:
-    """+1/+3/+5 real trading SESSIONS ahead of `observation_date` --
-    "+1 session" always means the next real trading day after
-    `observation_date`, regardless of whether the observation itself was
-    made mid-session or after that same day's close (a session that has
-    already happened cannot be a FUTURE checkpoint for itself)."""
-    candidate = observation_date
-    for _ in range(sessions_ahead):
-        candidate = next_trading_day(candidate, holidays)
-    return candidate
+# `target_trading_session_date` now lives in `outcome_sessions` (one session
+# definition for replay and the forward sweep); re-exported here because
+# callers and tests import it from this module.
+__all__ = ["target_trading_session_date"]
+
+_HORIZON_BY_LABEL: dict[ResearchCheckpointLabel, OutcomeHorizonLabel] = {
+    ResearchCheckpointLabel.PLUS_1_SESSION: OutcomeHorizonLabel.PLUS_1D,
+    ResearchCheckpointLabel.PLUS_3_SESSIONS: OutcomeHorizonLabel.PLUS_3D,
+    ResearchCheckpointLabel.PLUS_5_SESSIONS: OutcomeHorizonLabel.PLUS_5D,
+}
+
+
+class CheckpointDataUnavailable(RuntimeError):
+    """The re-analysis a checkpoint is built from failed outright (provider
+    or quote error). Nothing is persisted, so a later sweep retries instead of
+    freezing an infrastructure hole into the append-only journal as if it were
+    an outcome."""
 
 
 def due_research_checkpoints(
     observation: ResearchObservation, captured: set[ResearchCheckpointLabel], *, as_of: datetime,
 ) -> list[ResearchCheckpointLabel]:
-    """Which checkpoints have NOT yet been captured but their target
-    trading-session date has genuinely been reached, given the real
-    current `as_of`. A checkpoint's target date is a real calendar date
-    (session-based, see `target_trading_session_date()`) -- "due" here
-    means `as_of`'s own calendar date has reached or passed it; never a
-    future date treated as already due (that would be look-ahead by
-    construction)."""
-    observation_date = observation.generated_at.date()
-    due: list[ResearchCheckpointLabel] = []
-    for label, sessions_ahead in RESEARCH_CHECKPOINT_SESSIONS_AHEAD.items():
-        if label in captured:
-            continue
-        target = target_trading_session_date(observation_date, sessions_ahead)
-        if as_of.date() >= target:
-            due.append(label)
-    return due
+    """Which checkpoints have NOT yet been captured and whose horizon has
+    genuinely been reached: `as_of` is at or after the CLOSE of the target
+    trading session (`outcome_sessions.horizon_close_utc`) -- the same
+    instant replay's horizon ends at. Merely reaching the target DATE is not
+    enough: a checkpoint captured mid-session would be frozen (the journal is
+    append-only) with a partial session behind it. Never a future horizon
+    treated as already due (look-ahead by construction)."""
+    return [
+        label
+        for label, sessions_ahead in RESEARCH_CHECKPOINT_SESSIONS_AHEAD.items()
+        if label not in captured and as_of >= horizon_close_utc(observation, sessions_ahead)
+    ]
 
 
 _EARLY_STAGE_MATURITY_RANK: dict[str, int] = {
@@ -179,86 +197,120 @@ async def capture_research_outcome_checkpoint(
     http_client: httpx.AsyncClient | None = None,
     delivery_cache_dir: Path | None = None,
 ) -> ResearchOutcomeCheckpoint:
-    """Re-runs the EXACT SAME `run_analysis()` a manual query or the
-    original research run used -- real, fresh data, never a second
-    analysis engine. Raises `ValueError` if called before the checkpoint
-    is genuinely due, mirroring `capture_outcome_checkpoint()`'s own
-    precedent in `app.orchestration.audit_journal`."""
+    """One horizon's checkpoint for `observation`. The observation is only
+    ever READ: T0 (price, contract identity, evidence availability, state,
+    pattern, levels, provenance) is frozen and nothing here can write to it.
+
+    PRICE FACTS are horizon-bounded and shared with replay: the analysis's
+    M15 series is reduced to `PriceBar`s and passed through
+    `compute_price_path_outcome_from_bars`, which reads only bars from T0 up
+    to the target session's close. So MFE/MAE, level-broken, breakeven,
+    confirmation/invalidation, their first-crossing bars and the close at the
+    horizon are identical whether this sweep runs at the horizon or sessions
+    later, and never see a later session's data. They describe the
+    UNDERLYING's price path from the T0 spot (the existing architecture) --
+    not option P&L; the T0 contract identity is used only for its recorded
+    breakeven/levels and is never swapped for today's expiry/strike/right.
+
+    STATE FACTS (`next_observed_early_stage_state`, `became_extended`,
+    `progression`) come from a fresh analysis at `as_of`. They describe the
+    horizon only when no later session has begun, so a checkpoint captured
+    after the next session opened (`captured_late`) withholds them (`None` /
+    UNKNOWN) instead of presenting a later moment as the horizon. They are
+    withheld too when the horizon's price path is not determinable, so missing
+    data is never read as "no follow-through".
+
+    Raises `ValueError` before the horizon session has closed and
+    `CheckpointDataUnavailable` when the re-analysis itself failed (nothing is
+    persisted, so it is retried)."""
     sessions_ahead = RESEARCH_CHECKPOINT_SESSIONS_AHEAD[label]
-    target = target_trading_session_date(observation.generated_at.date(), sessions_ahead)
-    if as_of.date() < target:
-        raise ValueError(f"checkpoint {label.value} is not due yet: as_of={as_of.isoformat()} target_session={target.isoformat()}")
+    target = horizon_session_date(observation, sessions_ahead)
+    horizon_close = session_close_utc(target)
+    if as_of < horizon_close:
+        raise ValueError(
+            f"checkpoint {label.value} is not due yet: as_of={as_of.isoformat()} "
+            f"target_session_close={horizon_close.isoformat()}"
+        )
+    captured_late = as_of >= next_session_open_after(target)
 
     response = await run_analysis(
         observation.symbol, provider=provider, instrument_master=instrument_master, strategy=strategy,
         repositories=repositories, config=config, as_of=as_of, mcx_instrument_master=mcx_instrument_master, journal=journal,
         nifty50_symbols=nifty50_symbols, http_client=http_client, delivery_cache_dir=delivery_cache_dir,
     )
+    if response.error is not None:
+        raise CheckpointDataUnavailable(f"{observation.symbol}: re-analysis failed: {response.error}")
 
     v = response.visual
     dc = v.direction_comparison if v else None
-    contract = None
-    # Phase 3 gap-closure -- `selected_right` is `None` only for a
-    # price-only (no derivatives evidence) observation; this live sweep
-    # is only ever invoked for observations in the LIVE outcome
-    # repository, which never holds one (replay observations live in
-    # their own, separate repository -- see `ResearchObservation.source`'s
-    # own docstring), but the check stays explicit rather than assuming.
-    if dc is not None and observation.selected_right is not None:
-        contract = dc.ce_assessment if observation.selected_right == "CE" else dc.pe_assessment
-
-    spot_at_checkpoint = dc.paths.spot if dc is not None and dc.paths else None
     observation_spot = Decimal(observation.spot_at_observation) if observation.spot_at_observation is not None else None
 
+    bars = (
+        [PriceBar(timestamp=c.timestamp, high=c.high, low=c.low, close=c.close) for c in v.price_chart.candles]
+        if v is not None and v.price_chart is not None else []
+    )
+    price = compute_price_path_outcome_from_bars(observation, _HORIZON_BY_LABEL[label], bars, as_of=as_of)
+    determined = price.data_sufficient
+
+    spot_at_checkpoint = price.subsequent_close if determined else None
     move_pct = None
     if spot_at_checkpoint is not None and observation_spot is not None and observation_spot != 0:
         move_pct = (spot_at_checkpoint - observation_spot) / observation_spot * Decimal(100)
 
-    next_state: str | None = None
-    if dc is not None and contract is not None and observation_spot is not None:
-        gated = _GatedCandidate(symbol=observation.symbol, response=response, dc=dc, contract=contract, direction=observation.direction)
-        next_state, _ = classify_early_stage_state(gated)
-
-    favorable_pct = adverse_pct = None
-    window_high = window_low = None
-    if v is not None and v.price_chart is not None and observation_spot is not None:
-        candles = v.price_chart.candles
-        favorable_pct, adverse_pct = _real_excursion_pct(
-            list(candles), observation_generated_at=observation.generated_at, observation_spot=observation_spot,
-            direction=observation.direction,
-        )
-        window = [c for c in candles if c.timestamp >= observation.generated_at]
-        if window:
-            window_high = max(c.high for c in window)
-            window_low = min(c.low for c in window)
-
     swing_broken = _level_broken(
         kind=observation.nearest_level_kind, value=observation.nearest_level_value, direction=observation.direction,
-        window_high=window_high, window_low=window_low,
+        window_high=price.subsequent_high, window_low=price.subsequent_low,
     )
     breakeven_reached = _breakeven_reached(
         breakeven=observation.contractual_expiry_breakeven, right=observation.selected_right,
-        window_high=window_high, window_low=window_low,
+        window_high=price.subsequent_high, window_low=price.subsequent_low,
     )
 
-    note = None
-    if dc is None:
-        note = "no real direction-comparison data available at this checkpoint"
-    elif contract is None:
-        note = f"no real {observation.selected_right} contract assessment available at this checkpoint"
+    next_state: str | None = None
+    notes: list[str] = []
+    if captured_late:
+        notes.append(
+            "captured after the next session opened: price facts are bounded to the horizon; the state "
+            "at the horizon cannot be reconstructed, so state-derived fields are withheld"
+        )
+    elif not determined:
+        # No price path for this horizon means nothing can honestly be said about
+        # progression: a classification from whatever thin data exists would read as
+        # "no follow-through" (i.e. no move) for data that is simply missing.
+        notes.append("state-derived fields withheld: the horizon's price path is not determinable")
+    else:
+        contract = None
+        # `selected_right` is `None` only for a price-only observation (replay); a forward
+        # observation always has a contract, but the check stays explicit.
+        if dc is not None and observation.selected_right is not None:
+            contract = dc.ce_assessment if observation.selected_right == "CE" else dc.pe_assessment
+        if dc is None:
+            notes.append("no real direction-comparison data available at this checkpoint")
+        elif contract is None:
+            notes.append(f"no real {observation.selected_right} contract assessment available at this checkpoint")
+        if dc is not None and contract is not None and observation_spot is not None:
+            gated = _GatedCandidate(symbol=observation.symbol, response=response, dc=dc, contract=contract, direction=observation.direction)
+            next_state, _ = classify_early_stage_state(gated)
+    if not determined and price.note is not None:
+        notes.append(f"price path not determinable for this horizon: {price.note}")
 
     return ResearchOutcomeCheckpoint(
         observation_id=observation.observation_id, checkpoint_label=label, target_trading_session_date=target,
         captured_at=as_of, data_state=response.market_state,
         spot_at_checkpoint=str(spot_at_checkpoint) if spot_at_checkpoint is not None else None,
         move_pct_from_observation=str(move_pct) if move_pct is not None else None,
-        max_favorable_move_pct=str(favorable_pct) if favorable_pct is not None else None,
-        max_adverse_move_pct=str(adverse_pct) if adverse_pct is not None else None,
+        max_favorable_move_pct=str(price.max_favorable_move_pct) if price.max_favorable_move_pct is not None else None,
+        max_adverse_move_pct=str(price.max_adverse_move_pct) if price.max_adverse_move_pct is not None else None,
         swing_level_broken=swing_broken, breakeven_reached=breakeven_reached,
         became_extended=(next_state in _EXTENDED_STATES) if next_state is not None else None,
         next_observed_early_stage_state=next_state,
         progression=_classify_progression(observation.early_stage_state, next_state),
-        note=note,
+        note="; ".join(notes) if notes else None,
+        evaluated_through=horizon_close,
+        confirmation_outcome=price.confirmation_outcome.value if determined else None,
+        invalidation_outcome=price.invalidation_outcome.value if determined else None,
+        first_confirmation_at=price.first_confirmation_at, first_invalidation_at=price.first_invalidation_at,
+        captured_late=captured_late,
     )
 
 
@@ -276,22 +328,90 @@ async def sweep_due_research_outcomes(
     `app.orchestration.live_operation` (symbol-scoped, one observation at
     a time; a caller sweeping many observations calls this once per
     observation, exactly like that function's own caller does per
-    symbol)."""
+    symbol).
+
+    Safely repeatable: a horizon that already has a checkpoint is never
+    recomputed, and persistence itself refuses a second checkpoint for the
+    same (observation, horizon) (`save_checkpoint_once`), so a retry, a
+    restart or two overlapping sweeps yield exactly one record per horizon.
+    A horizon whose re-analysis failed outright is skipped (nothing is
+    written) and retried by a later sweep. Only the returned checkpoints were
+    newly written."""
     existing = await outcome_repository.query_checkpoints_for_observation(observation.observation_id)
     captured = {c.checkpoint_label for c in existing}
     due = due_research_checkpoints(observation, captured, as_of=as_of)
 
     newly_captured: list[ResearchOutcomeCheckpoint] = []
     for label in due:
-        checkpoint = await capture_research_outcome_checkpoint(
-            label, observation, as_of=as_of, provider=provider, instrument_master=instrument_master,
-            strategy=strategy, repositories=repositories, config=config,
-            mcx_instrument_master=mcx_instrument_master, journal=journal,
-            nifty50_symbols=nifty50_symbols, http_client=http_client, delivery_cache_dir=delivery_cache_dir,
-        )
-        await outcome_repository.save_checkpoint(checkpoint)
-        newly_captured.append(checkpoint)
+        try:
+            checkpoint = await capture_research_outcome_checkpoint(
+                label, observation, as_of=as_of, provider=provider, instrument_master=instrument_master,
+                strategy=strategy, repositories=repositories, config=config,
+                mcx_instrument_master=mcx_instrument_master, journal=journal,
+                nifty50_symbols=nifty50_symbols, http_client=http_client, delivery_cache_dir=delivery_cache_dir,
+            )
+        except CheckpointDataUnavailable as exc:
+            _LOG.warning("outcome checkpoint %s skipped, will retry: %s", label.value, exc)
+            continue
+        if await outcome_repository.save_checkpoint_once(checkpoint):
+            newly_captured.append(checkpoint)
     return newly_captured
+
+
+async def sweep_all_due_research_outcomes(
+    *, as_of: datetime, provider: UpstoxProvider, instrument_master: list[dict[str, object]],
+    strategy: EMAVWAPAlignmentStrategy, repositories: Repositories, config: PipelineConfig,
+    outcome_repository: JsonlResearchOutcomeRepository,
+    mcx_instrument_master: list[dict[str, object]] | None = None,
+) -> list[ResearchOutcomeCheckpoint]:
+    """Every persisted observation that could still have a checkpoint, swept
+    once each (`query_observations_due_for_sweep` -> `sweep_due_research_outcomes`).
+    A library entry point only: nothing schedules it yet. Safe to call as often
+    as desired -- horizons not yet reached are skipped and existing checkpoints
+    are never recomputed or duplicated."""
+    captured: list[ResearchOutcomeCheckpoint] = []
+    for observation in await outcome_repository.query_observations_due_for_sweep(as_of=as_of):
+        captured.extend(await sweep_due_research_outcomes(
+            observation, as_of=as_of, provider=provider, instrument_master=instrument_master, strategy=strategy,
+            repositories=repositories, config=config, outcome_repository=outcome_repository,
+            mcx_instrument_master=mcx_instrument_master,
+        ))
+    return captured
+
+
+def build_horizon_progress(
+    observation: ResearchObservation, checkpoints: list[ResearchOutcomeCheckpoint], *, as_of: datetime,
+) -> list[ResearchHorizonProgress]:
+    """T0 -> +1 -> +3 -> +5 with each horizon's honest status. Pure and
+    deterministic; derived from the persisted checkpoints only -- it creates
+    no placeholder checkpoint and never marks an observation failed merely
+    because a horizon is still ahead."""
+    by_label: dict[ResearchCheckpointLabel, ResearchOutcomeCheckpoint] = {}
+    for checkpoint in sorted(checkpoints, key=lambda c: c.captured_at):
+        by_label.setdefault(checkpoint.checkpoint_label, checkpoint)  # first persisted wins
+    view: list[ResearchHorizonProgress] = []
+    for label, sessions_ahead in RESEARCH_CHECKPOINT_SESSIONS_AHEAD.items():
+        target = horizon_session_date(observation, sessions_ahead)
+        available_from = session_close_utc(target)
+        reached = as_of >= available_from
+        recorded = by_label.get(label)
+        if recorded is None:
+            state = HorizonState.PENDING
+            detail = "horizon session has closed; awaiting the outcome sweep" if reached else "horizon session has not closed yet"
+        elif recorded.spot_at_checkpoint is not None:
+            state = HorizonState.AVAILABLE
+            detail = "checkpoint captured" + (
+                " (after the next session opened; state-derived fields withheld)" if recorded.captured_late else ""
+            )
+        else:
+            state = HorizonState.INSUFFICIENT
+            detail = "checkpoint captured but the price data needed to evaluate this horizon was not available"
+        view.append(ResearchHorizonProgress(
+            checkpoint_label=label, sessions_ahead=sessions_ahead, target_trading_session_date=target,
+            available_from=available_from, state=state, reached=reached,
+            captured_at=recorded.captured_at if recorded is not None else None, detail=detail,
+        ))
+    return view
 
 
 # ============================================================
@@ -453,6 +573,8 @@ class ResearchOutcomeDetailView(BaseModel):
     observation: ResearchObservation
     checkpoints: list[ResearchOutcomeCheckpoint]
     outcome: ResearchOutcomeSummary
+    # Sprint 3.4 -- T0 -> +1 -> +3 -> +5 with each horizon's honest status.
+    horizons: list[ResearchHorizonProgress] = Field(default_factory=list)
 
 
 async def build_research_outcome_detail(
@@ -463,4 +585,7 @@ async def build_research_outcome_detail(
         return None
     checkpoints = await outcome_repository.query_checkpoints_for_observation(observation_id)
     summary = summarize_research_outcome(observation, checkpoints, as_of=as_of)
-    return ResearchOutcomeDetailView(observation=observation, checkpoints=checkpoints, outcome=summary)
+    return ResearchOutcomeDetailView(
+        observation=observation, checkpoints=checkpoints, outcome=summary,
+        horizons=build_horizon_progress(observation, checkpoints, as_of=as_of),
+    )

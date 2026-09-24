@@ -478,6 +478,56 @@ class ResearchOutcomeCheckpoint(_FrozenModel):
     next_observed_early_stage_state: str | None
     progression: ResearchProgression
     note: str | None = None
+    # Sprint 3.4 -- additive, all `None` on a checkpoint persisted before
+    # this sprint ("not recorded"; those checkpoints were computed with the
+    # older, not horizon-bounded rules and are never re-interpreted).
+    #
+    # `evaluated_through` is the instant this horizon's price facts end (the
+    # target session's close): no bar after it was read. The four facts
+    # below are the SAME confirmation/invalidation determinations replay
+    # uses (`outcome_horizons.compute_price_path_outcome_from_bars`), as the
+    # enum values' names, plus the first bar to cross each level -- kept
+    # separate so a reader can tell "confirmed then invalidated" from
+    # "invalidated, never confirmed" (`outcome_horizons.resolve_first_event`).
+    evaluated_through: datetime | None = None
+    confirmation_outcome: str | None = None  # CONFIRMED / NOT_CONFIRMED / UNKNOWN
+    invalidation_outcome: str | None = None  # INVALIDATED / NOT_INVALIDATED / UNKNOWN
+    first_confirmation_at: datetime | None = None
+    first_invalidation_at: datetime | None = None
+    # `True` when this checkpoint was captured after the next session had
+    # already opened: the price-path facts above are still bounded to the
+    # horizon, but a fresh analysis "now" describes a later moment, so the
+    # state-derived fields (`next_observed_early_stage_state`,
+    # `became_extended`, `progression`) are withheld (`None`/UNKNOWN).
+    captured_late: bool | None = None
+
+
+class HorizonState(str, Enum):
+    """One +N horizon's honest status on an observation's timeline.
+    AVAILABLE = a checkpoint exists with determinable price facts;
+    PENDING = no checkpoint yet (the horizon has not been reached, or it has
+    and the sweep has not run) -- never a placeholder that looks completed;
+    INSUFFICIENT = a checkpoint was captured but the price data needed to
+    evaluate the horizon was not available (never read as no move,
+    confirmed or invalidated)."""
+
+    AVAILABLE = "AVAILABLE"
+    PENDING = "PENDING"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
+class ResearchHorizonProgress(_FrozenModel):
+    """Derived (never persisted) per-horizon view of an observation's
+    timeline: T0 -> +1 -> +3 -> +5."""
+
+    checkpoint_label: ResearchCheckpointLabel
+    sessions_ahead: int
+    target_trading_session_date: date
+    available_from: datetime  # the target session's close
+    state: HorizonState
+    reached: bool  # `available_from` <= the evaluation `as_of`
+    captured_at: datetime | None
+    detail: str
 
 
 # ============================================================

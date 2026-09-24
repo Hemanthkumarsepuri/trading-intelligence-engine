@@ -32,11 +32,10 @@ from app.domain.audit.research_models import (
 )
 from app.domain.market.models import Candle
 from app.orchestration.outcome_horizons import (
-    ConfirmationOutcome,
-    InvalidationOutcome,
     OutcomeHorizonLabel,
     compute_price_path_outcome,
     horizon_target_timestamp,
+    resolve_first_event,
 )
 from app.orchestration.research_outcome import summarize_research_outcome
 from app.persistence.interfaces import ResearchOutcomeRepository
@@ -248,17 +247,7 @@ def outcome_for_replay_observation(observation: ResearchObservation, candles: li
     if not outcome.data_sufficient:
         target = horizon_target_timestamp(observation, _REPLAY_REFERENCE_HORIZON)
         return ResearchOutcomeStatus.PENDING if target > as_of else ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
-    invalidated_at = outcome.first_invalidation_at if outcome.invalidation_outcome == InvalidationOutcome.INVALIDATED else None
-    confirmed_at = outcome.first_confirmation_at if outcome.confirmation_outcome == ConfirmationOutcome.CONFIRMED else None
-    if invalidated_at is not None and confirmed_at is not None:
-        if invalidated_at == confirmed_at:
-            return ResearchOutcomeStatus.INSUFFICIENT_OUTCOME_DATA
-        return ResearchOutcomeStatus.FAILED_SETUP if invalidated_at < confirmed_at else ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
-    if invalidated_at is not None:
-        return ResearchOutcomeStatus.FAILED_SETUP
-    if confirmed_at is not None:
-        return ResearchOutcomeStatus.FOLLOW_THROUGH_OBSERVED
-    return ResearchOutcomeStatus.NO_FOLLOW_THROUGH
+    return resolve_first_event(outcome)
 
 
 async def build_pattern_aggregation_for_replay(

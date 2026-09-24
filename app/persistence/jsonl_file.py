@@ -504,6 +504,18 @@ class JsonlResearchOutcomeRepository:
     async def save_checkpoint(self, checkpoint: ResearchOutcomeCheckpoint) -> None:
         self._checkpoints.append_line(checkpoint.model_dump_json())
 
+    async def save_checkpoint_once(self, checkpoint: ResearchOutcomeCheckpoint) -> bool:
+        # Same file-backed, lock-guarded check+append as `save_observation_once`
+        # (restart-safe; cross-process writers are out of scope).
+        needle = f'"observation_id":"{checkpoint.observation_id}"'
+        with self._write_lock:
+            for line in self._checkpoints.iter_lines_containing(needle):
+                existing = ResearchOutcomeCheckpoint.model_validate_json(line)
+                if (existing.observation_id, existing.checkpoint_label) == (checkpoint.observation_id, checkpoint.checkpoint_label):
+                    return False
+            self._checkpoints.append_line(checkpoint.model_dump_json())
+            return True
+
     def _all_observations(self) -> list[ResearchObservation]:
         return [ResearchObservation.model_validate_json(line) for line in self._observations.read_lines()]
 
