@@ -184,6 +184,13 @@ class ResearchOutcomeRepository(Protocol):
 
     async def save_observation(self, observation: ResearchObservation) -> None: ...
 
+    async def save_observation_once(self, observation: ResearchObservation) -> bool:
+        """Sprint 3.3 -- append `observation` only if no record with the same
+        `observation_id` is already persisted; returns whether it was
+        written. Never overwrites: the first persisted T0 record is final,
+        and a second attempt (retry, refresh, restart) is a no-op."""
+        ...
+
     async def save_checkpoint(self, checkpoint: ResearchOutcomeCheckpoint) -> None: ...
 
     async def query_observations_by_date(self, day: date) -> list[ResearchObservation]:

@@ -111,7 +111,8 @@ def test_unavailable_streams_produce_no_neutral_or_directional_evidence(tmp_path
 # (48e679e), BEFORE this sprint's change: 25 observations plus their +1D
 # price-path outcomes (confirmation/invalidation) against a later breakdown
 # session. `evidence_availability` and `observation_id` are excluded because
-# neither existed / was deterministic at that commit.
+# neither existed / was deterministic at that commit (`forward_capture`, added
+# in Sprint 3.3, is asserted `None` and excluded for the same reason).
 _BASELINE_OBSERVATION_COUNT = 25
 _BASELINE_SHA256 = "8e369f8ff4852bbec6af04aa2cdd085c415a845c5a0426fa51415bf628e1d7dc"
 
@@ -125,6 +126,8 @@ def test_existing_pattern_replay_and_outcomes_are_byte_identical_to_the_pre_spri
         dumped = obs.model_dump(mode="json")
         dumped.pop("observation_id")
         dumped.pop("evidence_availability")
+        # Sprint 3.3 added `forward_capture`; a replay observation is never a forward capture.
+        assert dumped.pop("forward_capture") is None
         rows.append(dumped)
 
     after = list(candles)

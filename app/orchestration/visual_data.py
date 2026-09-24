@@ -159,6 +159,11 @@ class ChainLegView(BaseModel):
     gamma: Decimal | None
     theta: Decimal | None
     vega: Decimal | None
+    # Sprint 3.3 -- the observed leg's own instrument key (`OptionQuote
+    # .security_id`), carried through so a forward observation can record
+    # exactly which contract was seen at T0. `None` when the producer did
+    # not supply one; never inferred.
+    instrument_key: str | None = None
 
 
 class ChainRowView(BaseModel):
@@ -176,6 +181,9 @@ class OptionChainVisual(BaseModel):
     atm_strike: Decimal | None = None
     detail: str = ""
     expiry: date | None = None
+    # Sprint 3.3 -- the underlying's instrument key as resolved for THIS
+    # analysis (`report.underlying_instrument_key`).
+    underlying_instrument_key: str | None = None
 
 
 def _leg_view(leg: OptionQuote | None) -> ChainLegView | None:
@@ -184,7 +192,7 @@ def _leg_view(leg: OptionQuote | None) -> ChainLegView | None:
     return ChainLegView(
         ltp=leg.last_price, bid=leg.bid_price, ask=leg.ask_price, open_interest=leg.open_interest,
         change_in_open_interest=leg.change_in_open_interest, volume=leg.volume, implied_volatility=leg.implied_volatility,
-        delta=leg.delta, gamma=leg.gamma, theta=leg.theta, vega=leg.vega,
+        delta=leg.delta, gamma=leg.gamma, theta=leg.theta, vega=leg.vega, instrument_key=leg.security_id,
     )
 
 
@@ -209,6 +217,7 @@ def _build_option_chain(report: OptionsIntelligenceReport) -> OptionChainVisual:
         atm_strike=report.atm_strike,
         detail="",
         expiry=report.option_chain.expiry,
+        underlying_instrument_key=report.underlying_instrument_key,
     )
 
 

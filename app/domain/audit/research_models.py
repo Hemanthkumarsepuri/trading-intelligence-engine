@@ -26,7 +26,7 @@ from datetime import date, datetime
 from enum import Enum
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.domain.options.evidence_availability import EvidenceAvailability
 
@@ -228,6 +228,45 @@ class ResearchRunRecord(_FrozenModel):
 # ============================================================
 
 
+class StreamProvenance(_FrozenModel):
+    """One data stream's provenance exactly as the analysis recorded it
+    (`StreamFreshness`): its freshness label, the source's own data
+    timestamp, this system's retrieval time, and the source string. Copied
+    verbatim -- `None` stays `None` (unknown), never a fabricated stamp. For
+    the option chain the recorded "data timestamp" is the HTTP receipt time,
+    not an exchange matching-engine time (see the stream's own detail)."""
+
+    stream: str
+    label: str
+    data_timestamp: datetime | None
+    retrieved_at: datetime | None
+    source: str | None
+
+
+class ForwardCaptureProvenance(_FrozenModel):
+    """Sprint 3.3 -- what makes a `ResearchObservation` a FORWARD LIVE
+    CAPTURE: an immutable record of the live circumstances at T0.
+
+    Three timestamps stay distinct and are never collapsed:
+      - T0 (the analysis time) is the observation's own `generated_at`;
+      - source data timestamps live per stream in `streams`;
+      - `persisted_at` is when this record was written (>= T0).
+    `observed_expiry` is the expiry actually seen in the T0 option chain --
+    never a month hint, never today's nearest expiry recomputed later.
+    Absent on replay/legacy observations (`None` on the observation)."""
+
+    capture_policy_version: str
+    session_window: str  # `classify_session_window(T0).session_window` -- must be "OPEN"
+    research_session_mode: str  # ... `.research_session_mode` -- must be "LIVE"
+    market_state: str  # the analysis's own `MarketDataState` value at T0
+    persisted_at: datetime
+    underlying_instrument_key: str | None
+    contract_instrument_key: str | None
+    futures_instrument_key: str | None
+    observed_expiry: date
+    streams: tuple[StreamProvenance, ...]
+
+
 class ResearchObservation(_FrozenModel):
     """One shortlisted research candidate at the exact moment it was
     identified -- every field here is copied VERBATIM from fields
@@ -355,6 +394,22 @@ class ResearchObservation(_FrozenModel):
     # field existed) and is deliberately NOT the same as an UNAVAILABLE
     # class: it makes no claim about what was or was not available.
     evidence_availability: EvidenceAvailability | None = None
+    # Sprint 3.3 -- non-`None` exactly for a FORWARD LIVE CAPTURE (see
+    # `ForwardCaptureProvenance`). `None` for historical replay
+    # (`source="REPLAY"`) and for observations persisted before this field
+    # existed; those are never presented as verified forward captures.
+    forward_capture: ForwardCaptureProvenance | None = None
+
+    @model_validator(mode="after")
+    def _forward_capture_is_live_and_causal(self) -> ResearchObservation:
+        capture = self.forward_capture
+        if capture is None:
+            return self
+        if self.source != "LIVE":
+            raise ValueError("a forward live capture must have source='LIVE' -- replay observations are never live captures")
+        if self.generated_at > capture.persisted_at:
+            raise ValueError("T0 (generated_at) cannot be later than persisted_at")
+        return self
 
 
 class ResearchCheckpointLabel(str, Enum):

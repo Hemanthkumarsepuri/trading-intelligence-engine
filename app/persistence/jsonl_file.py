@@ -482,9 +482,24 @@ class JsonlResearchOutcomeRepository:
     def __init__(self, directory: Path) -> None:
         self._observations = _JsonlStore(directory / "research_observations.jsonl")
         self._checkpoints = _JsonlStore(directory / "research_outcome_checkpoints.jsonl")
+        self._write_lock = threading.Lock()
 
     async def save_observation(self, observation: ResearchObservation) -> None:
         self._observations.append_line(observation.model_dump_json())
+
+    async def save_observation_once(self, observation: ResearchObservation) -> bool:
+        # The duplicate check reads the FILE (not process memory), so a
+        # restart cannot lose it. The substring scan is only a pre-filter;
+        # each candidate line is fully parsed and its id compared. The lock
+        # makes check+append atomic within a process; cross-process writers
+        # are out of scope (one API process owns this journal).
+        needle = f'"observation_id":"{observation.observation_id}"'
+        with self._write_lock:
+            for line in self._observations.iter_lines_containing(needle):
+                if ResearchObservation.model_validate_json(line).observation_id == observation.observation_id:
+                    return False
+            self._observations.append_line(observation.model_dump_json())
+            return True
 
     async def save_checkpoint(self, checkpoint: ResearchOutcomeCheckpoint) -> None:
         self._checkpoints.append_line(checkpoint.model_dump_json())

@@ -92,6 +92,7 @@ from app.domain.options.stage1_discovery import (
     promotion_reason,
 )
 from app.orchestration.dashboard_service import AnalyzeResponse, run_analysis
+from app.orchestration.forward_capture import CaptureOutcome, capture_forward_observation
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories, _retry
 from app.orchestration.visual_data import (
     CandlePoint,
@@ -825,6 +826,10 @@ class DailyResearchResult:
     symbol_pipeline: list[SymbolPipelineRecord] = field(default_factory=list)
     stage_two_limit_reason: str = STAGE_2_LIMIT_NONE
     stage_two_budget_capacity: int | None = None
+    # Sprint 3.3 -- one outcome per shortlisted candidate the run tried to
+    # capture as a forward observation (empty when no outcome repository was
+    # supplied). Informational only; never read by ranking or decisions.
+    forward_capture: list[CaptureOutcome] = field(default_factory=list)
 
     @property
     def rejected_as_extended_count(self) -> int:
@@ -1739,12 +1744,21 @@ async def run_daily_research(
         # second computation. A shortlist of length 0 (a real
         # NO_HIGH_CONVICTION result) simply persists nothing -- never
         # manufactured.
+        #
+        # Sprint 3.3 -- the observation is now a FORWARD LIVE CAPTURE: it is
+        # persisted only if it passes the capture eligibility gate (live
+        # session at T0, complete option identity, current chain evidence),
+        # exactly once per T0 identity, with its live provenance frozen in.
+        # An ineligible or failed capture is recorded on the result and
+        # never alters the shortlist, ranking or any research state.
         coverage_classification = coverage.classification
         for c in shortlist:
             observation = build_research_observation(
                 c, build_research_thesis(c), run_id=run_id, coverage_classification=coverage_classification,
             )
-            await outcome_repository.save_observation(observation)
+            result.forward_capture.append(
+                await capture_forward_observation(outcome_repository, c, observation, persisted_at=utc_now())
+            )
 
     return result
 

@@ -84,6 +84,7 @@ from app.orchestration.dashboard_service import (
     run_analysis,
     run_watchlist,
 )
+from app.orchestration.forward_capture import ForwardCaptureView, build_forward_capture_view
 from app.orchestration.ipo_audit_journal import build_ipo_analysis_snapshot
 from app.orchestration.ipo_intelligence import (
     IPOAnalysisConfig,
@@ -1128,6 +1129,21 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
         if view is None:
             raise HTTPException(status_code=404, detail=f"no research observation found for observation_id={observation_id!r}")
         return view
+
+    @app.get("/api/research/{observation_id}/capture", response_model=ForwardCaptureView)
+    async def research_observation_capture(observation_id: str) -> ForwardCaptureView:
+        """Sprint 3.3 -- read-only inspection/verification of one observation's
+        forward-capture record: its capture kind (forward live / historical
+        replay / legacy live), its frozen T0 provenance, and the integrity
+        verdict (`verified` + `problems`) recomputed from the persisted record
+        alone. Writes nothing."""
+        outcome_repository: JsonlResearchOutcomeRepository | None = getattr(app.state, "outcome_repository", None)
+        if outcome_repository is None:
+            raise HTTPException(status_code=503, detail="research outcome tracking is not configured")
+        observation = await outcome_repository.get_observation(observation_id)
+        if observation is None:
+            raise HTTPException(status_code=404, detail=f"no research observation found for observation_id={observation_id!r}")
+        return build_forward_capture_view(observation)
 
     @app.post("/api/journal/personal")
     async def save_personal_journal(body: PersonalJournalEntryRequest) -> dict[str, object]:
