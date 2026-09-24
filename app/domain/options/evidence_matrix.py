@@ -67,6 +67,31 @@ class EvidenceGroup(str, Enum):
     RELATIVE_STRENGTH = "relative_strength"
 
 
+# The ONE authoritative voting policy (Sprint 3.1, M-1). A group listed here
+# may contribute a directional verdict to convergence/conflict, supporting
+# counts and the decision engine; every other group is context only, however
+# its rows are labelled. `evidence_dependency.DEPENDENCIES` derives its
+# `may_vote` flag from `group_may_vote()` -- it never restates this set.
+#
+# `OPTIONS_IV` is deliberately absent: it is read from the SAME option-chain
+# snapshot as `OPTIONS_OI`, so an IV-skew lean is a correlated restatement of
+# one observation, not an independent confirmation. Its rows stay visible as
+# observations but cannot vote. Making it a voter would require an explicit,
+# reviewed decision that it is independent evidence -- edit this set (and the
+# dependency entry's documentation) deliberately, never per call site.
+VOTING_GROUPS: frozenset[EvidenceGroup] = frozenset({
+    EvidenceGroup.UNDERLYING_PRICE_STRUCTURE,
+    EvidenceGroup.FUTURES,
+    EvidenceGroup.OPTIONS_OI,
+    EvidenceGroup.GLOBAL,
+    EvidenceGroup.RELATIVE_STRENGTH,
+})
+
+
+def group_may_vote(group: EvidenceGroup) -> bool:
+    return group in VOTING_GROUPS
+
+
 @dataclass(frozen=True)
 class EvidenceRow:
     name: str
@@ -128,6 +153,11 @@ class EvidenceMatrix:
     rows: list[EvidenceRow]
 
     def group_verdict(self, group: EvidenceGroup) -> GroupVerdict:
+        """A group outside `VOTING_GROUPS` is always NON_DIRECTIONAL: this is
+        the single enforcement point every convergence/count/decision path
+        reads through, so no caller can re-admit a non-voting group."""
+        if not group_may_vote(group):
+            return GroupVerdict.NON_DIRECTIONAL
         directions = {r.direction for r in self.rows if r.group == group}
         directional = directions & {EvidenceDirection.BULLISH, EvidenceDirection.BEARISH}
         if not directional:
@@ -161,7 +191,14 @@ class EvidenceMatrix:
             return OverallConvergence.INSUFFICIENT_EVIDENCE
         return OverallConvergence.CONFLICT
 
+    def voting_rows(self, direction: EvidenceDirection) -> list[EvidenceRow]:
+        """Rows reading `direction` from groups allowed to vote. Rows of
+        non-voting groups are observations and never count as support."""
+        return [r for r in self.rows if r.direction == direction and group_may_vote(r.group)]
+
     def supporting_count(self, direction: EvidenceDirection) -> int:
+        if direction in (EvidenceDirection.BULLISH, EvidenceDirection.BEARISH):
+            return len(self.voting_rows(direction))
         return sum(1 for r in self.rows if r.direction == direction)
 
     def supporting_group_count(self, direction: EvidenceDirection) -> int:

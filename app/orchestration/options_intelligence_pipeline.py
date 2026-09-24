@@ -1357,9 +1357,9 @@ async def analyze_symbol(
     # -- 14. candidates -------------------------------------------------
     t = time.perf_counter()
     bias = market_bias_from_convergence(matrix.overall_convergence())
-    supporting = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == bias]
+    supporting = [f"{r.name}: {r.detail}" for r in matrix.voting_rows(bias)]
     opposite = EvidenceDirection.BEARISH if bias == EvidenceDirection.BULLISH else EvidenceDirection.BULLISH
-    contradicting = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == opposite]
+    contradicting = [f"{r.name}: {r.detail}" for r in matrix.voting_rows(opposite)]
     nearest_support = min((lv.strike for lv in report.support_levels), key=lambda s: abs(s - (quote.last_price)), default=None)
     nearest_resistance = min((lv.strike for lv in report.resistance_levels), key=lambda s: abs(s - (quote.last_price)), default=None)
     # Surface the same numeric level `generate_candidates()` uses internally

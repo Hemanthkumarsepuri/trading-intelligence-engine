@@ -49,6 +49,7 @@ from app.domain.options.evidence_matrix import (
     EvidenceMatrix,
     EvidenceRow,
     OverallConvergence,
+    group_may_vote,
 )
 from app.domain.options.freshness_label import FreshnessLabel, StreamFreshness
 from app.domain.options.global_context import GlobalContextAssessment
@@ -1287,8 +1288,8 @@ def build_no_trade_explanation(report: OptionsIntelligenceReport) -> NoTradeExpl
         f"[{_evidence_tier(r.group)}] {r.name}: {r.direction.value} -- {r.detail}"
         for r in matrix.rows if r.direction != EvidenceDirection.UNKNOWN
     ]
-    what_supports_bullish = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == EvidenceDirection.BULLISH]
-    what_supports_bearish = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == EvidenceDirection.BEARISH]
+    what_supports_bullish = [f"{r.name}: {r.detail}" for r in matrix.voting_rows(EvidenceDirection.BULLISH)]
+    what_supports_bearish = [f"{r.name}: {r.detail}" for r in matrix.voting_rows(EvidenceDirection.BEARISH)]
     what_is_unreliable = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == EvidenceDirection.UNKNOWN]
     what_is_unreliable.extend(f"chain quality: {i.kind.value} -- {i.detail}" for i in report.chain_quality_issues)
 
@@ -1418,7 +1419,7 @@ def build_final_decision_explanation(report: OptionsIntelligenceReport) -> Final
     if report.candidates:
         what_can_invalidate = [report.candidates[0].invalidation_condition]
     else:
-        what_can_invalidate = [f"{r.name} ({r.direction.value}) reversing would remove this evidence group's contribution" for r in matrix.rows if r.direction in (EvidenceDirection.BULLISH, EvidenceDirection.BEARISH)] or ["no directional evidence currently exists to invalidate"]
+        what_can_invalidate = [f"{r.name} ({r.direction.value}) reversing would remove this evidence group's contribution" for r in matrix.rows if r.direction in (EvidenceDirection.BULLISH, EvidenceDirection.BEARISH) and group_may_vote(r.group)] or ["no directional evidence currently exists to invalidate"]
 
     # Q5 -- what data is missing (UNKNOWN rows + chain-quality issues,
     # same source `build_no_trade_explanation()` uses for WHAT IS UNRELIABLE).

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.options.evidence_matrix import EvidenceGroup
+from app.domain.options.evidence_matrix import EvidenceGroup, group_may_vote
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=True,
         freshness_requirement="current-session M15",
         historical_requirement="enough bars for EMA/VWAP",
-        may_vote=True,
+        may_vote=group_may_vote(EvidenceGroup.UNDERLYING_PRICE_STRUCTURE),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.OPTIONS_OI,
@@ -45,7 +45,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=True,
         freshness_requirement="current chain (HTTP receipt freshness, not exchange matching time)",
         historical_requirement="prior snapshot required for PCR change and OI migration",
-        may_vote=True,
+        may_vote=group_may_vote(EvidenceGroup.OPTIONS_OI),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.OPTIONS_IV,
@@ -56,7 +56,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=False,
         freshness_requirement="current chain",
         historical_requirement="history required for IV rank; a single print is context",
-        may_vote=False,
+        may_vote=group_may_vote(EvidenceGroup.OPTIONS_IV),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.FUTURES,
@@ -67,7 +67,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=True,
         freshness_requirement="current futures LTP",
         historical_requirement="prior basis required for BASIS_CHANGE (not CURRENT_BASIS)",
-        may_vote=True,
+        may_vote=group_may_vote(EvidenceGroup.FUTURES),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.RELATIVE_STRENGTH,
@@ -78,7 +78,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=True,
         freshness_requirement="current underlying quote and current Nifty quote",
         historical_requirement="none beyond today's quote window",
-        may_vote=True,
+        may_vote=group_may_vote(EvidenceGroup.RELATIVE_STRENGTH),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.GLOBAL,
@@ -89,7 +89,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=True,
         freshness_requirement="current index quotes",
         historical_requirement="none",
-        may_vote=True,
+        may_vote=group_may_vote(EvidenceGroup.GLOBAL),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.NEWS_EVENT,
@@ -100,7 +100,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=False,
         freshness_requirement="publication vs retrieval times on the item",
         historical_requirement="no look-ahead past as_of",
-        may_vote=False,
+        may_vote=group_may_vote(EvidenceGroup.NEWS_EVENT),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.LIQUIDITY,
@@ -111,7 +111,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=False,
         freshness_requirement="current chain",
         historical_requirement="none",
-        may_vote=False,
+        may_vote=group_may_vote(EvidenceGroup.LIQUIDITY),
     ),
     EvidenceDependency(
         evidence_group=EvidenceGroup.DATA_QUALITY,
@@ -122,7 +122,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=False,
         freshness_requirement="n/a (is the freshness record)",
         historical_requirement="none",
-        may_vote=False,
+        may_vote=group_may_vote(EvidenceGroup.DATA_QUALITY),
     ),
     EvidenceDependency(
         evidence_group=None,
@@ -133,7 +133,7 @@ DEPENDENCIES: tuple[EvidenceDependency, ...] = (
         directional=False,
         freshness_requirement="shown but never a vote",
         historical_requirement="delivery/FII are previous-session or caller-supplied",
-        may_vote=False,
+        may_vote=False,  # cash context is not an EvidenceGroup
     ),
 )
 

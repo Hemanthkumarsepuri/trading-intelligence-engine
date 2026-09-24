@@ -87,7 +87,7 @@ def test_no_directional_evidence_is_insufficient_data() -> None:
 
 def test_conflicting_evidence_both_sides_strong() -> None:
     matrix = _matrix([
-        (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH), (EvidenceGroup.OPTIONS_IV, EvidenceDirection.BULLISH),
+        (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH), (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
         (EvidenceGroup.OPTIONS_OI, EvidenceDirection.BEARISH), (EvidenceGroup.FUTURES, EvidenceDirection.BEARISH),
     ])
     assert classify_direction_comparison(matrix, min_supporting_rows_for_strong=2) == DirectionComparisonVerdict.BOTH_SIDES_STRONG
@@ -100,7 +100,7 @@ def test_conflicting_evidence_both_sides_weak() -> None:
 
 def test_conflicting_evidence_asymmetric_magnitude_is_conflicted() -> None:
     matrix = _matrix([
-        (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH), (EvidenceGroup.OPTIONS_IV, EvidenceDirection.BULLISH),
+        (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH), (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
         (EvidenceGroup.OPTIONS_OI, EvidenceDirection.BEARISH),
     ])
     assert classify_direction_comparison(matrix, min_supporting_rows_for_strong=2) == DirectionComparisonVerdict.CONFLICTED
@@ -278,7 +278,7 @@ def test_no_defensible_direction_when_insufficient_data() -> None:
 
 def test_conflicted_evidence_yields_no_defensible_direction() -> None:
     matrix = _matrix([
-        (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH), (EvidenceGroup.OPTIONS_IV, EvidenceDirection.BULLISH),
+        (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH), (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
         (EvidenceGroup.OPTIONS_OI, EvidenceDirection.BEARISH), (EvidenceGroup.FUTURES, EvidenceDirection.BEARISH),
     ])
     snapshot = _snapshot(_STANDARD)

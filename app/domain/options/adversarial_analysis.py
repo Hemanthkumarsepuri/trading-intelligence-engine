@@ -45,8 +45,8 @@ class AdversarialAnalysis:
 
 
 def build_adversarial_analysis(matrix: EvidenceMatrix) -> AdversarialAnalysis:
-    bull_case = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == EvidenceDirection.BULLISH]
-    bear_case = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == EvidenceDirection.BEARISH]
+    bull_case = [f"{r.name}: {r.detail}" for r in matrix.voting_rows(EvidenceDirection.BULLISH)]
+    bear_case = [f"{r.name}: {r.detail}" for r in matrix.voting_rows(EvidenceDirection.BEARISH)]
     missing_data = [f"{r.name}: {r.detail}" for r in matrix.rows if r.direction == EvidenceDirection.UNKNOWN]
 
     contradictions: list[str] = []

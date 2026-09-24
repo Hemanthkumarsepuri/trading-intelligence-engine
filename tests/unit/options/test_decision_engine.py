@@ -333,7 +333,7 @@ def test_quality_tiers_evidence_quality_strong_when_convergent_with_three_plus_s
         [
             (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH),
             (EvidenceGroup.OPTIONS_OI, EvidenceDirection.BULLISH),
-            (EvidenceGroup.OPTIONS_IV, EvidenceDirection.BULLISH),
+            (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
         ]
     )
     assessment = build_quality_assessment(
@@ -396,7 +396,7 @@ def test_supporting_group_count_matches_across_multiple_genuinely_independent_gr
         [
             (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH),
             (EvidenceGroup.OPTIONS_OI, EvidenceDirection.BULLISH),
-            (EvidenceGroup.OPTIONS_IV, EvidenceDirection.BULLISH),
+            (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
         ]
     )
     assert matrix.supporting_group_count(EvidenceDirection.BULLISH) == 3
@@ -496,7 +496,7 @@ def test_conflicting_evidence_count_is_honestly_zero_not_an_arbitrary_side_on_co
             (EvidenceGroup.UNDERLYING_PRICE_STRUCTURE, EvidenceDirection.BULLISH),
             (EvidenceGroup.OPTIONS_OI, EvidenceDirection.BULLISH),
             (EvidenceGroup.GLOBAL, EvidenceDirection.BULLISH),
-            (EvidenceGroup.OPTIONS_IV, EvidenceDirection.BEARISH),
+            (EvidenceGroup.FUTURES, EvidenceDirection.BEARISH),
             (EvidenceGroup.LIQUIDITY, EvidenceDirection.BEARISH),
         ]
     )
