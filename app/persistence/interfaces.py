@@ -219,6 +219,11 @@ class ResearchOutcomeRepository(Protocol):
         guess."""
         ...
 
+    async def count_malformed_lines(self) -> int:
+        """Sprint 3.6 -- persisted lines that do not parse (e.g. a write interrupted by a process
+        kill). Such lines are skipped by every read; this makes them visible."""
+        ...
+
     async def query_all_checkpoints(self) -> list[ResearchOutcomeCheckpoint]:
         """Sprint 3.5 -- every persisted checkpoint, in file order (read-only;
         used for sweep observability, never to decide due-ness)."""

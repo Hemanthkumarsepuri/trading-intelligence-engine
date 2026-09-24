@@ -23,11 +23,14 @@ firehose); revisit if that changes.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from app.domain.audit.models import (
     CHECKPOINT_ORDER,
@@ -48,6 +51,8 @@ from app.domain.options.models import IvObservation
 from app.domain.research.watch_record import WatchEvent, WatchRecord, active_by_symbol, fold_events
 from app.utils.time import to_ist
 
+_LOG = logging.getLogger(__name__)
+
 
 class _JsonlStore:
     """Shared append/read-all machinery for one JSONL file. Not a
@@ -60,8 +65,18 @@ class _JsonlStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append_line(self, line: str) -> None:
+        # If a previous writer died mid-append, the file ends in a partial line with no
+        # newline. Appending straight onto it would glue this (valid) record to the
+        # fragment and lose both. Start on a fresh line instead; the fragment stays a
+        # separate, isolated (and detectable) malformed line.
+        prefix = ""
+        if self.path.exists() and self.path.stat().st_size > 0:
+            with self.path.open("rb") as existing:
+                existing.seek(-1, 2)
+                if existing.read(1) != b"\n":
+                    prefix = "\n"
         with self.path.open("a", encoding="utf-8") as f:
-            f.write(line)
+            f.write(prefix + line)
             f.write("\n")
 
     def read_lines(self) -> list[str]:
@@ -496,8 +511,11 @@ class JsonlResearchOutcomeRepository:
         needle = f'"observation_id":"{observation.observation_id}"'
         with self._write_lock:
             for line in self._observations.iter_lines_containing(needle):
-                if ResearchObservation.model_validate_json(line).observation_id == observation.observation_id:
-                    return False
+                try:
+                    if ResearchObservation.model_validate_json(line).observation_id == observation.observation_id:
+                        return False
+                except ValidationError:
+                    continue  # a fragment mentioning this id is not a persisted record
             self._observations.append_line(observation.model_dump_json())
             return True
 
@@ -510,17 +528,48 @@ class JsonlResearchOutcomeRepository:
         needle = f'"observation_id":"{checkpoint.observation_id}"'
         with self._write_lock:
             for line in self._checkpoints.iter_lines_containing(needle):
-                existing = ResearchOutcomeCheckpoint.model_validate_json(line)
+                try:
+                    existing = ResearchOutcomeCheckpoint.model_validate_json(line)
+                except ValidationError:
+                    continue
                 if (existing.observation_id, existing.checkpoint_label) == (checkpoint.observation_id, checkpoint.checkpoint_label):
                     return False
             self._checkpoints.append_line(checkpoint.model_dump_json())
             return True
 
+    # A line that does not parse (e.g. the fragment of a write interrupted by a process kill) is
+    # SKIPPED and COUNTED, never silently accepted and never allowed to take down every read and
+    # the outcome sweep with it. It is surfaced via `count_malformed_lines()` (sweep result and
+    # health). A skipped observation fragment is a record that was never fully written; a skipped
+    # checkpoint fragment simply leaves that horizon uncaptured, so the next sweep recreates it.
     def _all_observations(self) -> list[ResearchObservation]:
-        return [ResearchObservation.model_validate_json(line) for line in self._observations.read_lines()]
+        records: list[ResearchObservation] = []
+        for line in self._observations.read_lines():
+            try:
+                records.append(ResearchObservation.model_validate_json(line))
+            except ValidationError:
+                _LOG.warning("skipping a malformed research observation line in %s", self._observations.path.name)
+        return records
 
     def _all_checkpoints(self) -> list[ResearchOutcomeCheckpoint]:
-        return [ResearchOutcomeCheckpoint.model_validate_json(line) for line in self._checkpoints.read_lines()]
+        records: list[ResearchOutcomeCheckpoint] = []
+        for line in self._checkpoints.read_lines():
+            try:
+                records.append(ResearchOutcomeCheckpoint.model_validate_json(line))
+            except ValidationError:
+                _LOG.warning("skipping a malformed outcome checkpoint line in %s", self._checkpoints.path.name)
+        return records
+
+    async def count_malformed_lines(self) -> int:
+        """Lines in the observation and checkpoint files that do not parse (read-only)."""
+        bad = 0
+        for store, model in ((self._observations, ResearchObservation), (self._checkpoints, ResearchOutcomeCheckpoint)):
+            for line in store.read_lines():
+                try:
+                    model.model_validate_json(line)
+                except ValidationError:
+                    bad += 1
+        return bad
 
     async def query_observations_by_date(self, day: date) -> list[ResearchObservation]:
         matches = [o for o in self._all_observations() if to_ist(o.generated_at).date() == day]

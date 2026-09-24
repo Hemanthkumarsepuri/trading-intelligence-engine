@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import TYPE_CHECKING
 
-from app.domain.market.trading_calendar import next_trading_day
+from app.domain.market.trading_calendar import is_special_session, next_trading_day
 from app.utils.time import IST, ensure_utc, to_ist
 
 if TYPE_CHECKING:
@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 SESSION_OPEN = time(9, 15)
 SESSION_CLOSE = time(15, 30)
+# A special session (e.g. Muhurat) trades at hours this repository has no source for -- the
+# calendar file records only its DATE. Its close is therefore taken as the end of that IST
+# calendar day: never earlier than the session actually ends, so a horizon can never be
+# evaluated (and then frozen as insufficient) before the session has traded.
+_SPECIAL_SESSION_CLOSE = time(23, 59, 59)
 
 
 def target_trading_session_date(observation_date: date, sessions_ahead: int, holidays: frozenset[date] | None = None) -> date:
@@ -52,7 +57,8 @@ def observation_session_date(observation: ResearchObservation) -> date:
 
 
 def session_close_utc(session_date: date) -> datetime:
-    return ensure_utc(datetime.combine(session_date, SESSION_CLOSE, tzinfo=IST))
+    close = _SPECIAL_SESSION_CLOSE if is_special_session(session_date) else SESSION_CLOSE
+    return ensure_utc(datetime.combine(session_date, close, tzinfo=IST))
 
 
 def horizon_session_date(observation: ResearchObservation, sessions_ahead: int) -> date:

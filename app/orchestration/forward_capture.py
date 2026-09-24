@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from app.domain.audit.research_models import (
+    RESEARCH_CHECKPOINT_SESSIONS_AHEAD,
     ForwardCaptureProvenance,
     ResearchObservation,
     StreamProvenance,
@@ -60,6 +61,7 @@ from app.domain.options.evidence_availability import (
     EvidenceAvailability,
     EvidenceClass,
 )
+from app.orchestration.outcome_sessions import horizon_close_utc
 from app.utils.time import to_ist
 
 if TYPE_CHECKING:
@@ -294,4 +296,101 @@ def build_forward_capture_view(observation: ResearchObservation) -> ForwardCaptu
         observation_id=observation.observation_id, capture_kind=observation_capture_kind(observation),
         t0=observation.generated_at, verified=not problems, problems=list(problems),
         provenance=observation.forward_capture, evidence_availability=observation.evidence_availability,
+    )
+
+
+# ============================================================
+# Sprint 3.6 -- dataset integrity audit (read-only)
+# ============================================================
+#
+# VALID_RESEARCH_OBSERVATION (the dataset quality contract), for a forward observation:
+#   1. it parses and its `observation_id` is unique in the journal;
+#   2. `verify_forward_observation()` returns no problems: valid tz-aware T0 <= persisted_at,
+#      T0 inside the OPEN/LIVE session, a live market state, complete option identity, an observed
+#      expiry not before T0's IST date, Sprint 3.2 availability present with a current chain,
+#      and an identity that recomputes to its `observation_id`;
+#   3. its provenance is the copied analysis provenance (per-stream labels/timestamps as recorded).
+# No score, confidence, probability, profit or prediction participates in validity.
+# A valid checkpoint additionally: belongs to a persisted observation, is unique per horizon, and
+# was captured no earlier than the close of the horizon it claims to evaluate.
+
+
+@dataclass(frozen=True)
+class DatasetAudit:
+    observations: int
+    forward_valid: int
+    forward_invalid: int
+    invalid_reasons: dict[str, int]
+    legacy_live: int
+    historical_replay: int
+    duplicate_observation_ids: int
+    checkpoints: int
+    duplicate_checkpoint_keys: int
+    orphan_checkpoints: int
+    checkpoint_causality_violations: int
+    malformed_lines: int
+    # Informational (not part of `clean`): forward observations with no `audit_id`. The raw T0
+    # evidence values (OI, IV, PCR, futures, levels, ...) live in the immutable analysis snapshot
+    # that `audit_id` references, not on the observation; without it they are not recoverable.
+    forward_without_audit_id: int = 0
+
+    @property
+    def clean(self) -> bool:
+        return (
+            self.forward_invalid == 0 and self.duplicate_observation_ids == 0 and self.duplicate_checkpoint_keys == 0
+            and self.orphan_checkpoints == 0 and self.checkpoint_causality_violations == 0 and self.malformed_lines == 0
+        )
+
+
+async def audit_research_dataset(repository: ResearchOutcomeRepository) -> DatasetAudit:
+    """Read-only integrity audit of the persisted research dataset. Writes nothing
+    and decides nothing about research (no outcome, no direction)."""
+    observations = await repository.query_all_observations()
+    checkpoints = await repository.query_all_checkpoints()
+    by_id: dict[str, ResearchObservation] = {}
+    duplicate_ids = 0
+    for observation in observations:
+        if observation.observation_id in by_id:
+            duplicate_ids += 1
+        by_id.setdefault(observation.observation_id, observation)
+
+    valid = invalid = legacy = replay = no_audit = 0
+    reasons: dict[str, int] = {}
+    for observation in by_id.values():
+        kind = observation_capture_kind(observation)
+        if kind == HISTORICAL_REPLAY:
+            replay += 1
+        elif kind == LEGACY_LIVE_UNVERIFIED:
+            legacy += 1
+        else:
+            if observation.audit_id is None:
+                no_audit += 1
+            problems = verify_forward_observation(observation)
+            if problems:
+                invalid += 1
+                for problem in problems:
+                    reasons[problem] = reasons.get(problem, 0) + 1
+            else:
+                valid += 1
+
+    seen_keys: set[tuple[str, str]] = set()
+    duplicate_keys = orphans = causality = 0
+    for checkpoint in checkpoints:
+        key = (checkpoint.observation_id, checkpoint.checkpoint_label.value)
+        if key in seen_keys:
+            duplicate_keys += 1
+        seen_keys.add(key)
+        owner = by_id.get(checkpoint.observation_id)
+        if owner is None:
+            orphans += 1
+            continue
+        if checkpoint.evaluated_through is not None:  # pre-Sprint-3.4 checkpoints carry no horizon bound to audit
+            expected = horizon_close_utc(owner, RESEARCH_CHECKPOINT_SESSIONS_AHEAD[checkpoint.checkpoint_label])
+            if checkpoint.evaluated_through != expected or checkpoint.captured_at < expected:
+                causality += 1
+    return DatasetAudit(
+        observations=len(by_id), forward_valid=valid, forward_invalid=invalid, invalid_reasons=dict(sorted(reasons.items())),
+        legacy_live=legacy, historical_replay=replay, duplicate_observation_ids=duplicate_ids, checkpoints=len(checkpoints),
+        duplicate_checkpoint_keys=duplicate_keys, orphan_checkpoints=orphans, checkpoint_causality_violations=causality,
+        malformed_lines=await repository.count_malformed_lines(), forward_without_audit_id=no_audit,
     )

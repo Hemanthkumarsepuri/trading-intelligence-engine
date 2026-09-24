@@ -378,6 +378,7 @@ class OutcomeSweepResult:
     insufficient_horizons_total: int  # every persisted checkpoint whose price data was insufficient
     checkpoints: tuple[ResearchOutcomeCheckpoint, ...] = ()
     errors: tuple[str, ...] = ()  # exception type names only
+    malformed_lines: int = 0  # persisted lines that did not parse (skipped by reads; never silently ignored)
 
 
 async def sweep_all_due_research_outcomes_detailed(
@@ -432,6 +433,7 @@ async def sweep_all_due_research_outcomes_detailed(
         observations_still_awaiting=still_awaiting, observations_failed=len(errors), horizons_created=len(created), horizons_created_insufficient=len(insufficient_created),
         horizons_already_complete=already_complete, horizons_not_yet_due=not_yet_due, horizons_due_unresolved=due_unresolved,
         insufficient_horizons_total=insufficient_total, checkpoints=tuple(created), errors=tuple(errors),
+        malformed_lines=await outcome_repository.count_malformed_lines(),
     )
 
 

@@ -126,7 +126,7 @@ class OutcomeSweepScheduler:
             self._last_error_type = None
             self._last_success_at = as_of
             self._last_result = result
-            degraded = result.observations_failed > 0 or result.horizons_due_unresolved > 0
+            degraded = result.observations_failed > 0 or result.horizons_due_unresolved > 0 or result.malformed_lines > 0
             self._health = SweepHealth.DEGRADED if degraded else SweepHealth.OPERATIONAL
             _LOG.info(
                 "outcome sweep ran: examined=%d created=%d insufficient_created=%d unresolved=%d failed=%d",
@@ -188,6 +188,7 @@ class OutcomeSweepScheduler:
                 "horizons_not_yet_due": result.horizons_not_yet_due,
                 "horizons_due_unresolved": result.horizons_due_unresolved,
                 "horizons_data_insufficient_total": result.insufficient_horizons_total,
+                "malformed_lines": result.malformed_lines,
             },
             "outcomes_complete": outcomes_complete,
             "note": (
