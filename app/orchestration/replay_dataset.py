@@ -114,6 +114,15 @@ def capture_knew_then(observation: ResearchObservation, response: AnalyzeRespons
         },
         "spot_at_observation": observation.spot_at_observation,
         "derivatives_evidence_available": observation.derivatives_evidence_available,
+        # Sprint 3.2 -- which evidence classes existed at this bar's `as_of`
+        # (copied from the observation). `None` = not recorded (an older
+        # observation), never an UNAVAILABLE claim. This is what tells a
+        # reader that an UNKNOWN entry above means "stream absent", not
+        # "evaluated and neutral".
+        "evidence_availability": (
+            observation.evidence_availability.model_dump(mode="json")
+            if observation.evidence_availability is not None else None
+        ),
     }
 
 

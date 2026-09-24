@@ -97,6 +97,7 @@ from app.domain.options.decision_engine import (
 )
 from app.domain.options.development import classify_development
 from app.domain.options.direction_analysis import build_direction_comparison
+from app.domain.options.evidence_availability import assess_evidence_availability
 from app.domain.options.evidence_matrix import (
     EvidenceDirection,
     EvidenceMatrix,
@@ -127,7 +128,7 @@ from app.domain.options.freshness_label import (
     classify_freshness_label,
     stream_freshness,
 )
-from app.domain.options.global_context import assess_global_context
+from app.domain.options.global_context import GlobalContextVerdict, assess_global_context
 from app.domain.options.historical_structure import (
     HistoricalStructureStatus,
     assess_historical_structure,
@@ -176,6 +177,7 @@ from app.domain.options.term_structure import (
 from app.domain.strategy.current_analysis import assemble_current_analysis
 from app.domain.strategy.ema_vwap_alignment import EMAVWAPAlignmentStrategy
 from app.domain.technical.momentum import calculate_rsi
+from app.domain.technical.series import IndicatorStatus
 from app.domain.technical.volatility import calculate_atr
 from app.domain.technical.vwap_position import compute_session_vwap_position
 from app.orchestration.options_intelligence_report import (
@@ -1487,6 +1489,27 @@ async def analyze_symbol(
         report, quote_retrieved_at=as_of, candles_are_current=candles_are_current,
         last_candle=last_candle, snapshot=snapshot, quote=quote,
         chain_is_current=chain_is_current, futures_are_current=futures_are_current,
+    )
+    # Sprint 3.2 -- Historical Validation Contract. Derived from the SAME
+    # already-established facts (and the matrix's own group verdicts) the
+    # stream-freshness list above is; nothing here is fetched or re-derived.
+    report.evidence_availability = assess_evidence_availability(
+        price_history_sufficient=a.ema_status == IndicatorStatus.OK,
+        candles_present=bool(candles),
+        candles_are_current=candles_are_current,
+        market_context_present=(
+            report.global_context is not None
+            and report.global_context.verdict != GlobalContextVerdict.INSUFFICIENT_DATA
+        ),
+        chain_present=snapshot is not None,
+        chain_is_current=chain_is_current,
+        provider_has_chain_history=provider.capabilities.historical_option_chain,
+        futures_present=report.futures_ltp is not None,
+        futures_are_current=futures_are_current,
+        provider_has_futures_history=provider.capabilities.historical_futures,
+        news_fetch_failed=report.news_fetch_error is not None,
+        provider_has_news_history=provider.capabilities.historical_news,
+        matrix=report.matrix,
     )
 
     if report.chain_quality_issues:

@@ -73,6 +73,7 @@ from app.domain.options.early_opportunity import (
     is_early_opportunity_bucket,
     is_event_to_monitor_bucket,
 )
+from app.domain.options.evidence_availability import EvidenceAvailability
 from app.domain.options.plain_language import (
     contract_usability_plain_english,
     happening_plain_english,
@@ -2754,6 +2755,12 @@ def _reclaim_invalidation_level(
     return reclaim.level_kind, str(reclaim.level)
 
 
+def _evidence_availability_of(response: AnalyzeResponse) -> EvidenceAvailability | None:
+    """Sprint 3.2 -- verbatim copy of the availability contract the analysis
+    itself computed at its own `as_of` (never recomputed here)."""
+    return response.visual.evidence_availability if response.visual is not None else None
+
+
 def build_research_observation(
     candidate: RankedCandidate, thesis: ResearchThesisView, *, run_id: str, coverage_classification: str | None,
 ) -> ResearchObservation:
@@ -2804,6 +2811,7 @@ def build_research_observation(
         structural_context=thesis.structural_context, participation_depth=thesis.participation_depth,
         relative_strength=thesis.relative_strength, pre_breakout_signal=thesis.pre_breakout_signal,
         pattern=thesis.developing_pattern,
+        evidence_availability=_evidence_availability_of(candidate.response),
     )
 
 
@@ -2918,6 +2926,7 @@ def build_price_only_observation(
         ),
         source="REPLAY",
         pattern=development.pattern,
+        evidence_availability=_evidence_availability_of(response),
     )
 
 

@@ -37,7 +37,7 @@ def _payload(as_of: datetime) -> dict[str, object]:
 
 
 def _visual(**kwargs: object) -> VisualData:
-    return VisualData.model_construct(**kwargs)
+    return VisualData.model_construct(**kwargs)  # type: ignore[arg-type]  # partial fixtures: **dict[str, object] vs each typed field
 
 
 def _build(

@@ -43,6 +43,7 @@ from app.domain.options.decision_engine import (
 )
 from app.domain.options.development import DevelopmentNarrative
 from app.domain.options.direction_analysis import DirectionComparison
+from app.domain.options.evidence_availability import EvidenceAvailability
 from app.domain.options.evidence_matrix import (
     EvidenceDirection,
     EvidenceGroup,
@@ -271,6 +272,10 @@ class OptionsIntelligenceReport:
     # `app.domain.options.research_blocker` for the precedence rule.
     blockers: BlockerAssessment | None = None
     stream_freshness: list[StreamFreshness] = field(default_factory=list)
+    # Sprint 3.2 -- which evidence classes were actually available at this
+    # analysis's `as_of` (see `app.domain.options.evidence_availability`).
+    # `None` only until the pipeline's final assembly step has run.
+    evidence_availability: EvidenceAvailability | None = None
     sample_breadth: SampleBreadthResult | None = None
     delivery: DeliveryObservation | None = None
     institutional_flows: InstitutionalFlowContext | None = None

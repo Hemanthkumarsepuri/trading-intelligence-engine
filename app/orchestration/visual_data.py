@@ -49,6 +49,7 @@ from app.domain.options.contract_analysis import (
 )
 from app.domain.options.decision_engine import EXTENDED_MIN_DAY_CHANGE_PCT
 from app.domain.options.direction_analysis import DecayInterpretation
+from app.domain.options.evidence_availability import EvidenceAvailability
 from app.domain.options.oi_migration import OIMigrationResult
 from app.domain.options.realized_volatility import RealizedVolatilityResult
 from app.domain.options.support_resistance import Level
@@ -897,6 +898,8 @@ class VisualData(BaseModel):
     sector: SectorContextVisual | None = None
     historical_structure: HistoricalStructureView | None = None
     structural_reclaim: StructuralReclaimView | None = None
+    # Sprint 3.2 -- copied verbatim from `report.evidence_availability`.
+    evidence_availability: EvidenceAvailability | None = None
 
 
 _APPROACHING_EXTENSION_WITHIN_PCT = Decimal("1.5")
@@ -1156,4 +1159,5 @@ def build_visual_data(report: OptionsIntelligenceReport) -> VisualData:
             if report.structural_reclaim is not None
             else None
         ),
+        evidence_availability=report.evidence_availability,
     )

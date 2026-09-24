@@ -28,6 +28,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.domain.options.evidence_availability import EvidenceAvailability
+
 
 def new_run_id() -> str:
     """Mirrors `app.domain.audit.models.new_audit_id()` -- a random,
@@ -343,6 +345,16 @@ class ResearchObservation(_FrozenModel):
     # this field existed.
     invalidation_level_kind: str | None = None
     invalidation_level_value: str | None = None
+    # Sprint 3.2 -- Historical Validation Contract: which evidence classes
+    # (price / market context / option chain / futures / news) were actually
+    # available at the analysis `as_of` this observation was built from.
+    # An immutable nested provenance object, copied verbatim from the
+    # analysis (`AnalyzeResponse.visual.evidence_availability`) -- never
+    # recomputed here and never inferred from another field's absence.
+    # `None` means "not recorded" (an observation persisted before this
+    # field existed) and is deliberately NOT the same as an UNAVAILABLE
+    # class: it makes no claim about what was or was not available.
+    evidence_availability: EvidenceAvailability | None = None
 
 
 class ResearchCheckpointLabel(str, Enum):
