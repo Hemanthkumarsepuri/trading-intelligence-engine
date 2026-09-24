@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # Local Qwen 2.5 via LM Studio -- same endpoint/model as Arqon Civil Interior.
     # Fail-open: research never depends on this being reachable.
     qwen_enabled: bool = Field(default=True, alias="QWEN_ENABLED")
+    # Sprint 3.5 -- the in-process trigger for the forward outcome sweep. It only
+    # ever runs the canonical sweep; disabling it loses nothing (the next enabled
+    # tick recovers whatever came due meanwhile).
+    outcome_sweep_enabled: bool = Field(default=True, alias="OUTCOME_SWEEP_ENABLED")
+    outcome_sweep_interval_seconds: int = Field(default=900, alias="OUTCOME_SWEEP_INTERVAL_SECONDS", ge=60)
     qwen_base_url: str = Field(default="http://127.0.0.1:1234/v1", alias="QWEN_BASE_URL")
     qwen_model: str = Field(default="qwen2.5-coder-7b-instruct", alias="QWEN_MODEL")
     qwen_timeout_seconds: float = Field(default=8.0, alias="QWEN_TIMEOUT_SECONDS")

@@ -19,8 +19,9 @@ import asyncio
 import dataclasses
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -100,6 +101,7 @@ from app.orchestration.journal_views import (
 )
 from app.orchestration.observed_market import build_observed_market
 from app.orchestration.options_intelligence_pipeline import PipelineConfig, Repositories
+from app.orchestration.outcome_scheduler import OutcomeSweepScheduler, SweepHealth, SweepRunner
 from app.orchestration.pattern_views import (
     PatternAggregationView,
     ReplayDatasetRowsView,
@@ -118,10 +120,12 @@ from app.orchestration.query_context import (
 )
 from app.orchestration.research_jobs import ResearchJob, ResearchJobRegistry
 from app.orchestration.research_outcome import (
+    OutcomeSweepResult,
     ResearchHistoryView,
     ResearchOutcomeDetailView,
     build_research_history,
     build_research_outcome_detail,
+    sweep_all_due_research_outcomes_detailed,
 )
 from app.orchestration.research_watch import (
     DuplicateWatchError,
@@ -250,10 +254,75 @@ async def real_lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.sector_map = None
         app.state.nifty50_symbols = None
         app.state.delivery_cache_dir = None
+    start_outcome_sweep(app)
     try:
         yield
     finally:
+        await stop_outcome_sweep(app)
         await client.aclose()
+
+
+def _worker_thread_sweep_runner(app: FastAPI) -> SweepRunner | None:
+    """The canonical outcome sweep, run on its own worker thread with its own
+    event loop and HTTP client -- the same isolation the discovery job uses, so a
+    slow provider call can never stall `/api/health`. `None` when there is no
+    provider/instrument master to sweep with."""
+    provider: UpstoxProvider | None = getattr(app.state, "provider", None)
+    instrument_master = getattr(app.state, "instrument_master", None)
+    if provider is None or instrument_master is None:
+        return None
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tire-outcome-sweep")
+    app.state.outcome_sweep_executor = executor
+
+    async def _on_worker_loop(as_of: datetime) -> OutcomeSweepResult:
+        async with httpx.AsyncClient() as client:
+            worker_provider = UpstoxProvider(client=client, access_token=settings.upstox_access_token or "")
+            return await sweep_all_due_research_outcomes_detailed(
+                as_of=as_of, provider=worker_provider, instrument_master=list(instrument_master),
+                mcx_instrument_master=getattr(app.state, "mcx_instrument_master", None),
+                strategy=app.state.strategy, repositories=app.state.repositories, config=app.state.config,
+                outcome_repository=app.state.outcome_repository,
+            )
+
+    async def _runner(as_of: datetime) -> OutcomeSweepResult:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, lambda: asyncio.run(_on_worker_loop(as_of)))
+
+    return _runner
+
+
+def start_outcome_sweep(app: FastAPI, *, runner: SweepRunner | None = None) -> OutcomeSweepScheduler:
+    """Sprint 3.5 -- start the trigger that invokes the canonical outcome sweep.
+    Never raises: with the sweep disabled or no provider configured it records
+    that (visible on `/api/health`) instead of running. `runner` is injectable for
+    tests; production passes none."""
+    if runner is None and settings.outcome_sweep_enabled:
+        runner = _worker_thread_sweep_runner(app)
+
+    async def _unavailable(_: datetime) -> OutcomeSweepResult:  # never invoked: the loop is not started
+        raise RuntimeError("outcome sweep unavailable")
+
+    scheduler = OutcomeSweepScheduler(
+        runner or _unavailable, interval_seconds=settings.outcome_sweep_interval_seconds,
+    )
+    app.state.outcome_sweep = scheduler
+    if not settings.outcome_sweep_enabled:
+        scheduler.mark_unavailable(SweepHealth.DISABLED)
+    elif runner is None:
+        scheduler.mark_unavailable(SweepHealth.NOT_CONFIGURED)
+    else:
+        scheduler.start()
+    return scheduler
+
+
+async def stop_outcome_sweep(app: FastAPI) -> None:
+    """Cancel the trigger loop and release its worker thread (no orphan task)."""
+    scheduler: OutcomeSweepScheduler | None = getattr(app.state, "outcome_sweep", None)
+    if scheduler is not None:
+        await scheduler.stop()
+    executor: ThreadPoolExecutor | None = getattr(app.state, "outcome_sweep_executor", None)
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 LifespanFactory = Callable[[FastAPI], AbstractAsyncContextManager[None]]
@@ -353,6 +422,11 @@ def create_app(*, lifespan: LifespanFactory = real_lifespan) -> FastAPI:
             session_window=session_window_payload(window),
         )
         payload["data_root"] = settings.tire_data_root
+        sweep: OutcomeSweepScheduler | None = getattr(app.state, "outcome_sweep", None)
+        payload["outcome_sweep"] = (
+            sweep.status_payload() if sweep is not None
+            else {"health": "NOT_STARTED", "running": False, "outcomes_complete": None}
+        )
         payload["qwen_enabled"] = settings.qwen_enabled
         return payload
 

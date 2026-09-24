@@ -219,6 +219,11 @@ class ResearchOutcomeRepository(Protocol):
         guess."""
         ...
 
+    async def query_all_checkpoints(self) -> list[ResearchOutcomeCheckpoint]:
+        """Sprint 3.5 -- every persisted checkpoint, in file order (read-only;
+        used for sweep observability, never to decide due-ness)."""
+        ...
+
     async def query_checkpoints_for_observation(self, observation_id: str) -> list[ResearchOutcomeCheckpoint]:
         """Every checkpoint captured so far for one observation, ordered
         ascending by `captured_at`."""

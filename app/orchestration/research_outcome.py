@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -358,25 +359,95 @@ async def sweep_due_research_outcomes(
     return newly_captured
 
 
+@dataclass(frozen=True)
+class OutcomeSweepResult:
+    """What one full sweep did, for observability. Every count is derived from
+    the canonical due rule (`due_research_checkpoints`) and the persisted
+    checkpoints -- nothing here decides due-ness or outcomes."""
+
+    as_of: datetime
+    observations_total: int
+    observations_examined: int  # persisted observations that, when the sweep began, did not yet hold all three horizons
+    observations_still_awaiting: int  # ... and still do not after it (a pending or unresolved horizon, or a failure)
+    observations_failed: int  # an exception while sweeping one observation (isolated; the rest proceeded)
+    horizons_created: int
+    horizons_created_insufficient: int  # created, but the horizon's price data was not available
+    horizons_already_complete: int  # among examined observations: horizons that already had a checkpoint
+    horizons_not_yet_due: int  # their horizon session has not closed yet
+    horizons_due_unresolved: int  # due, but nothing persisted (re-analysis failed) -- retried next sweep
+    insufficient_horizons_total: int  # every persisted checkpoint whose price data was insufficient
+    checkpoints: tuple[ResearchOutcomeCheckpoint, ...] = ()
+    errors: tuple[str, ...] = ()  # exception type names only
+
+
+async def sweep_all_due_research_outcomes_detailed(
+    *, as_of: datetime, provider: UpstoxProvider, instrument_master: list[dict[str, object]],
+    strategy: EMAVWAPAlignmentStrategy, repositories: Repositories, config: PipelineConfig,
+    outcome_repository: JsonlResearchOutcomeRepository,
+    mcx_instrument_master: list[dict[str, object]] | None = None,
+) -> OutcomeSweepResult:
+    """Every persisted observation that could still have a checkpoint, swept
+    once each (`query_observations_due_for_sweep` -> `sweep_due_research_outcomes`),
+    with per-observation failure isolation: one observation's unexpected error
+    is recorded and the remaining observations are still processed. `as_of` is
+    whatever the caller passes (the scheduler passes the real clock); due-ness
+    is decided only by the canonical outcome engine. Safe to call as often as
+    desired -- existing checkpoints are never recomputed or duplicated."""
+    observations = await outcome_repository.query_all_observations()
+    existing_all = await outcome_repository.query_all_checkpoints()
+    labels_by_observation: dict[str, set[ResearchCheckpointLabel]] = {}
+    for checkpoint in existing_all:
+        labels_by_observation.setdefault(checkpoint.observation_id, set()).add(checkpoint.checkpoint_label)
+
+    created: list[ResearchOutcomeCheckpoint] = []
+    errors: list[str] = []
+    already_complete = not_yet_due = due_unresolved = still_awaiting = 0
+    awaiting = await outcome_repository.query_observations_due_for_sweep(as_of=as_of)
+    for observation in awaiting:
+        before = labels_by_observation.get(observation.observation_id, set())
+        try:
+            newly = await sweep_due_research_outcomes(
+                observation, as_of=as_of, provider=provider, instrument_master=instrument_master, strategy=strategy,
+                repositories=repositories, config=config, outcome_repository=outcome_repository,
+                mcx_instrument_master=mcx_instrument_master,
+            )
+        except Exception as exc:  # noqa: BLE001 -- one observation must never stop the others; nothing was written for it
+            _LOG.warning("outcome sweep failed for observation %s: %s", observation.observation_id, type(exc).__name__)
+            errors.append(type(exc).__name__)
+            still_awaiting += 1
+            continue
+        created.extend(newly)
+        newly_labels = {c.checkpoint_label for c in newly}
+        if (set(before) | newly_labels) != set(RESEARCH_CHECKPOINT_SESSIONS_AHEAD):
+            still_awaiting += 1
+        due_before = set(due_research_checkpoints(observation, set(before), as_of=as_of))
+        already_complete += len(before)
+        due_unresolved += len(due_before - newly_labels)
+        not_yet_due += len(set(RESEARCH_CHECKPOINT_SESSIONS_AHEAD) - before - due_before)
+
+    insufficient_created = [c for c in created if c.spot_at_checkpoint is None]
+    insufficient_total = sum(1 for c in existing_all if c.spot_at_checkpoint is None) + len(insufficient_created)
+    return OutcomeSweepResult(
+        as_of=as_of, observations_total=len(observations), observations_examined=len(awaiting),
+        observations_still_awaiting=still_awaiting, observations_failed=len(errors), horizons_created=len(created), horizons_created_insufficient=len(insufficient_created),
+        horizons_already_complete=already_complete, horizons_not_yet_due=not_yet_due, horizons_due_unresolved=due_unresolved,
+        insufficient_horizons_total=insufficient_total, checkpoints=tuple(created), errors=tuple(errors),
+    )
+
+
 async def sweep_all_due_research_outcomes(
     *, as_of: datetime, provider: UpstoxProvider, instrument_master: list[dict[str, object]],
     strategy: EMAVWAPAlignmentStrategy, repositories: Repositories, config: PipelineConfig,
     outcome_repository: JsonlResearchOutcomeRepository,
     mcx_instrument_master: list[dict[str, object]] | None = None,
 ) -> list[ResearchOutcomeCheckpoint]:
-    """Every persisted observation that could still have a checkpoint, swept
-    once each (`query_observations_due_for_sweep` -> `sweep_due_research_outcomes`).
-    A library entry point only: nothing schedules it yet. Safe to call as often
-    as desired -- horizons not yet reached are skipped and existing checkpoints
-    are never recomputed or duplicated."""
-    captured: list[ResearchOutcomeCheckpoint] = []
-    for observation in await outcome_repository.query_observations_due_for_sweep(as_of=as_of):
-        captured.extend(await sweep_due_research_outcomes(
-            observation, as_of=as_of, provider=provider, instrument_master=instrument_master, strategy=strategy,
-            repositories=repositories, config=config, outcome_repository=outcome_repository,
-            mcx_instrument_master=mcx_instrument_master,
-        ))
-    return captured
+    """The newly written checkpoints of `sweep_all_due_research_outcomes_detailed`."""
+    result = await sweep_all_due_research_outcomes_detailed(
+        as_of=as_of, provider=provider, instrument_master=instrument_master, strategy=strategy,
+        repositories=repositories, config=config, outcome_repository=outcome_repository,
+        mcx_instrument_master=mcx_instrument_master,
+    )
+    return list(result.checkpoints)
 
 
 def build_horizon_progress(

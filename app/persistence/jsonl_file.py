@@ -532,6 +532,9 @@ class JsonlResearchOutcomeRepository:
     async def get_observation(self, observation_id: str) -> ResearchObservation | None:
         return next((o for o in self._all_observations() if o.observation_id == observation_id), None)
 
+    async def query_all_checkpoints(self) -> list[ResearchOutcomeCheckpoint]:
+        return self._all_checkpoints()
+
     async def query_checkpoints_for_observation(self, observation_id: str) -> list[ResearchOutcomeCheckpoint]:
         matches = [c for c in self._all_checkpoints() if c.observation_id == observation_id]
         return sorted(matches, key=lambda c: c.captured_at)
