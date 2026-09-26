@@ -1,5 +1,22 @@
 # TIRE Phase 3 — Historical Intelligence + Early Opportunity Validation
 
+> **STATUS (forensic certification of `1fc5303`, 2026-09-25): historical
+> replay is NOT certified for historical truth. Open defect C-1 — lookahead.**
+> Upstox M15 timestamps mark the bar's **open** (the real series runs
+> 09:15–15:15 IST). Replay sets each observation's `as_of` to that open
+> timestamp, and `HistoricalReplayProvider._latest_candle()` queries with
+> `end=as_of + 1s`, so the replay *quote* is that bar's **close**: a price
+> that exists only 15 minutes after T0. The candle series itself is correctly
+> bounded (the repository query is end-exclusive), but every quote-derived
+> input — day change / relative strength, the EXTENDED threshold,
+> pre-breakout proximity, the reclaim reference price, regime price, and the
+> context index quotes — can see the future. All persisted replay
+> observations, the replay dataset and `GET /api/research/patterns?source=replay`
+> are affected. Statements below that replay is "no-lookahead" describe the
+> design intent and the `data_timestamp <= as_of` filter, not a certified
+> property. See `docs/certification/FORENSIC_1fc5303.md` and
+> `docs/product/PRODUCT_CONTRACT.md` (principle P4).
+
 Date: 13 September 2026 (mechanism), gap-closure same day. Branch:
 `phase-3-historical-validation`. Baseline: `07f3b09` (GREEN). This
 document describes what actually exists in the running codebase — never
@@ -112,6 +129,9 @@ session_date, ...)`:
    (`HistoricalReplayProvider.advance_to()`) and calls the **real**
    `run_analysis()` — the identical function a manual query or the live
    daily researcher uses — with `as_of` = that bar's timestamp.
+   **Open defect C-1:** that timestamp is the bar's *open*, and the replay
+   quote is built from the same bar's *close* — 15 minutes of lookahead
+   (see the status note at the top of this document).
 4. Tries the SAME contract-selecting gate the live shortlist uses first
    (`collect_gated_candidates()` / `build_research_thesis()` /
    `build_research_observation()`, verbatim from

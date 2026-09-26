@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,15 +26,26 @@ from app.persistence.jsonl_file import (
     JsonlOptionChainRepository,
     JsonlQuoteRepository,
 )
-from app.utils.time import utc_now
+from app.utils.time import IST, utc_now
 
 RELIANCE_KEY = "NSE_EQ|INE002A01018"
 CE_KEY = "NSE_FO|1"
 PE_KEY = "NSE_FO|2"
 FUT_KEY = "NSE_FO|3"
-EXPIRY = date(2026, 9, 24)
-_EXPIRY_MS = 1790274599000
+# The API routes take `as_of` from the real clock (`app.api.main.utc_now`),
+# while this file's mock instrument master carries one fixed expiry. Left on
+# the wall clock, every analyze test broke the day after that expiry
+# ("no upcoming expiry"). `pinned_api_clock` (tests/conftest.py) pins the
+# route clock and this module's candle clock to this
+# instant -- a Wednesday 10:30 IST NSE session -- and the fixture expiry is
+# derived from it, so the scenario is identical on any real date.
+PINNED_API_NOW = datetime(2026, 9, 23, 5, 0, tzinfo=UTC)
+EXPIRY = PINNED_API_NOW.date() + timedelta(days=1)
+# Upstox master expiries are epoch-ms at 23:59:59 IST on the expiry date.
+_EXPIRY_MS = int(datetime.combine(EXPIRY, time(23, 59, 59), tzinfo=IST).timestamp() * 1000)
 AS_OF = datetime(2026, 8, 28, 6, 0, tzinfo=UTC)
+
+pytestmark = pytest.mark.usefixtures("pinned_api_clock")
 
 _MASTER: list[dict[str, object]] = [
     {"segment": "NSE_EQ", "name": "RELIANCE INDUSTRIES LTD", "exchange": "NSE", "instrument_type": "EQ", "instrument_key": RELIANCE_KEY, "trading_symbol": "RELIANCE"},

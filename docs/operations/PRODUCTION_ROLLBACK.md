@@ -31,7 +31,9 @@ Set the new token as a Railway service variable named `UPSTOX_ACCESS_TOKEN` only
 
 ## Disable deployment
 
-Railway dashboard → api → remove the public domain, or set `SYSTEM_HALTED=true` and restart (research routes halt; this is the product kill switch, not an order switch).
+Railway dashboard → api → remove the public domain. That is currently the only way to take the service off the internet.
+
+**`SYSTEM_HALTED` is NOT a working kill switch (open defect M-3).** The variable is defined in `app/config/settings.py` but nothing in the application reads it: setting `SYSTEM_HALTED=true` and restarting halts nothing — every research route, the Discover job and the outcome sweep keep running. Do not rely on it in an incident. See `docs/certification/FORENSIC_1fc5303.md`.
 
 ## Roll back backend
 

@@ -25,6 +25,9 @@ from tests.integration.api.test_dashboard_api import (
     _router,
 )
 
+# Fixture expiry is derived from the pinned instant -- see `pinned_api_clock`.
+pytestmark = pytest.mark.usefixtures("pinned_api_clock")
+
 
 def test_research_daily_returns_503_when_token_not_configured(tmp_path: Path) -> None:
     app = _configured_app(tmp_path, provider=None, instrument_master=None)

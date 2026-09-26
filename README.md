@@ -14,6 +14,18 @@ It MUST NOT:
 - override risk controls
 - use an LLM as the source of financial data
 
+## Product contract and certification status
+
+- [`docs/product/PRODUCT_CONTRACT.md`](docs/product/PRODUCT_CONTRACT.md) —
+  the canonical product contract: what TIRE is and is not, and its 18 core
+  principles, each with its invariant, enforcement, tests, status and any
+  open defect.
+- [`docs/certification/FORENSIC_1fc5303.md`](docs/certification/FORENSIC_1fc5303.md) —
+  the latest forensic certification (baseline `1fc5303`): **RED**. Open
+  defects include historical-replay lookahead (C-1) and missing API
+  authentication (H-1). Browser (Playwright) and live-market certification
+  have **not** been performed.
+
 ## Architecture
 
 Two separate analytical domains (Options Intelligence, IPO Intelligence),

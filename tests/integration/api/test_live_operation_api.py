@@ -11,12 +11,16 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.data.providers.upstox_provider import UpstoxProvider
 from app.persistence.jsonl_file import JsonlAuditJournalRepository
 from tests.integration.api.test_dashboard_api import _MASTER, _configured_app, _provider, _router
+
+# Same mock master/router as test_dashboard_api -- see `pinned_api_clock`.
+pytestmark = pytest.mark.usefixtures("pinned_api_clock")
 
 
 def _app_with_journal(

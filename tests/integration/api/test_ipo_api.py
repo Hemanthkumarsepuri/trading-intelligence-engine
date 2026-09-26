@@ -9,6 +9,7 @@ import asyncio
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.integration.api.test_dashboard_api import _MASTER, _configured_app, _provider, _router
@@ -28,6 +29,7 @@ def test_ipo_query_never_reaches_the_options_pipeline(tmp_path: Path) -> None:
     assert body["compact_report"] is None
 
 
+@pytest.mark.usefixtures("pinned_api_clock")  # runs the options pipeline on the dashboard mock master
 def test_existing_options_query_is_completely_unaffected_by_ipo_routing(tmp_path: Path) -> None:
     app = _configured_app(tmp_path, provider=_provider(_router()), instrument_master=_MASTER)
     client = TestClient(app)
