@@ -373,10 +373,12 @@ export async function fetchBreadth(opts: FetchOpts = {}): Promise<Breadth> {
 
 // ---- NSE option chain (best-effort fallback when no Upstox token) -------------------
 
-interface NseLeg { openInterest?: number; changeinOpenInterest?: number; totalTradedVolume?: number; impliedVolatility?: number; lastPrice?: number; bidprice?: number; askPrice?: number; underlyingValue?: number }
+// v3 legs carry bid/ask as buyPrice1/sellPrice1; the retired endpoint used bidprice/askPrice.
+interface NseLeg { openInterest?: number; changeinOpenInterest?: number; totalTradedVolume?: number; impliedVolatility?: number; lastPrice?: number; bidprice?: number; askPrice?: number; buyPrice1?: number; sellPrice1?: number; underlyingValue?: number }
 
 export function parseNseChain(
-  body: { records?: { expiryDates?: string[]; data?: { strikePrice?: number; expiryDate?: string; CE?: NseLeg; PE?: NseLeg }[]; underlyingValue?: number } },
+  // v3 rows name the row expiry `expiryDates` (a single DD-Mon-YYYY string); the retired endpoint used `expiryDate`.
+  body: { records?: { expiryDates?: string[]; data?: { strikePrice?: number; expiryDate?: string; expiryDates?: string; CE?: NseLeg; PE?: NseLeg }[]; underlyingValue?: number } },
   underlying: string,
   expiryIso: string,
   fetchedAt: string,
@@ -392,26 +394,42 @@ export function parseNseChain(
     prevOi: n(l?.openInterest) !== null && n(l?.changeinOpenInterest) !== null ? (l!.openInterest as number) - (l!.changeinOpenInterest as number) : null,
     volume: n(l?.totalTradedVolume),
     iv: n(l?.impliedVolatility) && (l!.impliedVolatility as number) > 0 ? (l!.impliedVolatility as number) : null,
-    bid: n(l?.bidprice),
-    ask: n(l?.askPrice),
+    bid: n(l?.buyPrice1) ?? n(l?.bidprice),
+    ask: n(l?.sellPrice1) ?? n(l?.askPrice),
   });
   const rows: ChainRow[] = [];
   for (const r of rec.data) {
-    if (toIso(r.expiryDate) !== expiryIso || n(r.strikePrice) === null) continue;
+    if (toIso(r.expiryDates ?? r.expiryDate) !== expiryIso || n(r.strikePrice) === null) continue;
     rows.push({ strike: r.strikePrice as number, ce: leg(r.CE), pe: leg(r.PE) });
   }
   if (rows.length === 0) throw new ProviderError('MALFORMED', `NSE option chain: no rows for expiry ${expiryIso}`);
   return { underlying, expiry: expiryIso, spot: n(rec.underlyingValue), rows: rows.sort((a, b) => a.strike - b.strike), source: 'nse', fetchedAt };
 }
 
-export function nseExpiries(body: { records?: { expiryDates?: string[] } }): string[] {
+/** Expiries from `/api/option-chain-contract-info` (top-level `expiryDates`) or a chain body (`records.expiryDates`). */
+export function nseExpiries(body: { expiryDates?: string[]; records?: { expiryDates?: string[] } }): string[] {
   const mon: Record<string, string> = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
-  return (body.records?.expiryDates ?? [])
+  return (body.expiryDates ?? body.records?.expiryDates ?? [])
     .map((d) => { const m = d.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/); return m && mon[m[2]!] ? `${m[3]}-${mon[m[2]!]}-${m[1]}` : ''; })
     .filter(Boolean)
     .sort();
 }
 
-export async function fetchNseChainRaw(nseSymbol: string, opts: FetchOpts = {}) {
-  return nseApi<Parameters<typeof parseNseChain>[0]>(`/api/option-chain-indices?symbol=${encodeURIComponent(nseSymbol)}`, opts);
+/** 2026-10-27 -> 27-Oct-2026, the expiry format the v3 option-chain API expects. */
+export function nseExpiryParam(expiryIso: string): string {
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const m = expiryIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const name = m ? mon[Number(m[2]) - 1] : undefined;
+  if (!m || !name) throw new ProviderError('MALFORMED', `NSE option chain: bad expiry ${expiryIso}`);
+  return `${m[3]}-${name}-${m[1]}`;
+}
+
+// NSE retired /api/option-chain-indices (it now answers 404 HTML). Expiries come from
+// contract-info and the chain from option-chain-v3, which is requested per expiry.
+export async function fetchNseExpiriesRaw(nseSymbol: string, opts: FetchOpts = {}) {
+  return nseApi<Parameters<typeof nseExpiries>[0]>(`/api/option-chain-contract-info?symbol=${encodeURIComponent(nseSymbol)}`, opts);
+}
+
+export async function fetchNseChainRaw(nseSymbol: string, expiryIso: string, opts: FetchOpts = {}) {
+  return nseApi<Parameters<typeof parseNseChain>[0]>(`/api/option-chain-v3?type=Indices&symbol=${encodeURIComponent(nseSymbol)}&expiry=${encodeURIComponent(nseExpiryParam(expiryIso))}`, opts);
 }

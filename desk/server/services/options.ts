@@ -4,7 +4,7 @@ import { OPTION_UNDERLYINGS, type OptionUnderlying } from '../../shared/universe
 import { cached } from '../cache';
 import type { Ctx } from '../config';
 import { fixtureChain } from '../fixtures';
-import { fetchNseChainRaw, nseExpiries, parseNseChain } from '../providers/nse';
+import { fetchNseChainRaw, fetchNseExpiriesRaw, nseExpiries, parseNseChain } from '../providers/nse';
 import { upstoxOptionChain, upstoxOptionContracts } from '../providers/upstox';
 import { fixtureQuote } from '../fixtures';
 import { ttlFor } from './quotes';
@@ -43,7 +43,7 @@ export async function getExpiries(ctx: Ctx, u: OptionUnderlying): Promise<Svc<Ex
     }
   }
   try {
-    const c = await cached(ctx.kv, `expiries/nse/${u.id}`, ttl, async () => nseExpiries(await fetchNseChainRaw(u.nseSymbol, { fetchImpl: ctx.fetchImpl })), { now: () => ctx.now().getTime(), maxStaleSec: 3 * 86400 });
+    const c = await cached(ctx.kv, `expiries/nse/${u.id}`, ttl, async () => nseExpiries(await fetchNseExpiriesRaw(u.nseSymbol, { fetchImpl: ctx.fetchImpl })), { now: () => ctx.now().getTime(), maxStaleSec: 3 * 86400 });
     if (c.value.length === 0) throw new Error('empty expiry list');
     return { data: { underlying: u.id, expiries: c.value.filter((e) => e >= istDateStr(ctx.now())), lotSize: null }, source: 'nse', stale: c.stale, notes };
   } catch (e) {
@@ -87,7 +87,7 @@ export async function getChain(ctx: Ctx, u: OptionUnderlying, expiry: string, lo
       }
     }
     try {
-      return parseNseChain(await fetchNseChainRaw(u.nseSymbol, { fetchImpl: ctx.fetchImpl }), u.id, expiry, now.toISOString());
+      return parseNseChain(await fetchNseChainRaw(u.nseSymbol, expiry, { fetchImpl: ctx.fetchImpl }), u.id, expiry, now.toISOString());
     } catch (e) {
       throw new Error(`Option chain unavailable. ${notes.join(' ')} NSE: ${e instanceof Error ? e.message : 'error'}. Set UPSTOX_ANALYTICS_TOKEN for reliable option-chain data.`);
     }
