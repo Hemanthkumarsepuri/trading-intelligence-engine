@@ -27,7 +27,13 @@ function AddForm() {
     e.preventDefault();
     if (!sym.trim()) return;
     add.mutate({ symbol: sym.trim() }, {
-      onSuccess: () => { toast(`${sym.toUpperCase()} added`); setSym(''); },
+      onSuccess: (r) => {
+        // The server may accept a symbol it could not verify (NSE list unreachable): say so, never add it silently.
+        const notes = r.meta.notes.filter(Boolean);
+        if (notes.length > 0) toast(`${sym.toUpperCase()} added. ${notes.join(' ')}`, true);
+        else toast(`${sym.toUpperCase()} added`);
+        setSym('');
+      },
       onError: (er) => toast(errMsg(er), true),
     });
   };

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionState } from '../shared/types';
-import { fmtIstTime } from '../shared/format';
+import { fmtIst, fmtIstTime } from '../shared/format';
 import { UNAUTH_EVENT, request, useGet } from './api';
 import { useLoc } from './nav';
 import { useTheme } from './theme';
@@ -46,7 +46,7 @@ function SessionPill() {
     <span className="row" style={{ gap: 6 }}>
       <span className={`dot ${d.phase === 'OPEN' || d.phase === 'SPECIAL' ? 'on' : d.phase === 'PRE_OPEN' ? 'pre' : ''}`} />
       <span className={`badge ${kind ?? ''}`} title={d.reason}>{d.label}</span>
-      {d.nextChangeLabel && <span className="small muted hide-m">{d.nextChangeLabel}</span>}
+      {d.nextChangeLabel && <span className="small muted hide-m">{d.nextChangeLabel}{d.nextChangeAt ? ` ${fmtIst(d.nextChangeAt)}` : ''}</span>}
       {!d.calendarKnown && <span className="badge warn" title="Holiday list does not cover this year; verify market days on nseindia.com">Holiday list outdated</span>}
     </span>
   );
@@ -124,9 +124,9 @@ function Shell({ demo }: { demo: boolean }) {
       </div>
       <nav className="tabbar" aria-label="Main">
         {NAV.map((n) => (
-          <a key={n.to} href={`#${n.to}`} className={active(n.to) ? 'active' : ''}>
+          <a key={n.to} href={`#${n.to}`} className={active(n.to) ? 'active' : ''} aria-current={active(n.to) ? 'page' : undefined}>
             <Icon name={n.icon} />
-            {n.label}
+            <span>{n.label}</span>
           </a>
         ))}
       </nav>
@@ -151,7 +151,19 @@ export function App() {
   }, [qc]);
 
   if (me.isPending) return <div className="login"><Spinner /></div>;
-  if (me.isError) return <div className="login"><div className="banner neg">Cannot reach the server: {me.error.message}</div></div>;
+  if (me.isError) {
+    return (
+      <div className="login">
+        <div className="banner neg" role="alert">
+          <div style={{ flex: 1 }}>
+            <strong>Cannot check your sign-in right now.</strong>
+            <div className="small">{me.error.message}</div>
+          </div>
+          <button className="btn sm" onClick={() => void me.refetch()} disabled={me.isFetching}>Retry</button>
+        </div>
+      </div>
+    );
+  }
   if (!me.data.data.authenticated) return <Login configured={me.data.data.configured} />;
   return <Shell demo={me.data.data.demo} />;
 }

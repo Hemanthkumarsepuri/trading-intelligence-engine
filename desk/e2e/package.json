@@ -1,0 +1,13 @@
+{
+  "name": "tire-desk-e2e",
+  "private": true,
+  "description": "Browser tests for TIRE Desk. Kept as a separate package so the app's own package.json and lockfile are untouched.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

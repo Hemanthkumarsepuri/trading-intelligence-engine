@@ -249,7 +249,9 @@ input[type='checkbox'] { width: 16px; min-height: 16px; height: 16px; accent-col
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: var(--bg-2);
     border-top: 1px solid var(--line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); justify-content: space-around;
   }
-  .tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); padding: 4px 8px; text-decoration: none; font-weight: 600; flex: 1; }
+  /* min-width: 0 lets all eight tabs shrink to fit a phone; without it they overflowed the fixed bar off-screen */
+  .tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); padding: 4px 1px; text-decoration: none; font-weight: 600; flex: 1 1 0; min-width: 0; }
+  .tabbar a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tabbar a.active { color: var(--accent); }
   .tabbar svg { width: 20px; height: 20px; }
   .toasts { bottom: 76px; }

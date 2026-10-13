@@ -16,7 +16,7 @@ const SEG_LABEL: Record<string, string> = { EQ_DELIVERY: 'Delivery', EQ_INTRADAY
 function GroupTable({ title, rows }: { title: string; rows: GroupStat[] }) {
   return (
     <Card title={title} flush>
-      {rows.length === 0 ? <Empty>No closed trades yet.</Empty> : (
+      {rows.length === 0 ? <Empty>Nothing recorded for this grouping yet.</Empty> : (
         <table>
           <thead><tr><th>{title.replace('By ', '')}</th><th className="num">Trades</th><th className="num">Win %</th><th className="num">Avg net</th><th className="num">Net</th></tr></thead>
           <tbody>
