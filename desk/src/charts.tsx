@@ -246,7 +246,8 @@ export function CandleChart({ candles, levels = [], height = 360 }: { candles: C
 
     const vol = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', color: css('--faint') + '55' });
     chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    vol.setData(candles.map((c) => ({ time: toTime(c.t), value: c.v, color: (c.c >= c.o ? css('--pos') : css('--neg')) + '55' })));
+    // unknown volume is left out of the histogram (not drawn as a zero-height bar)
+    vol.setData(candles.filter((c) => c.v !== null).map((c) => ({ time: toTime(c.t), value: c.v as number, color: (c.c >= c.o ? css('--pos') : css('--neg')) + '55' })));
 
     for (const l of levels) series.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: l.label });
     chart.timeScale().fitContent();

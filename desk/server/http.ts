@@ -70,7 +70,9 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchOpts = {}):
     return JSON.parse(text) as T;
   } catch {
     const head = text.slice(0, 60).replace(/\s+/g, ' ');
-    throw new ProviderError('MALFORMED', `Non-JSON response from ${hostOf(url)}: "${head}"`);
+    // The excerpt is for server logs only: error messages reach the browser, so they carry the host, not the body.
+    console.warn(`[http] non-JSON response from ${hostOf(url)}: "${head}"`);
+    throw new ProviderError('MALFORMED', `Non-JSON response from ${hostOf(url)}`);
   }
 }
 

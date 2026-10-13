@@ -3,6 +3,7 @@
 // shapes below were verified live by the TIRE engine in Aug-Sep 2026.
 
 import type { NormalizedChain, ChainRow, OptionLeg } from '../../shared/optionchain';
+import { knownVolume } from '../../shared/indicators';
 import type { Candle, Quote } from '../../shared/types';
 import { fetchJson, ProviderError, type FetchOpts } from '../http';
 
@@ -74,7 +75,7 @@ export function parseUpstoxCandles(rows: unknown): Candle[] {
     const t = Date.parse(String(r[0]));
     const [o, h, l, c, v] = [num(r[1]), num(r[2]), num(r[3]), num(r[4]), num(r[5])];
     if (Number.isNaN(t) || o === null || h === null || l === null || c === null) continue;
-    out.push({ t: Math.floor(t / 1000), o, h, l, c, v: v ?? 0 });
+    out.push({ t: Math.floor(t / 1000), o, h, l, c, v: knownVolume(v) });
   }
   return out.sort((a, b) => a.t - b.t);
 }

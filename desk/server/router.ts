@@ -7,7 +7,7 @@ import { positionSize, riskStatus } from '../shared/journal';
 import { parseHoldingsCsv } from '../shared/portfolio';
 import type { ApiResult, Meta, TelegramLog } from '../shared/types';
 import { cleanSymbol, isValidSymbol } from '../shared/universe';
-import { checkPassword, clearCookie, clearFailures, clientKey, issueToken, lockStatus, recordFailure, sessionCookie, sessionFromRequest } from './auth';
+import { authenticate, checkPassword, clearCookie, clearFailures, clientKey, cookieName, issueToken, pruneRevocations, readCookie, reserveAttempt, revokeSession, SessionStoreError, sessionCookie, verifyToken } from './auth';
 import { configProblems, type Ctx } from './config';
 import { ProviderError } from './http';
 import { ConflictError } from './kv';
@@ -86,6 +86,16 @@ function setupProblems(ctx: Ctx): string[] {
   return configProblems(ctx.cfg).filter((p) => !p.startsWith('APP_PASSWORD is set in plain text'));
 }
 
+/** Session check including revocation. If revocation cannot be checked, fail closed with 503 (never accept). */
+async function sessionOrThrow(req: Request, ctx: Ctx) {
+  try {
+    return await authenticate(req, ctx.cfg, ctx.kv, ctx.now());
+  } catch (e) {
+    if (e instanceof SessionStoreError) throw new HttpError(503, 'AUTH_UNAVAILABLE', 'Cannot verify the session right now. Please retry.');
+    throw e;
+  }
+}
+
 /** Every registered route (used by tests to prove each one is protected). */
 export function listRoutes(): { method: Route['method']; path: string; public: boolean }[] {
   return routes.map((r) => ({ method: r.method, path: r.path, public: Boolean(r.public) }));
@@ -99,7 +109,7 @@ route(
   'GET',
   '/api/auth/me',
   async ({ ctx, req }) => {
-    const authed = Boolean(sessionFromRequest(req, ctx.cfg, ctx.now()));
+    const authed = Boolean(await sessionOrThrow(req, ctx));
     return plain({ authenticated: authed, configured: setupProblems(ctx).length === 0, demo: ctx.cfg.offline });
   },
   { public: true },
@@ -113,10 +123,10 @@ route(
     if (problems.length > 0) throw new HttpError(503, 'NOT_CONFIGURED', `Server is not configured: ${problems.join(' ')}`);
     const { password } = loginInput.parse(await body());
     const key = clientKey(req);
-    const lock = await lockStatus(ctx.kv, key, ctx.now());
-    if (lock.locked) throw new HttpError(429, 'LOCKED', `Too many attempts. Try again in ${Math.ceil(lock.retryAfterSec / 60)} minute(s).`, { 'Retry-After': String(lock.retryAfterSec) });
+    // Admit (and count) the attempt atomically BEFORE the slow hash check, so parallel guesses cannot exceed the limit.
+    const slot = await reserveAttempt(ctx.kv, key, ctx.now());
+    if (!slot.allowed) throw new HttpError(429, 'LOCKED', `Too many attempts. Try again in ${Math.ceil(slot.retryAfterSec / 60)} minute(s).`, { 'Retry-After': String(slot.retryAfterSec) });
     if (!(await checkPassword(ctx.cfg, password))) {
-      await recordFailure(ctx.kv, key, ctx.now());
       await new Promise((r) => setTimeout(r, 400));
       throw new HttpError(401, 'BAD_CREDENTIALS', 'Incorrect password.');
     }
@@ -131,7 +141,22 @@ route(
 route(
   'POST',
   '/api/auth/logout',
-  async ({ req }) => ({ data: { authenticated: false }, headers: { 'Set-Cookie': clearCookie(new URL(req.url).protocol === 'https:') } }),
+  async ({ ctx, req }) => {
+    const secure = new URL(req.url).protocol === 'https:';
+    const headers = { 'Set-Cookie': clearCookie(secure) };
+    const session = verifyToken(readCookie(req.headers.get('cookie'), cookieName(secure)), ctx.cfg.sessionSecret, ctx.now());
+    if (session) {
+      try {
+        await revokeSession(ctx.kv, session);
+      } catch {
+        // The browser cookie is still cleared, but this is NOT reported as a successful sign-out.
+        console.error('[auth] logout: server-side revocation failed');
+        throw new HttpError(503, 'LOGOUT_NOT_REVOKED', 'Signed out in this browser, but the server could not revoke the session. Try again.', headers);
+      }
+      await pruneRevocations(ctx.kv, ctx.now()).catch(() => 0);
+    }
+    return { data: { authenticated: false }, headers };
+  },
   { public: true, maxBytes: 1024 },
 );
 
@@ -390,7 +415,7 @@ export async function handle(req: Request, ctx: Ctx): Promise<Response> {
 
     const { r, params } = matched;
     if (method !== 'GET') checkOrigin(req, url, ctx);
-    if (!r.public && !sessionFromRequest(req, ctx.cfg, ctx.now())) return fail(401, 'UNAUTHENTICATED', 'Sign in required.');
+    if (!r.public && !(await sessionOrThrow(req, ctx))) return fail(401, 'UNAUTHENTICATED', 'Sign in required.');
 
     let cached: Promise<unknown> | null = null;
     const body = () => (cached ??= readBody(req, r.maxBytes ?? DEFAULT_MAX_BODY));

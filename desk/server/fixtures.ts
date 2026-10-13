@@ -58,7 +58,7 @@ export function fixtureQuote(id: string, yahooSymbol: string, now: Date): Quote 
   const price = last.c * wob;
   return {
     symbol: id, price, prevClose: prev.c, change: price - prev.c, changePct: ((price - prev.c) / prev.c) * 100,
-    open: last.o, high: Math.max(last.h, price), low: Math.min(last.l, price), volume: last.v,
+    open: last.o, high: Math.max(last.h, price), low: Math.min(last.l, price), volume: last.v ?? undefined,
     marketTime: now.toISOString(), fetchedAt: now.toISOString(), source: 'fixture',
   };
 }

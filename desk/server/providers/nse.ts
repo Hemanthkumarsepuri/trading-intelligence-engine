@@ -197,7 +197,13 @@ export function parseParticipantOi(text: string, date: string): ParticipantOI {
     ipl: col('optionindexputlong'), ips: col('optionindexputshort'),
   };
   if (Object.values(idx).some((i) => i < 0)) throw new ProviderError('MALFORMED', 'Participant OI: expected columns missing');
-  const n = (r: string[], i: number) => Number((r[i] ?? '0').replace(/,/g, '')) || 0;
+  // A blank or unparseable cell is a malformed file, never a zero position.
+  const n = (r: string[], i: number): number => {
+    const raw = (r[i] ?? '').replace(/,/g, '').trim();
+    const v = raw === '' ? NaN : Number(raw);
+    if (!Number.isFinite(v)) throw new ProviderError('MALFORMED', `Participant OI: non-numeric value in column ${i + 1}`);
+    return v;
+  };
   const participants = {} as ParticipantOI['participants'];
   for (const r of rows) {
     const t = (r[idx.type] ?? '').toUpperCase();
@@ -347,12 +353,21 @@ export interface Breadth {
   unchanged: number;
 }
 
-export async function fetchBreadth(opts: FetchOpts = {}): Promise<Breadth> {
-  const body = await nseApi<{ data?: { index?: string; advances?: string | number; declines?: string | number; unchanged?: string | number }[] }>('/api/allIndices', opts);
+type BreadthBody = { data?: { index?: string; advances?: string | number; declines?: string | number; unchanged?: string | number }[] };
+
+export function parseBreadth(body: BreadthBody): Breadth {
   const row = body.data?.find((d) => d.index === 'NIFTY 500') ?? body.data?.find((d) => d.index === 'NIFTY 50');
   if (!row) throw new ProviderError('MALFORMED', 'allIndices: breadth row not found');
-  const n = (x: unknown) => Number(x) || 0;
+  const n = (x: unknown): number => {
+    const v = typeof x === 'string' ? Number(x.replace(/,/g, '').trim() || NaN) : Number(x ?? NaN);
+    if (!Number.isFinite(v)) throw new ProviderError('MALFORMED', 'allIndices: breadth counts missing or non-numeric');
+    return v;
+  };
   return { advances: n(row.advances), declines: n(row.declines), unchanged: n(row.unchanged) };
+}
+
+export async function fetchBreadth(opts: FetchOpts = {}): Promise<Breadth> {
+  return parseBreadth(await nseApi<BreadthBody>('/api/allIndices', opts));
 }
 
 

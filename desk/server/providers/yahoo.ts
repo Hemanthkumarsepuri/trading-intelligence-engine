@@ -6,6 +6,7 @@
 // Upstox (official) is preferred when a token is configured.
 
 import { istDateStr } from '../../shared/india';
+import { knownVolume } from '../../shared/indicators';
 import type { Candle, Quote } from '../../shared/types';
 import { fetchJson, mapLimit, ProviderError, type FetchOpts } from '../http';
 
@@ -61,7 +62,7 @@ export function parseYahooChart(body: YahooChartResponse, requested: string): Ya
       const h = q.high?.[i];
       const l = q.low?.[i];
       if (c == null || o == null || h == null || l == null) continue; // holiday/no-trade rows come back null
-      candles.push({ t: ts[i]!, o, h, l, c, v: q.volume?.[i] ?? 0 });
+      candles.push({ t: ts[i]!, o, h, l, c, v: knownVolume(q.volume?.[i]) });
     }
   }
   return { symbol: r.meta?.symbol ?? requested, name: r.meta?.longName ?? r.meta?.shortName, candles, meta: r.meta };
@@ -117,7 +118,7 @@ export function quoteFromChart(symbol: string, chart: YahooChart, fetchedAt: str
     open: last?.o,
     high: chart.meta?.regularMarketDayHigh ?? last?.h,
     low: chart.meta?.regularMarketDayLow ?? last?.l,
-    volume: chart.meta?.regularMarketVolume ?? last?.v,
+    volume: knownVolume(chart.meta?.regularMarketVolume) ?? last?.v ?? undefined,
     marketTime: mt ? new Date(mt * 1000).toISOString() : null,
     fetchedAt,
     source: 'yahoo',

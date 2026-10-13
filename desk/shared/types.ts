@@ -11,7 +11,8 @@ export interface Candle {
   h: number;
   l: number;
   c: number;
-  v: number;
+  /** Traded volume. null = the source did not supply a valid value (unknown); 0 = an observed zero. */
+  v: number | null;
 }
 
 export type QuoteSource = 'upstox' | 'yahoo' | 'nse' | 'fixture';

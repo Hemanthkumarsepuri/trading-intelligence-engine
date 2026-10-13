@@ -62,6 +62,9 @@ function Shell({ demo }: { demo: boolean }) {
   const logout = async () => {
     try {
       await request('POST', '/api/auth/logout', {});
+    } catch (e) {
+      // The browser is signed out regardless, but never claim the server revoked the session when it did not.
+      toast(e instanceof Error ? e.message : 'Could not confirm sign-out on the server.', true);
     } finally {
       window.dispatchEvent(new Event(UNAUTH_EVENT));
     }

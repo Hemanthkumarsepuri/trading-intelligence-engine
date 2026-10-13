@@ -77,6 +77,14 @@ export function lastOf<T>(arr: (T | null)[]): T | null {
   return null;
 }
 
+/** Minimum days with a known volume before a 20-day average is trusted. */
+export const MIN_VOL_SAMPLES = 10;
+
+/** A valid traded volume (finite, >= 0, a real number) or null. Never coerces missing/garbage to 0. */
+export function knownVolume(x: unknown): number | null {
+  return typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : null;
+}
+
 export interface PivotLevels {
   pivot: number;
   r1: number;
@@ -194,8 +202,12 @@ export function analyze(candles: Candle[]): TechSnapshot | null {
   const prior20 = prior.slice(-20);
   const prior20High = prior20.length >= 10 ? Math.max(...prior20.map((c) => c.h)) : null;
   const prior20Low = prior20.length >= 10 ? Math.min(...prior20.map((c) => c.l)) : null;
-  const avgVol20 = prior20.length >= 10 ? prior20.reduce((a, c) => a + c.v, 0) / prior20.length : null;
-  const volRatio = avgVol20 && avgVol20 > 0 ? last.v / avgVol20 : null;
+  // Unknown (null) volume is never treated as zero: the average uses only days
+  // with a known volume and needs at least MIN_VOL_SAMPLES of them, and the
+  // current day's volume must itself be known. Otherwise there is no ratio.
+  const knownPrior = prior20.map((c) => c.v).filter((v): v is number => v !== null);
+  const avgVol20 = knownPrior.length >= MIN_VOL_SAMPLES ? knownPrior.reduce((a, v) => a + v, 0) / knownPrior.length : null;
+  const volRatio = avgVol20 && avgVol20 > 0 && last.v !== null ? last.v / avgVol20 : null;
 
   const sma20v = lastOf(s20);
   const sma50v = lastOf(s50);
