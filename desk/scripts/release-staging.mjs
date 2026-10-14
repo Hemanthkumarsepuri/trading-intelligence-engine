@@ -39,7 +39,7 @@ const sh = (cmd, a, opts = {}) => execFileSync(cmd, a, { encoding: 'utf8', maxBu
 const git = (...a) => sh('git', ['-C', deskDir, ...a]).trim();
 // ls-tree/show/archive paths are repository-relative; run them from the top level so the cwd prefix cannot filter them.
 const repoRoot = git('rev-parse', '--show-toplevel');
-const gitRoot = (...a) => sh('git', ['-C', repoRoot, ...a]).trim();
+const gitRoot = (...a) => sh('git', ['-c', 'core.autocrlf=false', '-C', repoRoot, ...a]).trim();
 const fail = (m) => {
   console.error(`RELEASE REFUSED: ${m}`);
   process.exit(1);
@@ -74,14 +74,14 @@ if (forbidden.length) fail(`forbidden files in the release tree: ${forbidden.sli
 for (const need of ['package.json', 'package-lock.json', 'railway.json', 'server/main.ts', 'server/static.ts']) {
   if (!expectedFiles.includes(need)) fail(`required file missing from the release tree: ${need}`);
 }
-const pkg = JSON.parse(sh('git', ['-C', repoRoot, 'show', `${treeRef}/package.json`]));
+const pkg = JSON.parse(sh('git', ['-c', 'core.autocrlf=false', '-C', repoRoot, 'show', `${treeRef}/package.json`]));
 if (pkg.name !== 'tire-desk') fail(`package name is "${pkg.name}", expected tire-desk (wrong tree?)`);
 
 const work = mkdtempSync(path.join(os.tmpdir(), `desk-release-${sha.slice(0, 8)}-`));
 const tar = path.join(work, 'src.tar');
 const tree = path.join(work, 'desk');
 mkdirSync(tree);
-sh('git', ['-C', repoRoot, 'archive', '--format=tar', '-o', tar, treeRef]);
+sh('git', ['-c', 'core.autocrlf=false', '-C', repoRoot, 'archive', '--format=tar', '-o', tar, treeRef]);
 sh('tar', ['-xf', 'src.tar', '-C', 'desk'], { cwd: work }); // relative paths: GNU tar reads "C:" as a remote host
 
 const walk = (d, rel = '') =>
@@ -91,7 +91,7 @@ if (JSON.stringify(gotFiles) !== JSON.stringify(expectedFiles)) fail('extracted 
 const manifest = createHash('sha256');
 for (const f of gotFiles) {
   const blob = createHash('sha256').update(readFileSync(path.join(tree, f))).digest('hex');
-  const fromGit = createHash('sha256').update(sh('git', ['-C', repoRoot, 'show', `${treeRef}/${f}`], { encoding: 'buffer' })).digest('hex');
+  const fromGit = createHash('sha256').update(sh('git', ['-c', 'core.autocrlf=false', '-C', repoRoot, 'show', `${treeRef}/${f}`], { encoding: 'buffer' })).digest('hex');
   if (blob !== fromGit) fail(`content mismatch for ${f}`);
   manifest.update(`${f}\0${blob}\n`);
 }
