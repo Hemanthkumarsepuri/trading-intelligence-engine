@@ -1,6 +1,8 @@
 # TIRE Desk — Staging Deployment Report (2026-10-13)
 
-**Outcome (2026-10-14, release closure): STAGING COMPLETE — PRODUCTION BLOCKED.** The verified release `b5a7fd7` is published to `staging/desk-rc-2026-10-13` and is the code running on the isolated staging API. Every required staging check passed live, including a scheduled market-hours alert tick and a restore of an off-volume export into an isolated empty store (§17). **Production is blocked by:** (1) the proxy shared secret cannot be stored as a scoped, secret variable on the Netlify Free plan (L3, needs a paid plan, not purchased); (2) no independent off-volume backup is implemented (L9).
+**Update 2026-10-14 (hardening sprint): see §18, which supersedes the L3/L9/L1 wording in §14 and the Netlify-proxy topology described in §1–§2 and §5–§6 (written for release `b5a7fd7`). L3 and L1 are resolved; L9 is implemented but its live run is BLOCKED on a bucket; authenticated live acceptance needs the staging password. Production-readiness is NOT yet declared complete.**
+
+**Outcome (2026-10-14, release closure, release `b5a7fd7`): STAGING COMPLETE — PRODUCTION BLOCKED.** The verified release `b5a7fd7` is published to `staging/desk-rc-2026-10-13` and is the code running on the isolated staging API. Every required staging check passed live, including a scheduled market-hours alert tick and a restore of an off-volume export into an isolated empty store (§17). **Production is blocked by:** (1) the proxy shared secret cannot be stored as a scoped, secret variable on the Netlify Free plan (L3, needs a paid plan, not purchased); (2) no independent off-volume backup is implemented (L9).
 
 Labels: PASS (tested live, passed) · FAIL · BLOCKED · NOT TESTED · INFERRED (from config or indirect evidence). No secrets, hashes, cookies or tokens appear in this report.
 
@@ -187,3 +189,67 @@ Clean-up: all synthetic records (trades, holdings, watchlist, alerts) deleted fr
 2. **L9** — independent off-volume backups (automated, or an explicitly accepted manual schedule), recovery runbook including `SESSION_SECRET` rotation.
 3. **L1** — a reproducible deploy path (GitHub-connected service with Root Directory `/desk` and `railway.json` applied, or a documented archive-upload procedure).
 4. Production secrets and password must be newly generated (never the staging values) and Telegram enabled only with explicit approval and a test chat first.
+
+## 18. Production-readiness hardening (2026-10-14)
+Labels as above. Source: `staging/desk-rc-2026-10-13`; deployed release **`c5ac31e`** (manifest `a5027a34439f…`, 136 files), Railway deployment **`db3fd712-d677-4db8-bbcd-ea29f40e23a3` SUCCESS**, produced by `scripts/release-staging.mjs`. Later commits on the branch change only the acceptance script, docs and this report. Production (`TIRE` project, `api` deployment `82b446bf`, volume `tire-data`) and the other Netlify sites were not touched.
+
+### 18.1 Staging verification
+| Check | Result |
+|---|---|
+| Typecheck, lint (`--max-warnings=0`) | PASS |
+| Unit/integration tests, single worker | PASS 282/282 (249 prior + 13 single-origin + 20 off-site) |
+| `build:web` + `check-dist` (9 files), `build:server` | PASS |
+| Playwright regression (offline synthetic, Chromium) | PASS 31/31 |
+| Deployment `db3fd712` health-gated on `/api/health`; startup line `storage=file dir=/data/desk scheduler=on ingress=railway web=on offsite=off` | PASS |
+| One active deployment running the scheduler | PASS (one active deployment); `/api/status` instance binding NOT TESTED (needs a session) |
+| `scripts/live-acceptance.mjs`, unauthenticated part (24 checks: health, 401 on 10 GET + 4 POST routes with forged proxy headers, security headers, 5 bundle assets free of secret names/Railway host, no source/config files served, foreign-origin login 403) | PASS 24/24 |
+| Authenticated live checks (login/cookie flags, CSRF, synthetic CRUD, local backup+verify, export, scheduler status, NIFTY/BANKNIFTY chains, logout/tamper) | **NOT TESTED** — they need the staging password. My attempt to swap the password hash for a test value was blocked by the permission classifier and was not worked around. Run: `DESK_PASSWORD=… node scripts/live-acceptance.mjs` |
+| Restart persistence, scheduled alert tick, option chains on this exact release | NOT TESTED live (no session). Server code for these is unchanged since the `b5a7fd7` live PASS in §4–§8; the NSE provider is untouched |
+| Telegram | unset; never called |
+
+### 18.2 Security verification (L3 — proxy secret)
+Finding: the Netlify staging site held `DESK_PROXY_SECRET` as a plain variable in all scopes (Netlify API: scopes builds/functions/post_processing/runtime, `secret=false`); the Free plan cannot change this. Options evaluated in order: (1) a proxy hop needs *some* credential on Netlify to convey the visitor IP; without it only a shared egress IP is left to throttle on; (2) no no-cost runtime-only secret mechanism exists on Free; (3) **chosen: single origin** — the Railway service serves the frontend and API from one origin (`DESK_INGRESS=railway`). No proxy, no proxy credential anywhere.
+
+| Check | Result |
+|---|---|
+| `DESK_PROXY_SECRET` removed from Railway; removed together with `DESK_API_ORIGIN` from the Netlify staging site (variable list now empty; that site's proxy answers 503 and is retired) | PASS |
+| Config refuses `DESK_INGRESS=railway` together with `DESK_PROXY_SECRET`, and production with neither (tests) | PASS |
+| Protected routes require a session; forged `x-desk-proxy-key` / `x-desk-client-ip` have no effect (tests on every route; live on 14 routes) | PASS |
+| Direct-API rejection is no longer applicable (the API is the origin); unauthenticated → 401, foreign-origin write → 403, origin-less write → 403 | PASS (tests); unauthenticated and foreign-origin login live PASS |
+| **Forged-IP spoofing, live**: the first probe showed Railway passes a client `X-Forwarded-For` through unchanged, so the original right-most-XFF design was spoofable (7 rotating values, no lockout). Fixed in `c5ac31e` to use `x-real-ip`. Re-probe with rotating forged `x-forwarded-for`, `x-real-ip` and `x-desk-client-ip`: `401×5` then `429×2` | PASS (root-caused and fixed) |
+| IPv6 throttled per /64; IPv4-mapped unwrapped (unit tests) | PASS |
+| Lockout expiry (900 s) and session expiry/revocation | PASS in tests (`session-security`, `auth`); live PASS on 2026-10-13 for unchanged code; not re-run live (the probing IP is locked ~15 min) |
+| Revocation after `SESSION_SECRET` rotation, live | NOT TESTED (needs a session and a restart) |
+| Secrets in bundle/source/logs | PASS: served bundle clean (live scan), `check-dist`, no values printed or committed, startup logs carry no secrets |
+| That `x-real-ip` is the *visitor's* address rather than one shared edge address | INFERRED from Railway docs ("X-Real-IP for identifying client's remote IP") and the observed overwrite; not separable from one network. Failure mode is a shared lockout bucket (availability), not a bypass. Owner check: this workstation's IP is locked for ~15 min after the probe; signing in from a phone on mobile data should still work |
+| Residual risk | Per-IP throttling cannot stop a distributed botnet; mitigated by PBKDF2-600k cost and password strength. Accepted |
+
+### 18.3 Disaster-recovery verification (L9)
+Implemented (`server/services/offsite.ts`, `scripts/offsite-restore.ts`, `OFFSITE_BACKUP_AND_RECOVERY.md`): nightly AES-256-GCM encrypted upload (separate key) to any S3-compatible bucket, unique timestamped names, read-back decrypt+validate, sanitised status in `/api/status`, retry, no remote deletes, key-id-based rotation.
+
+| Check | Result |
+|---|---|
+| Envelope: round-trip, no plaintext in ciphertext, wrong key / tampered / truncated / foreign data rejected, key rotation | PASS (tests) |
+| SigV4 signer against AWS's published test vector | PASS |
+| Upload → read-back → status; unique names; transient 5xx retried; permanent 4xx not retried; failure status sanitised (no keys/endpoint); app data untouched on failure; corrupt stored copy never reported good; wrong credentials refused | PASS (tests, local S3 stand-in) |
+| Protocol compatibility with a third-party S3 server (`s3rver`, local): put, list, get, verify, restore | PASS. That server did not enforce signatures (it accepted a wrong secret), so it does **not** independently validate SigV4 beyond the AWS vector |
+| Restore into a new isolated directory from the remote object alone: trades, holdings, watchlist, alerts, settings identical; safety snapshot taken; non-empty target refused; tampered object rejected before anything is written; corrupt export rejected leaving existing data unchanged | PASS (tests) |
+| Old sessions rejected after `SESSION_SECRET` rotation | procedure documented; live NOT TESTED |
+| **Live off-site backup to a real bucket** | **BLOCKED — no external destination exists in this environment** (no cloud CLIs or configured bucket). Needs a private S3-compatible bucket and a restricted key from the owner. Until then the nightly snapshot shares the volume and the only independent copy is a manual `/api/export` download |
+| Staging volume erased to simulate disaster | not done (by design) |
+
+### 18.4 Deployment reproducibility (L1)
+`scripts/release-staging.mjs` with `release/staging.json`: requires the commit to be published on the staging branch and `desk/` clean; builds the upload from `git archive` (autocrlf off) and re-verifies the file list and every file hash against git; rejects engine/Python/env/dist content; confirms project name, service, environment and volume through the Railway API; passes explicit IDs from an unlinked temp directory, so production cannot be targeted; checks required variables exist, forbidden ones (proxy secret, Telegram, offline…) are absent and expected values hold (names only, values never printed); waits for SUCCESS, checks `/api/health`, records SHA, manifest and deployment ID (also in the Railway deployment message).
+
+| Check | Result |
+|---|---|
+| Dry run refused while the old variable set was in place, naming the missing `DESK_INGRESS` | PASS (gate works) |
+| Real runs → `fb92815c` (`5840ba6`, superseded) and `db3fd712` (`c5ac31e`, **running**), both SUCCESS and healthy; earlier deployments REMOVED | PASS |
+| Railway↔GitHub auto-deploy | NOT USED by decision: it needs a GitHub app grant on the repo that holds the engine, deploys every push without these checks and treats publication as deployment. Verified archive upload retained |
+| Wrong-target protection | by construction (explicit staging IDs, name checks); deliberately not exercised against production |
+
+### 18.5 Remaining items and the one decision needed
+1. **Owner, one-off:** create a *private* bucket on any S3-compatible service (e.g. Backblaze B2 or Cloudflare R2 free tier) with a key limited to that bucket (read/write/list, no delete); set the five `BACKUP_*` variables on the Railway staging service with `railway variable set NAME --stdin` (values never in chat); then run `DESK_PASSWORD=… node scripts/live-acceptance.mjs`. It uploads, reads back and verifies the off-site copy and runs every authenticated check.
+2. Optional coverage: Firefox/WebKit NOT TESTED; restore onto a new Railway volume NOT TESTED; mobile-data check of the `x-real-ip` assumption.
+
+**Verdict: PRODUCTION-READINESS HARDENING IS NOT YET COMPLETE.** Done and verified: L3 (design, tests, live spoof probe), L1, off-site implementation. Open only because of external dependencies: a live off-site backup (no bucket) and the authenticated live acceptance run (no password in this session).
