@@ -20,5 +20,5 @@
     "noEmit": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["src", "shared", "server", "netlify", "tests", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "shared", "server", "netlify", "tests", "scripts/offsite-restore.ts", "vite.config.ts", "vitest.config.ts"]
 }

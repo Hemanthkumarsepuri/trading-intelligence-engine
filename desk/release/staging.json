@@ -1,0 +1,16 @@
+{
+  "comment": "Deploy target for the isolated TIRE Desk STAGING service. Identifiers are not secrets. The production engine project (TIRE) is deliberately absent: the release script refuses any other target.",
+  "railway": {
+    "projectId": "9f7d07c7-341e-4932-8fa6-e95e57abb657",
+    "projectName": "TIRE Desk Staging",
+    "serviceId": "1ae958e9-ac77-4f0a-9fc7-b78e5694c79d",
+    "serviceName": "tire-desk-api",
+    "environmentId": "e9f5adf9-5095-4bcc-8fab-3625db84a7da",
+    "volumeName": "tire-desk-api-volume",
+    "origin": "https://tire-desk-api-production.up.railway.app"
+  },
+  "gitBranch": "staging/desk-rc-2026-10-13",
+  "requiredVariables": ["SESSION_SECRET", "APP_PASSWORD_HASH", "DESK_DATA_DIR", "DESK_PUBLIC_ORIGIN", "DESK_INGRESS", "RAILPACK_BUILD_CMD"],
+  "forbiddenVariables": ["DESK_PROXY_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DESK_OFFLINE", "DESK_STORAGE", "APP_PASSWORD", "TIRE_ENGINE_URL"],
+  "expectedValues": { "DESK_INGRESS": "railway", "DESK_DATA_DIR": "/data/desk" }
+}

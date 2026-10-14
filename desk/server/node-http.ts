@@ -1,19 +1,23 @@
 // Node HTTP <-> Fetch adapter shared by the production server (server/main.ts)
 // and the local dev server (server/dev.ts).
 //
-// Trust boundary. In production every request must come through the Netlify
-// edge proxy, which adds `x-desk-proxy-key` (a shared secret) and
-// `x-desk-client-ip` (the visitor's IP as Netlify saw it). Requests without a
-// valid key are refused before routing, except the public health check. Any
-// client-supplied copies of trusted headers are stripped first, so a caller
-// cannot spoof its IP to dodge the login lockout.
+// Trust boundary. Two modes:
+//  - Single origin (DESK_INGRESS=railway, the default design): the browser talks to
+//    Railway directly, there is no proxy and therefore no proxy credential. The
+//    caller's IP is the right-most X-Forwarded-For entry, which Railway's edge
+//    appends; client-supplied prefixes and any x-desk-* headers are never trusted.
+//  - Legacy edge proxy (DESK_PROXY_SECRET): every request must come through the
+//    Netlify edge proxy, which adds `x-desk-proxy-key` and `x-desk-client-ip`.
+//    Requests without a valid key are refused before routing, except the health check.
+// In both modes client-supplied copies of trusted headers are stripped first.
 
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
-import { CLIENT_IP_HEADER } from './auth';
+import { CLIENT_IP_HEADER, lastForwardedFor } from './auth';
 import type { Ctx } from './config';
 import { handle } from './router';
+import { serveStatic } from './static';
 
 export const PROXY_KEY_HEADER = 'x-desk-proxy-key';
 const MAX_BODY = 6 * 1024 * 1024;
@@ -33,6 +37,10 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 export interface AdapterOptions {
   /** Require the Netlify proxy key on every non-public route. */
   requireProxyKey: boolean;
+  /** Trust the right-most X-Forwarded-For entry as the caller IP (only behind the Railway edge). */
+  trustPlatformForwardedFor?: boolean;
+  /** Serve the built frontend from this directory for non-/api GET/HEAD requests. */
+  webRoot?: string | null;
 }
 
 export function createHandler(getCtx: () => Promise<Ctx>, opts: AdapterOptions) {
@@ -50,6 +58,18 @@ export function createHandler(getCtx: () => Promise<Ctx>, opts: AdapterOptions) 
         return;
       }
 
+      const method = (nodeReq.method ?? 'GET').toUpperCase();
+      if (opts.webRoot && !path.startsWith('/api/')) {
+        if (method !== 'GET' && method !== 'HEAD') {
+          send(nodeRes, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } });
+          return;
+        }
+        const f = await serveStatic(opts.webRoot, path);
+        nodeRes.writeHead(f.status, { ...f.headers, 'content-length': String(f.body.length) });
+        nodeRes.end(method === 'HEAD' ? undefined : f.body);
+        return;
+      }
+
       const headers = new Headers();
       for (const [k, v] of Object.entries(nodeReq.headers)) {
         if (v === undefined) continue;
@@ -58,7 +78,8 @@ export function createHandler(getCtx: () => Promise<Ctx>, opts: AdapterOptions) 
         headers.set(key, Array.isArray(v) ? v.join(', ') : v);
       }
       const forwardedIp = nodeReq.headers[CLIENT_IP_HEADER];
-      const ip = viaProxy && typeof forwardedIp === 'string' && forwardedIp ? forwardedIp : nodeReq.socket.remoteAddress ?? 'unknown';
+      const platformIp = opts.trustPlatformForwardedFor ? lastForwardedFor(nodeReq.headers['x-forwarded-for']) : null;
+      const ip = viaProxy && typeof forwardedIp === 'string' && forwardedIp ? forwardedIp : platformIp ?? nodeReq.socket.remoteAddress ?? 'unknown';
       headers.set(CLIENT_IP_HEADER, ip);
 
       // The browser-facing origin (the Netlify site in production) is what cookies
@@ -66,7 +87,6 @@ export function createHandler(getCtx: () => Promise<Ctx>, opts: AdapterOptions) 
       const base = ctx.cfg.publicOrigin ?? `http://${nodeReq.headers.host ?? 'localhost'}`;
       const url = new URL(rawUrl, base);
 
-      const method = (nodeReq.method ?? 'GET').toUpperCase();
       let body: Buffer | undefined;
       if (method !== 'GET' && method !== 'HEAD') {
         const chunks: Buffer[] = [];

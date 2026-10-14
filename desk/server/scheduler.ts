@@ -15,9 +15,10 @@ import { read, update } from './kv';
 import { runAlertsTick } from './services/alertsRunner';
 import { runBackup } from './services/backup';
 import { runDigest } from './services/digests';
+import { runOffsiteBackup } from './services/offsite';
 import { KEYS } from './services/userdata';
 
-export type JobId = 'alerts' | 'digest-pre' | 'digest-eod' | 'backup';
+export type JobId = 'alerts' | 'digest-pre' | 'digest-eod' | 'backup' | 'offsite';
 
 export interface JobState {
   lastStartAt: string | null;
@@ -101,6 +102,15 @@ export const JOBS: JobDef[] = [
     due: (now, s) => minutesOfDayIst(now) >= 2 * 60 && s.lastOkDate !== istDateStr(now) && since(s.lastStartAt, now) >= 30 * MIN,
     run: (ctx) => runBackup(ctx),
     timeoutMs: 2 * MIN,
+  },
+  {
+    // Encrypted off-volume copy, at or after 02:10 IST, retried every 30 min until it succeeds.
+    // Independent of the local snapshot: a destination outage never fails or repeats the local backup.
+    // A no-op (counted as done) when no destination is configured.
+    id: 'offsite',
+    due: (now, s) => minutesOfDayIst(now) >= 2 * 60 + 10 && s.lastOkDate !== istDateStr(now) && since(s.lastStartAt, now) >= 30 * MIN,
+    run: (ctx) => runOffsiteBackup(ctx),
+    timeoutMs: 5 * MIN,
   },
 ];
 

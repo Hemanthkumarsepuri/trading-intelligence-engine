@@ -39,11 +39,22 @@ async function main(): Promise<void> {
     await fs.writeFile(probe, new Date().toISOString());
     await fs.unlink(probe);
   }
+  if (cfg.webRoot) {
+    const index = path.resolve(process.cwd(), cfg.webRoot, 'index.html');
+    if (!(await fs.stat(index).then((st) => st.isFile(), () => false))) {
+      console.error(`[desk] refusing to start: DESK_INGRESS=railway serves the frontend but ${index} does not exist (run "npm run build:web" in the build command).`);
+      process.exit(1);
+    }
+  }
   const kv = await getKV(cfg);
   const ctx: Ctx = { cfg, kv, now: () => new Date() };
 
   const port = Number(process.env.PORT ?? 8788);
-  const server = createServer(createHandler(async () => ctx, { requireProxyKey: cfg.production }));
+  const server = createServer(createHandler(async () => ctx, {
+      requireProxyKey: cfg.production && cfg.ingress === 'edge-proxy',
+      trustPlatformForwardedFor: cfg.ingress === 'railway',
+      webRoot: cfg.webRoot ? path.resolve(process.cwd(), cfg.webRoot) : null,
+    }));
   server.requestTimeout = 60_000;
   server.headersTimeout = 30_000;
 
@@ -51,7 +62,7 @@ async function main(): Promise<void> {
   const scheduler = cfg.schedulerEnabled ? new Scheduler(ctx, instance) : null;
 
   server.listen(port, () => {
-    console.log(`[desk] API listening on :${port} (storage=${cfg.storage} dir=${cfg.storage === 'file' ? cfg.dataDir : '-'} scheduler=${scheduler ? 'on' : 'off'} offline=${cfg.offline})`);
+    console.log(`[desk] API listening on :${port} (storage=${cfg.storage} dir=${cfg.storage === 'file' ? cfg.dataDir : '-'} scheduler=${scheduler ? 'on' : 'off'} offline=${cfg.offline} ingress=${cfg.ingress} web=${cfg.webRoot ? 'on' : 'off'} offsite=${cfg.offsite ? 'on' : 'off'})`);
   });
   if (scheduler) await scheduler.start();
 

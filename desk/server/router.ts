@@ -13,6 +13,7 @@ import { ProviderError } from './http';
 import { ConflictError } from './kv';
 import { alertInput, holdingInput, loginInput, settingsInput, tradeInput, watchInput } from './schemas';
 import { runAlertsTick, lastTick } from './services/alertsRunner';
+import { offsiteStatus, runOffsiteBackup, verifyLatestOffsite } from './services/offsite';
 import { ImportError, exportAll, importAll, listBackups, restoreBackup, runBackup, verifyBackup } from './services/backup';
 import { notify, notifyFailureOnly, telegramLog } from './services/notify';
 import { schedulerStatus } from './scheduler';
@@ -295,7 +296,7 @@ route('PUT', '/api/settings', async ({ ctx, body }) => plain(await U.saveSetting
 
 route('GET', '/api/status', async ({ ctx }) => {
   const test = await runSelfTest(ctx);
-  return plain({ ...test, lastTick: await lastTick(ctx), scheduler: await schedulerStatus(ctx), backups: (await listBackups(ctx)).slice(0, 20), now: ctx.now().toISOString() });
+  return plain({ ...test, lastTick: await lastTick(ctx), scheduler: await schedulerStatus(ctx), backups: (await listBackups(ctx)).slice(0, 20), offsite: await offsiteStatus(ctx), now: ctx.now().toISOString() });
 });
 
 route('GET', '/api/telegram/status', async ({ ctx }) => {
@@ -345,6 +346,16 @@ route('GET', '/api/export', async ({ ctx }) => ({
 }));
 route('POST', '/api/import', async ({ ctx, body }) => plain(await importAll(ctx, await body())), { maxBytes: IMPORT_MAX_BODY });
 route('POST', '/api/backup/run', async ({ ctx }) => plain(await runBackup(ctx)), { maxBytes: 1024 });
+/** Owner-initiated: write an encrypted off-volume copy now. */
+route('POST', '/api/backup/offsite/run', async ({ ctx }) => {
+  try {
+    return plain(await runOffsiteBackup(ctx));
+  } catch (e) {
+    throw new HttpError(502, 'OFFSITE_FAILED', e instanceof Error ? e.message : 'Off-site backup failed.');
+  }
+}, { maxBytes: 1024 });
+/** Fetch the newest off-site object, decrypt and validate it. Writes nothing. */
+route('GET', '/api/backup/offsite/verify', async ({ ctx }) => plain(await verifyLatestOffsite(ctx)));
 
 // ---- Dispatcher ---------------------------------------------------------------------------------------------
 

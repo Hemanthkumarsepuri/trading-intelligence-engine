@@ -1,3 +1,13 @@
+> **Update (2026-10-14): single-origin mode is the default design.** Netlify's Free plan cannot keep the
+> proxy secret out of build/post-processing scopes, so staging now sets `DESK_INGRESS=railway`: the Railway
+> service serves the frontend and the API from one origin (`DESK_PUBLIC_ORIGIN` = the Railway domain), there is
+> **no proxy credential anywhere**, and the caller IP is the right-most `X-Forwarded-For` entry appended by
+> Railway's edge (IPv6 is throttled per /64). `DESK_PROXY_SECRET` and `DESK_INGRESS=railway` are mutually
+> exclusive; the Netlify-proxy sections below describe the legacy mode, which still works if you set
+> `DESK_PROXY_SECRET` instead. Build command for single origin: `npm run build:web && npm run build:server`
+> (set as `RAILPACK_BUILD_CMD`). Deploy with `scripts/release-staging.mjs`. Off-site backups: see
+> `OFFSITE_BACKUP_AND_RECOVERY.md`.
+
 # TIRE Desk on Netlify + Railway
 
 This is the deployment design for TIRE Desk: the frontend on Netlify, the backend (API, storage, scheduler, Telegram) on Railway, and the existing TIRE research engine left exactly as it is.

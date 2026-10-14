@@ -4,6 +4,7 @@
 // This closes TIRE forensic defect H-1 (no API authentication) for this app.
 
 import { createHash, createHmac, pbkdf2, randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { promisify } from 'node:util';
 import type { Config } from './config';
 import { update, type KV } from './kv';
@@ -193,8 +194,34 @@ const LOCK_MS = 15 * 60_000;
  */
 export const CLIENT_IP_HEADER = 'x-desk-client-ip';
 
+/**
+ * Canonical throttling identity for an address: IPv4 as is, IPv4-mapped IPv6 as IPv4,
+ * and any other IPv6 address collapsed to its /64 (a single subscriber routinely owns
+ * a whole /64, so per-address keys would let one attacker rotate through 2^64 of them).
+ */
+export function normalizeIp(raw: string): string {
+  const ip = raw.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  const mapped = /^(?:::ffff:|0:0:0:0:0:ffff:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip);
+  if (mapped?.[1]) return mapped[1];
+  if (isIP(ip) === 4) return ip;
+  if (isIP(ip) !== 6) return 'unknown';
+  const [head = '', tail] = ip.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail === undefined ? [] : tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array<string>(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return `${groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':')}::/64`;
+}
+
+/** Right-most X-Forwarded-For entry: the one appended by the platform edge, never a client-supplied prefix. */
+export function lastForwardedFor(header: string | string[] | undefined): string | null {
+  const joined = Array.isArray(header) ? header.join(',') : header;
+  if (!joined) return null;
+  const last = joined.split(',').at(-1)?.trim();
+  return last && isIP(last.replace(/^\[|\]$/g, '')) ? last : null;
+}
+
 export function clientKey(req: Request): string {
-  const ip = req.headers.get(CLIENT_IP_HEADER) ?? 'unknown';
+  const ip = normalizeIp(req.headers.get(CLIENT_IP_HEADER) ?? 'unknown');
   return createHash('sha256').update(ip).digest('hex').slice(0, 24);
 }
 
