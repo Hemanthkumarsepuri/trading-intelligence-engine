@@ -37,6 +37,38 @@ Set them with `railway variable set NAME --stdin` so values never appear in a sh
 **Keep a copy of `BACKUP_ENCRYPTION_KEY` outside Railway** (password manager). Without it the backups
 cannot be read; with it and the bucket credentials, the volume is replaceable.
 
+## Choosing a provider and creating the staging bucket (owner steps)
+
+Prices/limits as read from the providers' pages on 2026-10-14; re-check at sign-up.
+
+| | Backblaze B2 (recommended) | Cloudflare R2 |
+|---|---|---|
+| Free tier | first 10 GB storage always free; Class A/B/C API calls free; egress free up to 3x stored data | 10 GB-month, 1 M Class A, 10 M Class B ops per month; egress free |
+| No-delete key | **Yes**: an application key can be limited to one bucket with only `listFiles, readFiles, writeFiles` (no `deleteFiles`) | No: Object Read & Write includes delete |
+| Region value | the real region from the bucket endpoint, e.g. `us-west-004` | `auto` |
+| Card at sign-up | not stated on the pricing page — check | not stated — check |
+
+The implementation needs exactly three S3 operations: `PutObject`, `GetObject`, `ListObjectsV2` (path-style). It never deletes.
+
+Backblaze B2 steps (you perform these; nothing is created for you):
+1. Create a **private** bucket, e.g. `tire-desk-staging-backups`. Turn on versioning (default) and add a lifecycle rule to keep ~90 days.
+2. Create an application key restricted to that bucket with `listFiles,readFiles,writeFiles` only. The web UI's "Read and Write" preset may include delete; use the B2 CLI if so: `b2 key create --bucket <bucketName> tire-desk-staging listFiles,readFiles,writeFiles`.
+3. Note the S3 endpoint (`https://s3.<region>.backblazeb2.com`), the key id and the application key (shown once).
+4. Generate the encryption key locally and store it in your password manager.
+5. Set the variables on the **staging** Railway service without echoing them (run each in your terminal, paste the value when prompted):
+   `railway variable set BACKUP_S3_ENDPOINT --stdin -p 9f7d07c7-341e-4932-8fa6-e95e57abb657 -s 1ae958e9-ac77-4f0a-9fc7-b78e5694c79d -e e9f5adf9-5095-4bcc-8fab-3625db84a7da`
+   (repeat for `BACKUP_S3_BUCKET`, `BACKUP_S3_REGION`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_ENCRYPTION_KEY`, and `BACKUP_S3_PREFIX=tire-desk-staging/`). Setting variables redeploys the service.
+
+## If the bucket credentials are compromised
+
+* With a no-delete key an attacker can read ciphertext (useless without `BACKUP_ENCRYPTION_KEY`) and add objects.
+  They could add a forged-looking or *older* valid object to try to make recovery use stale data: authentication
+  prevents forgery without the encryption key, but not replay of an old genuine object. `restore` prints the
+  backup's `exportedAt` and object name; compare with the app's `/api/status` `offsite.lastKey` before trusting it.
+* Rotate the bucket key immediately (create new, set variables, run an off-site backup, revoke old).
+  Bucket versioning/lifecycle protects history from overwrites; a key that can delete (R2) cannot.
+* If `BACKUP_ENCRYPTION_KEY` is compromised, generate a new one, run a fresh backup, and treat old objects as readable by the attacker.
+
 ## Rotation
 
 * **Bucket credentials:** create a new restricted key, set the two variables, deploy/restart, run

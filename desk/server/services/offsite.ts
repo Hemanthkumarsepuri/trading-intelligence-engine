@@ -271,7 +271,7 @@ export async function verifyLatestOffsite(ctx: Ctx): Promise<{ key: string; ok: 
  * location, never over live data), validates the whole export before writing, and
  * lets importAll take its usual safety snapshot.
  */
-export async function restoreOffsiteInto(ctx: Ctx, which: 'latest' | string, targetDir: string): Promise<{ sourceKey: string; counts: Record<string, number>; safetySnapshot: string }> {
+export async function restoreOffsiteInto(ctx: Ctx, which: 'latest' | string, targetDir: string): Promise<{ sourceKey: string; exportedAt: string | null; counts: Record<string, number>; safetySnapshot: string }> {
   const cfg = ctx.cfg.offsite;
   if (!cfg) throw new OffsiteError('Off-site backup is not configured (BACKUP_S3_* and BACKUP_ENCRYPTION_KEY).');
   const existing = await fs.readdir(targetDir).catch((e: NodeJS.ErrnoException) => (e.code === 'ENOENT' ? [] : Promise.reject(e)));
@@ -284,5 +284,7 @@ export async function restoreOffsiteInto(ctx: Ctx, which: 'latest' | string, tar
   validateBackup(raw, ctx.now().toISOString()); // fail before creating anything
   await fs.mkdir(targetDir, { recursive: true });
   const res = await importAll({ ...ctx, kv: new FileKV(targetDir) }, raw);
-  return { sourceKey, counts: { trades: res.trades, holdings: res.holdings, watchlist: res.watchlist, alerts: res.alerts }, safetySnapshot: res.backupKey };
+  const stamp = (raw as Record<string, unknown>).exportedAt;
+  const exportedAt = typeof stamp === 'string' ? stamp : null; // lets the operator spot a rolled-back (old) object
+  return { sourceKey, exportedAt, counts: { trades: res.trades, holdings: res.holdings, watchlist: res.watchlist, alerts: res.alerts }, safetySnapshot: res.backupKey };
 }

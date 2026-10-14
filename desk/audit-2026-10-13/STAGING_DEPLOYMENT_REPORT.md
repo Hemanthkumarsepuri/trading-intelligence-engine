@@ -253,3 +253,21 @@ Implemented (`server/services/offsite.ts`, `scripts/offsite-restore.ts`, `OFFSIT
 2. Optional coverage: Firefox/WebKit NOT TESTED; restore onto a new Railway volume NOT TESTED; mobile-data check of the `x-real-ip` assumption.
 
 **Verdict: PRODUCTION-READINESS HARDENING IS NOT YET COMPLETE.** Done and verified: L3 (design, tests, live spoof probe), L1, off-site implementation. Open only because of external dependencies: a live off-site backup (no bucket) and the authenticated live acceptance run (no password in this session).
+
+## 19. Closure re-verification (2026-10-14, second pass)
+| Item | Result |
+|---|---|
+| Repo: `hardening/desk-final` = `origin/staging/desk-rc-2026-10-13` = `778d7f4`; remote `phase-3-historical-validation` = `49166ac`; the 13 unrelated engine changes (9 modified, 4 untracked) unchanged | PASS |
+| Live: Railway deployment `db3fd712-d677-4db8-bbcd-ea29f40e23a3` SUCCESS and the only active one; message `desk@c5ac31e1d9f4 manifest:a5027a34439f`; `/api/health` 200. `778d7f4` differs from the deployed `c5ac31e` only in docs and `live-acceptance.mjs` | PASS |
+| Variable NAMES on the service: `APP_PASSWORD_HASH, DESK_DATA_DIR, DESK_INGRESS, DESK_PUBLIC_ORIGIN, DESK_SCHEDULER, RAILPACK_BUILD_CMD, SESSION_SECRET`; no `DESK_PROXY_SECRET`, Telegram, `DESK_OFFLINE`, `BACKUP_*` | PASS |
+| Netlify staging site: variable list empty (no `DESK_PROXY_SECRET`/`DESK_API_ORIGIN`); not the current application | PASS |
+| Unauthenticated live acceptance (24 checks) | PASS 24/24 |
+| Authenticated live acceptance | **BLOCKED** — `DESK_PASSWORD` is not in this session's environment; the script also exits `BLOCKED` (code 2) if this IP is still locked out instead of bypassing it (lock observed, ~146 s left at last probe) |
+| Expired-session token, live | NOT TESTED (needs `SESSION_SECRET` to mint one; unit-tested) |
+| Typecheck, lint, 282/282 tests, `build:web` + `check-dist` (9 files), `build:server`, Playwright 31/31 | PASS |
+| Live: option chains, scheduler heartbeat/ownership, synthetic alert (no Telegram), restart persistence, `SESSION_SECRET` rotation | **BLOCKED** (all need a session); rotation procedure: set a new `SESSION_SECRET` (redeploy) → every old cookie must return 401 → sign in again; rollback = set the previous value back |
+| Off-site implementation review (AES-256-GCM random 96-bit nonce per object, key-id + magic as authenticated header; SigV4 path-style with per-segment encoding and sorted canonical query; 60 s request timeout, retry on 408/429/5xx/network, none on other 4xx; errors reduced to HTTP status + S3 code) | reviewed; one residual noted: object names/time are not authenticated, so an attacker with write access could replay an *older genuine* backup → restore now prints `exportedAt` and the doc says to compare with `offsite.lastKey` (tooling-only change, not yet deployed) |
+| Provider guidance (B2 recommended: no-delete key possible; R2 cannot exclude delete) written in `OFFSITE_BACKUP_AND_RECOVERY.md`; no account, bucket or key created | DONE |
+| Real off-site upload, read-back, isolated restore, corrupt-artifact rejection against a real provider | **BLOCKED** (no credentials configured) — not PASS |
+
+Production-readiness is **not** declared complete: the independent backup and authenticated live acceptance remain unverified.

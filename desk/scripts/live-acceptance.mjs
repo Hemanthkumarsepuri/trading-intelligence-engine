@@ -76,8 +76,14 @@ if (process.argv.includes('--lockout')) {
 }
 
 // ---- authenticated -------------------------------------------------------------------------------------------------
+const probe = PW ? await call('POST', '/api/auth/login', { body: { password: `${PW}-wrong` } }) : null;
+if (probe?.status === 429) {
+  // A lockout is a security control working, not something to bypass: wait it out.
+  console.log(`BLOCKED authenticated checks: this IP is locked out (Retry-After ${probe.headers.get('retry-after') ?? '?'} s). Re-run after it expires.`);
+  process.exit(2);
+}
 if (PW) {
-  const bad = await call('POST', '/api/auth/login', { body: { password: `${PW}-wrong` } });
+  const bad = probe;
   rec('wrong password refused, no cookie', bad.status === 401 && !sessionCookie(bad.setCookie), String(bad.status));
   const lg = await call('POST', '/api/auth/login', { body: { password: PW } });
   const cookie = sessionCookie(lg.setCookie);
