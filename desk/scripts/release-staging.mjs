@@ -82,7 +82,7 @@ const tar = path.join(work, 'src.tar');
 const tree = path.join(work, 'desk');
 mkdirSync(tree);
 sh('git', ['-C', repoRoot, 'archive', '--format=tar', '-o', tar, treeRef]);
-sh('tar', ['-xf', tar, '-C', tree]);
+sh('tar', ['-xf', 'src.tar', '-C', 'desk'], { cwd: work }); // relative paths: GNU tar reads "C:" as a remote host
 
 const walk = (d, rel = '') =>
   readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name), `${rel}${e.name}/`) : [`${rel}${e.name}`]));
