@@ -69,7 +69,7 @@ ok(`commit ${sha.slice(0, 12)} is published on origin/${target.gitBranch}; desk/
 const prefix = git('rev-parse', '--show-prefix').replace(/\/$/, ''); // "desk" when run in the engine repo
 const treeRef = `${sha}:${prefix}`;
 const expectedFiles = gitRoot('ls-tree', '-r', '--name-only', treeRef).split('\n').filter(Boolean).sort();
-const forbidden = expectedFiles.filter((f) => /\.py$|^pyproject\.toml$|^requirements.*\.txt$|(^|\/)Dockerfile$|(^|\/)\.env|^node_modules\/|^dist\/|^dist-server\//.test(f));
+const forbidden = expectedFiles.filter((f) => /\.py$|^pyproject\.toml$|^requirements.*\.txt$|(^|\/)Dockerfile$|(^|\/)\.env(?!\.example$)|^node_modules\/|^dist\/|^dist-server\//.test(f));
 if (forbidden.length) fail(`forbidden files in the release tree: ${forbidden.slice(0, 5).join(', ')}`);
 for (const need of ['package.json', 'package-lock.json', 'railway.json', 'server/main.ts', 'server/static.ts']) {
   if (!expectedFiles.includes(need)) fail(`required file missing from the release tree: ${need}`);
