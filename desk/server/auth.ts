@@ -212,12 +212,11 @@ export function normalizeIp(raw: string): string {
   return `${groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':')}::/64`;
 }
 
-/** Right-most X-Forwarded-For entry: the one appended by the platform edge, never a client-supplied prefix. */
-export function lastForwardedFor(header: string | string[] | undefined): string | null {
-  const joined = Array.isArray(header) ? header.join(',') : header;
-  if (!joined) return null;
-  const last = joined.split(',').at(-1)?.trim();
-  return last && isIP(last.replace(/^\[|\]$/g, '')) ? last : null;
+/** A single, syntactically valid IP from a platform-set header (e.g. X-Real-IP), or null. Lists are rejected. */
+export function singleHeaderIp(header: string | string[] | undefined): string | null {
+  if (typeof header !== 'string') return null;
+  const v = header.trim().replace(/^\[|\]$/g, '');
+  return v && isIP(v) ? v : null;
 }
 
 export function clientKey(req: Request): string {

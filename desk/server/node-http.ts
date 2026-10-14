@@ -4,8 +4,9 @@
 // Trust boundary. Two modes:
 //  - Single origin (DESK_INGRESS=railway, the default design): the browser talks to
 //    Railway directly, there is no proxy and therefore no proxy credential. The
-//    caller's IP is the right-most X-Forwarded-For entry, which Railway's edge
-//    appends; client-supplied prefixes and any x-desk-* headers are never trusted.
+//    caller's IP is the single header the Railway edge sets (x-real-ip); it was
+//    verified live that X-Forwarded-For is NOT overwritten by Railway and is
+//    therefore never used. Client-supplied x-desk-* headers are never trusted.
 //  - Legacy edge proxy (DESK_PROXY_SECRET): every request must come through the
 //    Netlify edge proxy, which adds `x-desk-proxy-key` and `x-desk-client-ip`.
 //    Requests without a valid key are refused before routing, except the health check.
@@ -14,7 +15,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
-import { CLIENT_IP_HEADER, lastForwardedFor } from './auth';
+import { CLIENT_IP_HEADER, singleHeaderIp } from './auth';
 import type { Ctx } from './config';
 import { handle } from './router';
 import { serveStatic } from './static';
@@ -37,8 +38,8 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 export interface AdapterOptions {
   /** Require the Netlify proxy key on every non-public route. */
   requireProxyKey: boolean;
-  /** Trust the right-most X-Forwarded-For entry as the caller IP (only behind the Railway edge). */
-  trustPlatformForwardedFor?: boolean;
+  /** Name of the header the platform edge sets to the caller IP (Railway: x-real-ip). Only trusted behind that edge. */
+  platformIpHeader?: string | null;
   /** Serve the built frontend from this directory for non-/api GET/HEAD requests. */
   webRoot?: string | null;
 }
@@ -78,7 +79,7 @@ export function createHandler(getCtx: () => Promise<Ctx>, opts: AdapterOptions) 
         headers.set(key, Array.isArray(v) ? v.join(', ') : v);
       }
       const forwardedIp = nodeReq.headers[CLIENT_IP_HEADER];
-      const platformIp = opts.trustPlatformForwardedFor ? lastForwardedFor(nodeReq.headers['x-forwarded-for']) : null;
+      const platformIp = opts.platformIpHeader ? singleHeaderIp(nodeReq.headers[opts.platformIpHeader]) : null;
       const ip = viaProxy && typeof forwardedIp === 'string' && forwardedIp ? forwardedIp : platformIp ?? nodeReq.socket.remoteAddress ?? 'unknown';
       headers.set(CLIENT_IP_HEADER, ip);
 

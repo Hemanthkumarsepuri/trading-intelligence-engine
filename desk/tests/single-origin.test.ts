@@ -9,7 +9,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { hashPassword, lastForwardedFor, normalizeIp } from '../server/auth';
+import { hashPassword, normalizeIp, singleHeaderIp } from '../server/auth';
 import { resetCacheMemory } from '../server/cache';
 import { fatalProductionProblems, loadConfig, type Ctx } from '../server/config';
 import { FileKV } from '../server/kv';
@@ -57,13 +57,10 @@ describe('single-origin production configuration', () => {
 });
 
 describe('client address handling', () => {
-  it('takes only the right-most valid X-Forwarded-For entry', () => {
-    expect(lastForwardedFor('6.6.6.6, 7.7.7.7, 203.0.113.9')).toBe('203.0.113.9');
-    expect(lastForwardedFor('203.0.113.9')).toBe('203.0.113.9');
-    expect(lastForwardedFor(['1.1.1.1', '2.2.2.2'])).toBe('2.2.2.2');
-    expect(lastForwardedFor('1.1.1.1, not-an-ip')).toBeNull();
-    expect(lastForwardedFor(undefined)).toBeNull();
-    expect(lastForwardedFor('')).toBeNull();
+  it('accepts only a single valid IP from the platform header', () => {
+    expect(singleHeaderIp('203.0.113.9')).toBe('203.0.113.9');
+    expect(singleHeaderIp(' 2001:db8::1 ')).toBe('2001:db8::1');
+    for (const bad of ['6.6.6.6, 7.7.7.7', 'not-an-ip', '', undefined, ['1.1.1.1', '2.2.2.2']]) expect(singleHeaderIp(bad as string), String(bad)).toBeNull();
   });
   it('collapses IPv6 to the /64 and unwraps IPv4-mapped addresses', () => {
     expect(normalizeIp('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe('2001:0db8:0001:0002::/64');
@@ -95,7 +92,7 @@ async function start(dir: string): Promise<Running> {
   const cfg = loadConfig(env(dir));
   cfg.offline = true;
   const ctx: Ctx = { cfg, kv: new FileKV(dir), now: () => new Date() };
-  const server = createServer(createHandler(async () => ctx, { requireProxyKey: false, trustPlatformForwardedFor: true, webRoot: webDir }));
+  const server = createServer(createHandler(async () => ctx, { requireProxyKey: false, platformIpHeader: 'x-real-ip', webRoot: webDir }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => new Promise((r) => server.close(() => r())) };
 }
@@ -113,7 +110,7 @@ describe('single-origin server', () => {
   });
 
   const login = (ip: string, headers: Record<string, string> = {}, password = PASSWORD) =>
-    fetch(`${api.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN, 'x-forwarded-for': ip, ...headers }, body: JSON.stringify({ password }) });
+    fetch(`${api.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN, 'x-real-ip': ip, ...headers }, body: JSON.stringify({ password }) });
 
   it('serves the app with the full security header set and correct caching', async () => {
     const res = await fetch(`${api.base}/`);
@@ -167,12 +164,12 @@ describe('single-origin server', () => {
     expect((await post({ origin: ORIGIN })).status).toBe(201);
   });
 
-  it('locks out by the platform-appended address; a spoofed prefix or x-desk-client-ip cannot rotate identity', async () => {
+  it('locks out by the platform-set address; x-forwarded-for and x-desk-client-ip cannot rotate identity', async () => {
     for (let i = 0; i < 5; i++) {
-      const r = await login(`10.0.0.${i}, 198.51.100.66`, { 'x-desk-client-ip': `10.9.9.${i}` }, 'wrong');
+      const r = await login('198.51.100.66', { 'x-forwarded-for': `10.0.0.${i}`, 'x-desk-client-ip': `10.9.9.${i}` }, 'wrong');
       expect(r.status).toBe(401);
     }
-    expect((await login('1.2.3.4, 198.51.100.66', { 'x-desk-client-ip': '8.8.8.8' })).status).toBe(429);
+    expect((await login('198.51.100.66', { 'x-forwarded-for': '1.2.3.4', 'x-desk-client-ip': '8.8.8.8' })).status).toBe(429);
     // the owner at another address is unaffected
     expect((await login('203.0.113.9')).status).toBe(200);
   }, 30_000);

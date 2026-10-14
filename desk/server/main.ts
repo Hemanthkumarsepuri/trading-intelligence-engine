@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? 8788);
   const server = createServer(createHandler(async () => ctx, {
       requireProxyKey: cfg.production && cfg.ingress === 'edge-proxy',
-      trustPlatformForwardedFor: cfg.ingress === 'railway',
+      platformIpHeader: cfg.ingress === 'railway' ? cfg.clientIpHeader : null,
       webRoot: cfg.webRoot ? path.resolve(process.cwd(), cfg.webRoot) : null,
     }));
   server.requestTimeout = 60_000;

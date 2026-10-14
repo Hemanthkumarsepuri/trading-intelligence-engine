@@ -34,13 +34,15 @@ export interface Config {
   /**
    * Who may tell us the caller's IP.
    *  - 'railway': the app is served directly by Railway (single origin, no proxy credential exists anywhere).
-   *    The IP is the right-most X-Forwarded-For entry, which Railway's edge appends.
+   *    The IP is taken from clientIpHeader (x-real-ip), which Railway's edge sets.
    *  - 'edge-proxy': legacy Netlify proxy that authenticates with proxySecret.
    *  - 'local': development; socket address.
    */
   ingress: 'railway' | 'edge-proxy' | 'local';
   /** Directory of the built frontend (dist) served by this server in 'railway' ingress mode; null = API only. */
   webRoot: string | null;
+  /** Header carrying the caller IP in railway ingress mode (default x-real-ip, set by Railway's edge). */
+  clientIpHeader: string;
   /** Run the in-process scheduler (alerts, digests, backups). Exactly one owner: the Railway service. */
   schedulerEnabled: boolean;
   /** Optional TIRE research engine base URL, probed read-only on the status page. */
@@ -113,6 +115,7 @@ export function loadConfig(env: Env = process.env): Config {
     allowedOrigins: allowed,
     proxySecret: nz(env.DESK_PROXY_SECRET),
     ingress: nz(env.DESK_INGRESS) === 'railway' ? 'railway' : nz(env.DESK_PROXY_SECRET) ? 'edge-proxy' : 'local',
+    clientIpHeader: (nz(env.DESK_CLIENT_IP_HEADER) ?? 'x-real-ip').toLowerCase(),
     webRoot: nz(env.DESK_INGRESS) === 'railway' ? (nz(env.DESK_WEB_ROOT) ?? 'dist') : nz(env.DESK_WEB_ROOT),
     schedulerEnabled: sched ? sched === 'on' : production,
     engineUrl: originOf(nz(env.TIRE_ENGINE_URL)) ?? null,
