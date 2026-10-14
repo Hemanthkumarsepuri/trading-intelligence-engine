@@ -23,7 +23,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +100,20 @@ ok(`archive = git tree: ${gotFiles.length} files, manifest ${manifestHash.slice(
 
 // ---- 3. target ---------------------------------------------------------------------------------------------------------
 const R = target.railway;
-const rw = (a, opts = {}) => sh('railway', a, { cwd: work, ...opts });
+// Node cannot spawn npm's railway.cmd shim without a shell (and a shell would mangle the GraphQL
+// argument), so on Windows resolve the real binary the shim wraps.
+function railwayBin() {
+  if (process.env.RAILWAY_BIN) return process.env.RAILWAY_BIN;
+  if (process.platform !== 'win32') return 'railway';
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    const exe = path.join(dir, 'node_modules', '@railway', 'cli', 'bin', 'railway.exe');
+    if (existsSync(exe)) return exe;
+    if (existsSync(path.join(dir, 'railway.exe'))) return path.join(dir, 'railway.exe');
+  }
+  return 'railway';
+}
+const RAILWAY = railwayBin();
+const rw = (a, opts = {}) => sh(RAILWAY, a, { cwd: work, ...opts });
 const q = JSON.parse(
   rw(['api', `{ project(id:"${R.projectId}") { name services { edges { node { id name } } } volumes { edges { node { name } } } environments { edges { node { id name } } } } }`]),
 ).data?.project;
