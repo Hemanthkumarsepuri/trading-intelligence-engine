@@ -291,3 +291,46 @@ export function analyze(candles: Candle[]): TechSnapshot | null {
     bars: candles.length,
   };
 }
+
+export interface BollingerPoint {
+  mid: number;
+  upper: number;
+  lower: number;
+}
+
+/** Bollinger bands: SMA(period) ± mult × population standard deviation. null until `period` closes exist. */
+export function bollinger(values: number[], period = 20, mult = 2): (BollingerPoint | null)[] {
+  const out: (BollingerPoint | null)[] = new Array(values.length).fill(null);
+  for (let i = period - 1; i < values.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += values[j]!;
+    const mid = sum / period;
+    let sq = 0;
+    for (let j = i - period + 1; j <= i; j++) sq += (values[j]! - mid) ** 2;
+    const sd = Math.sqrt(sq / period);
+    out[i] = { mid, upper: mid + mult * sd, lower: mid - mult * sd };
+  }
+  return out;
+}
+
+export interface MacdPoint {
+  macd: number;
+  signal: number | null;
+  hist: number | null;
+}
+
+/** MACD(fast, slow, signal) on closes. The line exists from `slow` bars on; the signal from `slow + signal - 1`. */
+export function macd(values: number[], fast = 12, slow = 26, signalPeriod = 9): (MacdPoint | null)[] {
+  const f = ema(values, fast);
+  const s = ema(values, slow);
+  const line: (number | null)[] = values.map((_, i) => (f[i] != null && s[i] != null ? f[i]! - s[i]! : null));
+  const first = line.findIndex((x) => x !== null);
+  const out: (MacdPoint | null)[] = new Array(values.length).fill(null);
+  if (first < 0) return out;
+  const sig = ema(line.slice(first) as number[], signalPeriod);
+  for (let i = first; i < values.length; i++) {
+    const sv = sig[i - first] ?? null;
+    out[i] = { macd: line[i]!, signal: sv, hist: sv === null ? null : line[i]! - sv };
+  }
+  return out;
+}

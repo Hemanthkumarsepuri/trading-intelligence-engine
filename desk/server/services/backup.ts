@@ -8,8 +8,9 @@ import { istDateStr } from '../../shared/india';
 import { DEFAULT_SETTINGS, type Alert, type Holding, type Settings, type Trade, type WatchItem } from '../../shared/types';
 import type { Ctx } from '../config';
 import { read, update } from '../kv';
-import { alertInput, backupInput, holdingInput, settingsInput, tradeInput, watchInput } from '../schemas';
-import { KEYS, getSettings, listAlerts, listHoldings, listTrades, listWatchlist } from './userdata';
+import { contractId, parseContractId, type ContractWatch } from '../../shared/contract';
+import { alertInput, backupInput, contractWatchInput, holdingInput, settingsInput, tradeInput, watchInput } from '../schemas';
+import { KEYS, getSettings, listAlerts, listContracts, listHoldings, listTrades, listWatchlist } from './userdata';
 
 export interface BackupFile {
   version: 1;
@@ -20,11 +21,13 @@ export interface BackupFile {
   watchlist: WatchItem[];
   alerts: Alert[];
   settings: Settings;
+  /** tracked option contracts (added with the Options Workbench; older backups omit it) */
+  contracts?: ContractWatch[];
 }
 
 export async function exportAll(ctx: Ctx): Promise<BackupFile> {
-  const [trades, holdings, watchlist, alerts, settings] = await Promise.all([listTrades(ctx), listHoldings(ctx), listWatchlist(ctx), listAlerts(ctx), getSettings(ctx)]);
-  return { version: 1, app: 'tire-desk', exportedAt: ctx.now().toISOString(), trades, holdings, watchlist, alerts, settings };
+  const [trades, holdings, watchlist, alerts, settings, contracts] = await Promise.all([listTrades(ctx), listHoldings(ctx), listWatchlist(ctx), listAlerts(ctx), getSettings(ctx), listContracts(ctx)]);
+  return { version: 1, app: 'tire-desk', exportedAt: ctx.now().toISOString(), trades, holdings, watchlist, alerts, settings, contracts };
 }
 
 export class ImportError extends Error {
@@ -43,6 +46,8 @@ interface Validated {
   watchlist: WatchItem[];
   alerts: Alert[];
   settings: Partial<Settings> | null;
+  /** null = the file predates tracked contracts; leave the current ones alone */
+  contracts: ContractWatch[] | null;
 }
 
 /** Validate a backup file completely without writing anything. Throws ImportError listing problems. */
@@ -77,6 +82,17 @@ export function validateBackup(raw: unknown, nowIso: string): Validated {
     if (!r.success) return void problems.push(`alerts[${i}]: ${r.error.issues[0]?.path.join('.')} ${r.error.issues[0]?.message}`);
     alerts.push({ id: idOf(row), ...r.data, lastTriggeredAt: typeof row.lastTriggeredAt === 'string' ? row.lastTriggeredAt : null, createdAt: strOf(row, 'createdAt', now) });
   });
+  let contracts: ContractWatch[] | null = null;
+  if (b.contracts) {
+    contracts = [];
+    b.contracts.forEach((row, i) => {
+      const r = contractWatchInput.safeParse(row);
+      if (!r.success) return void problems.push(`contracts[${i}]: ${r.error.issues[0]?.message}`);
+      const ref = parseContractId(r.data.id)!;
+      contracts!.push({ id: contractId(ref), ref, note: r.data.note, addedAt: strOf(row, 'addedAt', now) });
+    });
+    if (new Set(contracts.map((c) => c.id)).size !== contracts.length) problems.push('contracts: duplicate ids');
+  }
   const s = settingsInput.safeParse(b.settings);
   if (!s.success) problems.push(`settings: ${s.error.issues[0]?.path.join('.')} ${s.error.issues[0]?.message}`);
 
@@ -88,18 +104,19 @@ export function validateBackup(raw: unknown, nowIso: string): Validated {
   dup(alerts.map((a) => a.id), 'alerts');
   if (new Set(watchlist.map((w) => w.symbol)).size !== watchlist.length) problems.push('watchlist: duplicate symbols');
   if (problems.length > 0) throw new ImportError(problems.slice(0, 12));
-  return { trades, holdings, watchlist, alerts, settings: s.success ? s.data : null };
+  return { trades, holdings, watchlist, alerts, settings: s.success ? s.data : null, contracts };
 }
 
 export async function importAll(ctx: Ctx, raw: unknown): Promise<{ trades: number; holdings: number; watchlist: number; alerts: number; backupKey: string }> {
   const now = ctx.now().toISOString();
-  const { trades, holdings, watchlist, alerts, settings } = validateBackup(raw, now);
+  const { trades, holdings, watchlist, alerts, settings, contracts } = validateBackup(raw, now);
   const backupKey = await snapshot(ctx, `pre-import-${now.replace(/[:.]/g, '-')}`);
 
   await update<Trade[]>(ctx.kv, KEYS.trades, [], () => trades);
   await update<Holding[]>(ctx.kv, KEYS.holdings, [], () => holdings);
   await update<WatchItem[]>(ctx.kv, KEYS.watchlist, [], () => watchlist);
   await update<Alert[]>(ctx.kv, KEYS.alerts, [], () => alerts);
+  if (contracts) await update<ContractWatch[]>(ctx.kv, KEYS.contracts, [], () => contracts);
   if (settings) await update<Partial<Settings>>(ctx.kv, KEYS.settings, {}, () => ({ ...DEFAULT_SETTINGS, ...settings }));
   return { trades: trades.length, holdings: holdings.length, watchlist: watchlist.length, alerts: alerts.length, backupKey };
 }

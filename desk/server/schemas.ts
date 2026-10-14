@@ -2,6 +2,7 @@
 // never have to guess (e.g. a stop loss on the wrong side of entry).
 
 import { z } from 'zod';
+import { parseContractId } from '../shared/contract';
 import { cleanSymbol, isValidSymbol } from '../shared/universe';
 
 const symbol = z
@@ -106,6 +107,12 @@ export const settingsInput = z
   })
   .partial();
 
+/** Tracked option contract: identity is the canonical id; everything else is derived from it. */
+export const contractWatchInput = z.object({
+  id: z.string().max(60).refine((s) => parseContractId(s) !== null, 'Not a valid contract id (UNDERLYING|YYYY-MM-DD|CE|PE|strike)'),
+  note: z.string().max(300).default(''),
+});
+
 export const backupInput = z.object({
   version: z.literal(1),
   confirm: z.literal(true),
@@ -114,6 +121,8 @@ export const backupInput = z.object({
   watchlist: z.array(z.record(z.unknown())).max(500).default([]),
   alerts: z.array(z.record(z.unknown())).max(500).default([]),
   settings: z.record(z.unknown()).default({}),
+  /** absent in files made before the Options Workbench: then tracked contracts are left untouched on import */
+  contracts: z.array(z.record(z.unknown())).max(200).optional(),
 });
 
 export const loginInput = z.object({ password: z.string().min(1).max(256) });

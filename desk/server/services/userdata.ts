@@ -2,11 +2,12 @@
 // is a compare-and-set read-modify-write (see kv.update).
 
 import { randomUUID } from 'node:crypto';
+import { contractId, parseContractId, type ContractWatch } from '../../shared/contract';
 import { DEFAULT_WATCHLIST } from '../../shared/universe';
 import { DEFAULT_SETTINGS, type Alert, type AlertEvent, type Holding, type Settings, type Trade, type WatchItem } from '../../shared/types';
 import type { Ctx } from '../config';
 import { read, update } from '../kv';
-import { alertInput, holdingInput, settingsInput, tradeInput, watchInput } from '../schemas';
+import { alertInput, contractWatchInput, holdingInput, settingsInput, tradeInput, watchInput } from '../schemas';
 import type { z } from 'zod';
 
 export const KEYS = {
@@ -16,6 +17,9 @@ export const KEYS = {
   alerts: 'data/alerts',
   events: 'data/alert-events',
   settings: 'data/settings',
+  contracts: 'data/contracts',
+  wbAlerts: 'data/wb-alerts',
+  wbSeen: 'data/wb-alert-seen',
   riskNotified: 'data/risk-notified',
   digestSent: 'data/digest-sent',
   telegramLog: 'data/telegram-log',
@@ -155,6 +159,34 @@ export async function upsertWatch(ctx: Ctx, input: z.infer<typeof watchInput>): 
 export async function removeWatch(ctx: Ctx, symbol: string): Promise<void> {
   const seed = await listWatchlist(ctx);
   await update<WatchItem[]>(ctx.kv, KEYS.watchlist, seed, (cur) => cur.filter((w) => w.symbol !== symbol));
+}
+
+// ---- Tracked option contracts ---------------------------------------------------------
+
+export const MAX_CONTRACTS = 50;
+
+export async function listContracts(ctx: Ctx): Promise<ContractWatch[]> {
+  return read<ContractWatch[]>(ctx.kv, KEYS.contracts, []);
+}
+
+/** Idempotent: adding a contract that is already tracked returns the existing row and duplicate=true. */
+export async function addContract(ctx: Ctx, input: z.infer<typeof contractWatchInput>): Promise<{ item: ContractWatch; duplicate: boolean }> {
+  const ref = parseContractId(input.id)!;
+  const id = contractId(ref);
+  let out: ContractWatch | null = null;
+  let duplicate = false;
+  await update<ContractWatch[]>(ctx.kv, KEYS.contracts, [], (cur) => {
+    const hit = cur.find((c) => c.id === id);
+    if (hit) { duplicate = true; out = hit; return cur; }
+    if (cur.length >= MAX_CONTRACTS) throw new LimitError(`Tracked-contract limit (${MAX_CONTRACTS}) reached.`);
+    out = { id, ref, note: input.note, addedAt: iso(ctx) };
+    return [...cur, out];
+  });
+  return { item: out!, duplicate };
+}
+
+export async function removeContract(ctx: Ctx, id: string): Promise<void> {
+  await update<ContractWatch[]>(ctx.kv, KEYS.contracts, [], (cur) => cur.filter((c) => c.id !== id));
 }
 
 // ---- Alerts --------------------------------------------------------------------------

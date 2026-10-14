@@ -11,7 +11,16 @@ import { authenticate, checkPassword, clearCookie, clearFailures, clientKey, coo
 import { configProblems, type Ctx } from './config';
 import { ProviderError } from './http';
 import { ConflictError } from './kv';
-import { alertInput, holdingInput, loginInput, settingsInput, tradeInput, watchInput } from './schemas';
+import { alertInput, contractWatchInput, holdingInput, loginInput, settingsInput, tradeInput, watchInput } from './schemas';
+import { parseContractId } from '../shared/contract';
+import { istDateStr } from '../shared/india';
+import type { ScanFilters } from '../shared/scanner';
+import { getMtf, getUnderlyingView } from './services/wb/analysis';
+import { assertListed, contractChart, contractView, explorerView, ExplorerError, searchWorkbench, trackedView } from './services/wb/contracts';
+import { defaultExpiry, loadExpiries, resolveInstrument } from './services/wb/data';
+import { getEvents } from './services/wb/events';
+import { evaluateWbAlerts, getContext, getHealth, listWbAlerts } from './services/wb/misc';
+import { runScan } from './services/wb/scanner';
 import { runAlertsTick, lastTick } from './services/alertsRunner';
 import { offsiteStatus, runOffsiteBackup, verifyLatestOffsite } from './services/offsite';
 import { ImportError, exportAll, importAll, listBackups, restoreBackup, runBackup, verifyBackup } from './services/backup';
@@ -357,6 +366,143 @@ route('POST', '/api/backup/offsite/run', async ({ ctx }) => {
 /** Fetch the newest off-site object, decrypt and validate it. Writes nothing. */
 route('GET', '/api/backup/offsite/verify', async ({ ctx }) => plain(await verifyLatestOffsite(ctx)));
 
+// ---- Options Workbench (read-only research; no order endpoint exists or may be added here) ---------------------------------
+
+const tfParam = z.enum(['1m', '3m', '5m', '15m', '30m', '1h', '1d']);
+const idParam = z.string().max(60);
+
+async function instrumentOr404(ctx: Ctx, raw: string) {
+  const inst = await resolveInstrument(ctx, decodeURIComponent(raw));
+  if (!inst) throw new HttpError(404, 'UNKNOWN_UNDERLYING', 'Unknown underlying symbol.');
+  return inst;
+}
+
+function explorerErr(e: unknown): never {
+  if (e instanceof ExplorerError) throw new HttpError(e.code === 'UNSUPPORTED_CONTRACT' || e.code === 'BAD_EXPIRY' || e.code === 'NO_EXPIRY' ? 422 : e.code === 'BAD_CONTRACT' ? 400 : 404, e.code, e.message);
+  if (e instanceof ProviderError && e.kind === 'NOT_CONFIGURED') throw new HttpError(422, 'UNSUPPORTED_CONTRACT', e.message);
+  throw e;
+}
+
+route('GET', '/api/workbench/search', async ({ ctx, url }) => {
+  const q = (url.searchParams.get('q') ?? '').slice(0, 60);
+  return plain(await searchWorkbench(ctx, q));
+});
+route('GET', '/api/workbench/context', async ({ ctx }) => plain(await getContext(ctx)));
+route('GET', '/api/workbench/health', async ({ ctx }) => plain(await getHealth(ctx)));
+
+route('GET', '/api/workbench/underlying/:id', async ({ ctx, params, url }) => {
+  const inst = await instrumentOr404(ctx, params.id!);
+  const tf = tfParam.parse(url.searchParams.get('tf') ?? '15m');
+  const v = await getUnderlyingView(ctx, inst, tf);
+  return { data: v, meta: { source: v.price.prov?.source ?? 'none', stale: v.freshness === 'STALE', notes: v.notes } };
+});
+route('GET', '/api/workbench/underlying/:id/mtf', async ({ ctx, params }) => plain(await getMtf(ctx, await instrumentOr404(ctx, params.id!))));
+route('GET', '/api/workbench/underlying/:id/expiries', async ({ ctx, params }) => {
+  const inst = await instrumentOr404(ctx, params.id!);
+  try {
+    const ex = await loadExpiries(ctx, inst);
+    const d = defaultExpiry(ex.expiries, istDateStr(ctx.now()));
+    return { data: { instrument: inst, expiries: ex.expiries, lotSize: ex.lotSize ?? inst.lotSize, default: d }, meta: { source: ex.source, stale: ex.stale, notes: [] } };
+  } catch (e) {
+    return explorerErr(e);
+  }
+});
+route('GET', '/api/workbench/chain/:id', async ({ ctx, params, url }) => {
+  const inst = await instrumentOr404(ctx, params.id!);
+  const expiry = url.searchParams.get('expiry');
+  if (expiry && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) throw new HttpError(400, 'BAD_EXPIRY', 'expiry must be YYYY-MM-DD');
+  const each = z.coerce.number().int().min(3).max(40).catch(12).parse(url.searchParams.get('each') ?? 12);
+  try {
+    const v = await explorerView(ctx, inst, expiry, each);
+    return { data: v, meta: { source: v.provenance.source, stale: v.state === 'STALE', notes: v.notes } };
+  } catch (e) {
+    return explorerErr(e);
+  }
+});
+route('GET', '/api/workbench/contract', async ({ ctx, url }) => {
+  const id = idParam.parse(url.searchParams.get('id') ?? '');
+  try {
+    const v = await contractView(ctx, id);
+    return { data: v, meta: { source: v.chain.source, stale: v.chain.stale || v.validation.state === 'STALE', notes: v.notes } };
+  } catch (e) {
+    return explorerErr(e);
+  }
+});
+route('GET', '/api/workbench/contract/chart', async ({ ctx, url }) => {
+  const id = idParam.parse(url.searchParams.get('id') ?? '');
+  const tf = tfParam.parse(url.searchParams.get('tf') ?? '5m');
+  try {
+    return plain(await contractChart(ctx, id, tf));
+  } catch (e) {
+    return explorerErr(e);
+  }
+});
+
+route('GET', '/api/workbench/contracts', async ({ ctx }) => {
+  const t = await trackedView(ctx);
+  return { data: t, meta: { notes: t.notes } };
+});
+route(
+  'POST',
+  '/api/workbench/contracts',
+  async ({ ctx, body }) => {
+    const input = contractWatchInput.parse(await body());
+    try {
+      await assertListed(ctx, parseContractId(input.id)!);
+    } catch (e) {
+      return explorerErr(e);
+    }
+    const r = await U.addContract(ctx, input);
+    return { data: r, status: r.duplicate ? 200 : 201, meta: { notes: r.duplicate ? ['Already tracked; nothing was changed.'] : [] } };
+  },
+  { maxBytes: 2048 },
+);
+route('DELETE', '/api/workbench/contracts', async ({ ctx, url }) => {
+  const id = idParam.parse(url.searchParams.get('id') ?? '');
+  if (!parseContractId(id)) throw new HttpError(400, 'BAD_CONTRACT', 'Not a valid contract id.');
+  await U.removeContract(ctx, id);
+  return plain({ deleted: true });
+});
+
+const bool = z.enum(['1', '0', 'true', 'false']).transform((v) => v === '1' || v === 'true');
+const scanQuery = z.object({
+  segment: z.enum(['ALL', 'STOCK', 'INDEX']).optional(),
+  direction: z.enum(['ANY', 'UP', 'DOWN']).optional(),
+  minLiquidity: z.enum(['ANY', 'MODERATE', 'LIQUID']).optional(),
+  optionType: z.enum(['ANY', 'CE', 'PE']).optional(),
+  trend: z.enum(['ANY', 'UP', 'DOWN']).optional(),
+  expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  minRvol: z.coerce.number().min(0).max(20).optional(),
+  avoidEvents: bool.optional(),
+  requireOptions: bool.optional(),
+  cap: z.coerce.number().int().min(5).max(60).optional(),
+  states: z.string().max(200).optional(),
+});
+const STATE_NAMES = ['NOT_READY', 'APPROACHING_LEVEL', 'POTENTIAL_BREAKOUT', 'CONFIRMATION_PENDING', 'CONFIRMED', 'FAILED', 'INVALIDATED'] as const;
+route('GET', '/api/workbench/scan', async ({ ctx, url }) => {
+  const q = scanQuery.parse(Object.fromEntries(url.searchParams));
+  const { cap, states, minRvol, ...rest } = q;
+  const filters: Partial<ScanFilters> = { ...rest };
+  if (minRvol !== undefined) filters.minRvol = minRvol === 0 ? null : minRvol;
+  if (states) {
+    const list = states.split(',').map((s) => s.trim()).filter((s): s is (typeof STATE_NAMES)[number] => (STATE_NAMES as readonly string[]).includes(s));
+    if (list.length === 0) throw new HttpError(400, 'VALIDATION', 'states: none of the names are recognised');
+    filters.states = list;
+  }
+  const r = await runScan(ctx, filters, cap ?? 40);
+  return { data: r, meta: { source: 'scanner', stale: false, notes: r.notes } };
+});
+
+route('GET', '/api/workbench/events', async ({ ctx, url }) => {
+  const symbols = (url.searchParams.get('symbols') ?? '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
+  for (const s of symbols) if (!isValidSymbol(s)) throw new HttpError(400, 'BAD_SYMBOL', `Invalid symbol: ${s.slice(0, 24)}`);
+  const v = await getEvents(ctx, symbols);
+  return { data: v, meta: { notes: v.notes } };
+});
+
+route('GET', '/api/workbench/alerts', async ({ ctx }) => plain({ alerts: await listWbAlerts(ctx) }));
+route('POST', '/api/workbench/alerts/evaluate', async ({ ctx }) => plain(await evaluateWbAlerts(ctx)), { maxBytes: 1024 });
+
 // ---- Dispatcher ---------------------------------------------------------------------------------------------
 
 const BASE_HEADERS = {
@@ -406,8 +552,15 @@ function checkOrigin(req: Request, url: URL, ctx: Ctx): void {
   if (site && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'BAD_ORIGIN', 'Cross-site request refused.');
 }
 
-export async function handle(req: Request, ctx: Ctx): Promise<Response> {
+export async function handle(req: Request, ctxIn: Ctx): Promise<Response> {
   const url = new URL(req.url);
+  // DESK_OFFLINE demo only (production refuses offline mode): a header may freeze the clock so browser tests are deterministic.
+  let ctx = ctxIn;
+  const demoNow = ctxIn.cfg.offline ? req.headers.get('x-desk-demo-now') : null;
+  if (demoNow && !Number.isNaN(Date.parse(demoNow))) {
+    const frozen = new Date(demoNow);
+    ctx = { ...ctxIn, now: () => new Date(frozen.getTime()) };
+  }
   const method = req.method.toUpperCase();
   try {
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...BASE_HEADERS, Allow: 'GET, POST, PUT, DELETE' } });

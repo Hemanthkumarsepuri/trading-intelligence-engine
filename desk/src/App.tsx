@@ -16,17 +16,42 @@ import { Alerts } from './pages/Alerts';
 import { Journal } from './pages/Journal';
 import { Portfolio } from './pages/Portfolio';
 import { Settings } from './pages/Settings';
+import { Workbench } from './pages/Workbench';
+import { Scanner } from './pages/Scanner';
+import { Explorer } from './pages/Explorer';
+import { Events } from './pages/Events';
+import { DataHealth } from './pages/DataHealth';
+import { More } from './pages/More';
 
 const NAV = [
   { to: '/', label: 'Today', icon: 'home' },
   { to: '/market', label: 'Market', icon: 'market' },
-  { to: '/options', label: 'Options', icon: 'options' },
+  { to: '/workbench', label: 'Workbench', icon: 'options' },
+  { to: '/scanner', label: 'Scanner', icon: 'scan' },
   { to: '/watchlist', label: 'Watchlist', icon: 'watch' },
+  { to: '/explorer', label: 'Contracts', icon: 'chain' },
+  { to: '/events', label: 'Events', icon: 'news' },
+  { to: '/data-health', label: 'Data health', icon: 'pulse' },
+  { to: '/options', label: 'Index chain', icon: 'options' },
   { to: '/alerts', label: 'Alerts', icon: 'bell' },
   { to: '/journal', label: 'Journal', icon: 'journal' },
   { to: '/portfolio', label: 'Portfolio', icon: 'pie' },
   { to: '/settings', label: 'Settings', icon: 'gear' },
 ] as const;
+
+/** Phone bottom bar: eight slots fit at 320px; everything else is reached through More. */
+const MOBILE_NAV = [
+  { to: '/', label: 'Today', icon: 'home' },
+  { to: '/market', label: 'Market', icon: 'market' },
+  { to: '/workbench', label: 'Workbench', icon: 'options' },
+  { to: '/scanner', label: 'Scanner', icon: 'scan' },
+  { to: '/watchlist', label: 'Watchlist', icon: 'watch' },
+  { to: '/alerts', label: 'Alerts', icon: 'bell' },
+  { to: '/journal', label: 'Journal', icon: 'journal' },
+  { to: '/more', label: 'More', icon: 'gear' },
+] as const;
+
+const MORE_PATHS = ['/more', '/explorer', '/events', '/data-health', '/options', '/portfolio', '/settings'];
 
 function Clock() {
   const [now, setNow] = useState(() => new Date());
@@ -58,6 +83,7 @@ function Shell({ demo }: { demo: boolean }) {
   const toast = useToast();
   const [theme, toggleTheme] = useTheme();
   const active = (to: string) => (to === '/' ? loc.path === '/' : loc.path === to || loc.path.startsWith(`${to}/`));
+  const tabActive = (to: string) => (to === '/more' ? MORE_PATHS.includes(loc.path) : active(to));
 
   const logout = async () => {
     try {
@@ -74,6 +100,12 @@ function Shell({ demo }: { demo: boolean }) {
   if (loc.path === '/') page = <Dashboard />;
   else if (loc.path === '/market') page = <Market />;
   else if (loc.path === '/options') page = <Options />;
+  else if (loc.path === '/workbench') page = <Workbench />;
+  else if (loc.path === '/scanner') page = <Scanner />;
+  else if (loc.path === '/explorer') page = <Explorer />;
+  else if (loc.path === '/events') page = <Events />;
+  else if (loc.path === '/data-health') page = <DataHealth />;
+  else if (loc.path === '/more') page = <More />;
   else if (loc.path === '/watchlist') page = <Watchlist />;
   else if (loc.path.startsWith('/symbol/')) page = <SymbolPage symbol={decodeURIComponent(loc.path.slice('/symbol/'.length))} />;
   else if (loc.path === '/alerts') page = <Alerts />;
@@ -123,8 +155,8 @@ function Shell({ demo }: { demo: boolean }) {
         <main>{page}</main>
       </div>
       <nav className="tabbar" aria-label="Main">
-        {NAV.map((n) => (
-          <a key={n.to} href={`#${n.to}`} className={active(n.to) ? 'active' : ''} aria-current={active(n.to) ? 'page' : undefined}>
+        {MOBILE_NAV.map((n) => (
+          <a key={n.to} href={`#${n.to}`} className={tabActive(n.to) ? 'active' : ''} aria-current={tabActive(n.to) ? 'page' : undefined}>
             <Icon name={n.icon} />
             <span>{n.label}</span>
           </a>

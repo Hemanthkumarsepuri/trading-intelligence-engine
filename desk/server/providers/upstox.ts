@@ -118,8 +118,9 @@ export async function upstoxOptionContracts(token: string, underlyingKey: string
 }
 
 interface ChainSide {
-  market_data?: { ltp?: number; volume?: number; oi?: number; prev_oi?: number; bid_price?: number; ask_price?: number };
-  option_greeks?: { iv?: number };
+  instrument_key?: string;
+  market_data?: { ltp?: number; volume?: number; oi?: number; prev_oi?: number; bid_price?: number; ask_price?: number; bid_qty?: number; ask_qty?: number };
+  option_greeks?: { iv?: number; delta?: number; gamma?: number; theta?: number; vega?: number };
 }
 
 const leg = (s: ChainSide | undefined): OptionLeg => ({
@@ -130,6 +131,13 @@ const leg = (s: ChainSide | undefined): OptionLeg => ({
   iv: num(s?.option_greeks?.iv),
   bid: num(s?.market_data?.bid_price),
   ask: num(s?.market_data?.ask_price),
+  bidQty: num(s?.market_data?.bid_qty),
+  askQty: num(s?.market_data?.ask_qty),
+  delta: num(s?.option_greeks?.delta),
+  gamma: num(s?.option_greeks?.gamma),
+  theta: num(s?.option_greeks?.theta),
+  vega: num(s?.option_greeks?.vega),
+  instrumentKey: typeof s?.instrument_key === 'string' ? s.instrument_key : null,
 });
 
 export function parseUpstoxChain(body: { status?: string; data?: { strike_price?: number; underlying_spot_price?: number; call_options?: ChainSide; put_options?: ChainSide }[] }, underlying: string, expiry: string, fetchedAt: string): NormalizedChain {
@@ -189,4 +197,12 @@ export async function upstoxIpos(token: string, status: 'open' | 'upcoming' | 'c
       subscription: typeof r.total_subscription === 'string' ? r.total_subscription : null,
     };
   });
+}
+
+/** Intraday candles of one instrument (used for option contracts). Needs the Analytics token; not verified live in this repo. */
+export async function upstoxIntradayMinutes(token: string, key: string, minutes: 1 | 3 | 5 | 15 | 30 | 60, opts: FetchOpts = {}): Promise<Candle[]> {
+  const url = `${BASE}/v3/historical-candle/intraday/${encodeURIComponent(key)}/minutes/${minutes}`;
+  const body = await fetchJson<{ status?: string; data?: { candles?: unknown } }>(url, { headers: auth(token), timeoutMs: 9000, ...opts });
+  if (body.status !== 'success') throw new ProviderError('MALFORMED', 'Upstox intraday candles: non-success');
+  return parseUpstoxCandles(body.data?.candles);
 }

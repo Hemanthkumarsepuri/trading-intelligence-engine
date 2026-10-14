@@ -9,6 +9,16 @@ export interface OptionLeg {
   iv: number | null;
   bid: number | null;
   ask: number | null;
+  /** best bid/ask quantity in UNITS (shares), as the exchange publishes it; divide by lot size for lots */
+  bidQty?: number | null;
+  askQty?: number | null;
+  /** provider-supplied Greeks (never calculated here) */
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  /** provider's own contract identifier / instrument key, used to fetch contract candles */
+  instrumentKey?: string | null;
 }
 
 export interface ChainRow {
@@ -24,6 +34,8 @@ export interface NormalizedChain {
   rows: ChainRow[];
   source: 'upstox' | 'nse' | 'fixture';
   fetchedAt: string;
+  /** the provider's own snapshot time (ISO UTC) when it states one; null when it does not */
+  asOf?: string | null;
 }
 
 export interface StrikeLevel {

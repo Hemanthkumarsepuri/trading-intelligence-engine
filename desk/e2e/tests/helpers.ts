@@ -17,6 +17,16 @@ export const ROUTES = [
   { path: '/settings', title: 'Settings' },
 ] as const;
 
+/** Options Workbench screens (added after the original eight). */
+export const WORKBENCH_ROUTES = [
+  { path: '/workbench', title: 'Options Workbench' },
+  { path: '/scanner', title: 'Market scanner' },
+  { path: '/explorer', title: 'Contract Explorer' },
+  { path: '/events', title: 'News and Events' },
+  { path: '/data-health', title: 'Data Health' },
+  { path: '/more', title: 'More' },
+] as const;
+
 /** Collects console errors, page errors and failed first-party requests for one page. */
 export function watch(page: Page) {
   const problems: string[] = [];

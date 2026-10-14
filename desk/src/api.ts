@@ -15,7 +15,7 @@ export interface Resp<T> {
 
 export const UNAUTH_EVENT = 'desk:unauthenticated';
 
-export async function request<T>(method: string, path: string, body?: unknown): Promise<Resp<T>> {
+export async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Resp<T>> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -23,8 +23,10 @@ export async function request<T>(method: string, path: string, body?: unknown): 
       credentials: 'same-origin',
       headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
-  } catch {
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e; // a superseded request, not a network failure
     throw new ApiError(0, 'NETWORK', 'Cannot reach the server. Check your connection.');
   }
   let json: ApiResult<T> | null = null;
@@ -39,10 +41,14 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   return { data: json.data, meta: json.meta };
 }
 
-export function useGet<T>(path: string | null, opts: { poll?: number | false; enabled?: boolean } = {}) {
+/**
+ * `cancel: true` aborts the HTTP request when the query is superseded or unmounted (used by type-ahead search, so a slow
+ * answer to an old keystroke is dropped at the network level). Other queries are left to finish, as before.
+ */
+export function useGet<T>(path: string | null, opts: { poll?: number | false; enabled?: boolean; cancel?: boolean } = {}) {
   return useQuery<Resp<T>, ApiError>({
     queryKey: ['api', path],
-    queryFn: () => request<T>('GET', path!),
+    queryFn: ({ signal }) => request<T>('GET', path!, undefined, opts.cancel ? signal : undefined),
     enabled: path !== null && opts.enabled !== false,
     refetchInterval: opts.poll || false,
     refetchIntervalInBackground: false,

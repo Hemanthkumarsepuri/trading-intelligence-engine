@@ -233,6 +233,9 @@ input[type='checkbox'] { width: 16px; min-height: 16px; height: 16px; accent-col
 .news li:last-child { border-bottom: 0; }
 .news ul { margin: 0; padding: 0; }
 
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.side .nav a { padding-top: 8px; padding-bottom: 8px; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1000px) {
   .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }

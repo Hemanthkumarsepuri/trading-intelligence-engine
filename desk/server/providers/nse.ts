@@ -3,6 +3,7 @@
 // datacenter IPs, so every use has a fallback and a visible failure state).
 
 import { previousTradingDay, istDateStr } from '../../shared/india';
+import { parseNseTimestamp } from '../../shared/quality';
 import type { ChainRow, NormalizedChain, OptionLeg } from '../../shared/optionchain';
 import { fetchText, fetchJson, ProviderError, BROWSER_UA, type FetchOpts } from '../http';
 
@@ -374,11 +375,11 @@ export async function fetchBreadth(opts: FetchOpts = {}): Promise<Breadth> {
 // ---- NSE option chain (best-effort fallback when no Upstox token) -------------------
 
 // v3 legs carry bid/ask as buyPrice1/sellPrice1; the retired endpoint used bidprice/askPrice.
-interface NseLeg { openInterest?: number; changeinOpenInterest?: number; totalTradedVolume?: number; impliedVolatility?: number; lastPrice?: number; bidprice?: number; askPrice?: number; buyPrice1?: number; sellPrice1?: number; underlyingValue?: number }
+interface NseLeg { identifier?: string; buyQuantity1?: number; sellQuantity1?: number; openInterest?: number; changeinOpenInterest?: number; totalTradedVolume?: number; impliedVolatility?: number; lastPrice?: number; bidprice?: number; askPrice?: number; buyPrice1?: number; sellPrice1?: number; underlyingValue?: number }
 
 export function parseNseChain(
   // v3 rows name the row expiry `expiryDates` (a single DD-Mon-YYYY string); the retired endpoint used `expiryDate`.
-  body: { records?: { expiryDates?: string[]; data?: { strikePrice?: number; expiryDate?: string; expiryDates?: string; CE?: NseLeg; PE?: NseLeg }[]; underlyingValue?: number } },
+  body: { records?: { expiryDates?: string[]; data?: { strikePrice?: number; expiryDate?: string; expiryDates?: string; CE?: NseLeg; PE?: NseLeg }[]; underlyingValue?: number; timestamp?: string } },
   underlying: string,
   expiryIso: string,
   fetchedAt: string,
@@ -396,6 +397,10 @@ export function parseNseChain(
     iv: n(l?.impliedVolatility) && (l!.impliedVolatility as number) > 0 ? (l!.impliedVolatility as number) : null,
     bid: n(l?.buyPrice1) ?? n(l?.bidprice),
     ask: n(l?.sellPrice1) ?? n(l?.askPrice),
+    // extra fields appear only when NSE supplied them, so a leg without them keeps its original shape
+    ...(n(l?.buyQuantity1) !== null ? { bidQty: n(l?.buyQuantity1) } : {}),
+    ...(n(l?.sellQuantity1) !== null ? { askQty: n(l?.sellQuantity1) } : {}),
+    ...(typeof l?.identifier === 'string' ? { instrumentKey: l.identifier } : {}),
   });
   const rows: ChainRow[] = [];
   for (const r of rec.data) {
@@ -403,7 +408,7 @@ export function parseNseChain(
     rows.push({ strike: r.strikePrice as number, ce: leg(r.CE), pe: leg(r.PE) });
   }
   if (rows.length === 0) throw new ProviderError('MALFORMED', `NSE option chain: no rows for expiry ${expiryIso}`);
-  return { underlying, expiry: expiryIso, spot: n(rec.underlyingValue), rows: rows.sort((a, b) => a.strike - b.strike), source: 'nse', fetchedAt };
+  return { underlying, expiry: expiryIso, spot: n(rec.underlyingValue), rows: rows.sort((a, b) => a.strike - b.strike), source: 'nse', fetchedAt, asOf: parseNseTimestamp(rec.timestamp) };
 }
 
 /** Expiries from `/api/option-chain-contract-info` (top-level `expiryDates`) or a chain body (`records.expiryDates`). */
@@ -430,6 +435,22 @@ export async function fetchNseExpiriesRaw(nseSymbol: string, opts: FetchOpts = {
   return nseApi<Parameters<typeof nseExpiries>[0]>(`/api/option-chain-contract-info?symbol=${encodeURIComponent(nseSymbol)}`, opts);
 }
 
-export async function fetchNseChainRaw(nseSymbol: string, expiryIso: string, opts: FetchOpts = {}) {
-  return nseApi<Parameters<typeof parseNseChain>[0]>(`/api/option-chain-v3?type=Indices&symbol=${encodeURIComponent(nseSymbol)}&expiry=${encodeURIComponent(nseExpiryParam(expiryIso))}`, opts);
+export async function fetchNseChainRaw(nseSymbol: string, expiryIso: string, opts: FetchOpts = {}, type: 'Indices' | 'Equity' = 'Indices') {
+  return nseApi<Parameters<typeof parseNseChain>[0]>(`/api/option-chain-v3?type=${type}&symbol=${encodeURIComponent(nseSymbol)}&expiry=${encodeURIComponent(nseExpiryParam(expiryIso))}`, opts);
+}
+
+// ---- Corporate announcements and event calendar (Options Workbench) --------------------------------
+
+/** Exchange filings for one symbol, newest first as NSE returns them. Parsed/validated by shared/events. */
+export async function fetchNseAnnouncements(symbol: string, opts: FetchOpts = {}): Promise<unknown[]> {
+  const body = await nseApi<unknown>(`/api/corporate-announcements?index=equities&symbol=${encodeURIComponent(symbol)}`, opts);
+  if (!Array.isArray(body)) throw new ProviderError('MALFORMED', 'NSE announcements: expected an array');
+  return body;
+}
+
+/** Board meetings / results dates / corporate actions scheduled or recorded for one symbol. */
+export async function fetchNseEventCalendar(symbol: string, opts: FetchOpts = {}): Promise<unknown[]> {
+  const body = await nseApi<unknown>(`/api/event-calendar?symbol=${encodeURIComponent(symbol)}`, opts);
+  if (!Array.isArray(body)) throw new ProviderError('MALFORMED', 'NSE event calendar: expected an array');
+  return body;
 }

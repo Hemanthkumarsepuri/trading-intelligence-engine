@@ -24,6 +24,10 @@ const P: Record<string, string> = {
   logout: 'M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 16l-4-4 4-4M6 12h10',
   x: 'M6 6l12 12M18 6 6 18',
   info: 'M12 8h.01M11 12h1v5h1m-1 5a10 10 0 1 1 0-20 10 10 0 0 1 0 20z',
+  scan: 'M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M4 12h16',
+  chain: 'M4 5h16M4 10h16M4 15h16M4 20h16M9 3v18M15 3v18',
+  news: 'M4 5h13v14a1 1 0 0 0 1 1H6a2 2 0 0 1-2-2V5zm13 3h3v9a2 2 0 0 1-2 2M7 9h7M7 13h7M7 17h4',
+  pulse: 'M3 12h4l3-7 4 14 3-7h4',
 };
 
 export function Icon({ name }: { name: keyof typeof P | string }) {

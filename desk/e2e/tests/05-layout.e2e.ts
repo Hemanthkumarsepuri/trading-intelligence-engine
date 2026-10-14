@@ -1,6 +1,6 @@
 // Layout regressions at phone widths, plus the session pill.
 import { expect, test } from '@playwright/test';
-import { ROUTES, horizontalOverflow, settled, signedIn } from './helpers';
+import { ROUTES, WORKBENCH_ROUTES, horizontalOverflow, settled, signedIn } from './helpers';
 
 for (const width of [320, 360, 390]) {
   test(`every bottom-tab is fully on screen at ${width}px, and no page scrolls sideways`, async ({ page }) => {
@@ -15,10 +15,12 @@ for (const width of [320, 360, 390]) {
     }
     const bar = await page.locator('nav.tabbar').evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(bar).toBeLessThanOrEqual(0);
-    // the last tab is reachable and works
+    // the last tab (More) is reachable and leads to the screens that do not fit in the bar, Settings included
     await tabs.last().click();
+    await expect(page.locator('h1')).toHaveText('More');
+    await page.getByRole('link', { name: /Settings/ }).first().click();
     await expect(page.locator('h1')).toHaveText('Settings');
-    for (const r of ROUTES) {
+    for (const r of [...ROUTES, ...WORKBENCH_ROUTES]) {
       await page.goto(`/#${r.path}`);
       await settled(page);
       expect(await horizontalOverflow(page), r.path).toBeLessThanOrEqual(0);
