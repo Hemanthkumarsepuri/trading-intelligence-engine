@@ -5,17 +5,18 @@ import type { WbAlert } from '../../shared/wbalerts';
 import { useGet, useSend } from '../api';
 import { Async, Badge, Card, Empty, errMsg, PageHead, Skeleton, useToast } from '../ui';
 import { STATE_HELP, StateBadge } from '../wb/common';
+import { RulesManager } from '../wb/Rules';
 import type { DataState } from '../../shared/quality';
 
 function Alerts() {
   const toast = useToast();
   const q = useGet<{ alerts: WbAlert[] }>('/api/workbench/alerts');
-  const run = useSend<Record<string, never>, { created: WbAlert[]; evaluated: { underlyings: number; contracts: number }; skipped: string[] }>('POST', '/api/workbench/alerts/evaluate', ['/api/workbench/alerts']);
+  const run = useSend<Record<string, never>, { created: WbAlert[]; evaluated: { underlyings: number; contracts: number; rules: number }; skipped: string[]; withheld: { ruleId: string; contractId: string; reason: string }[] }>('POST', '/api/workbench/alerts/evaluate', ['/api/workbench/alerts']);
   const [last, setLast] = useState<string | null>(null);
   return (
     <Card
       title="Workbench alerts"
-      right={<button className="btn sm" disabled={run.isPending} onClick={() => run.mutate({}, { onSuccess: (r) => { setLast(`${r.data.created.length} new from ${r.data.evaluated.underlyings} underlying(s) and ${r.data.evaluated.contracts} contract(s)${r.data.skipped.length ? `; skipped: ${r.data.skipped.join('; ')}` : ''}`); toast('Alerts evaluated'); }, onError: (e) => toast(errMsg(e), true) })}>{run.isPending ? 'Evaluating…' : 'Evaluate now'}</button>}
+      right={<button className="btn sm" disabled={run.isPending} onClick={() => run.mutate({}, { onSuccess: (r) => { setLast(`${r.data.created.length} new from ${r.data.evaluated.underlyings} underlying(s), ${r.data.evaluated.contracts} contract(s) and ${r.data.evaluated.rules} rule(s)${r.data.skipped.length ? `; skipped: ${r.data.skipped.join('; ')}` : ''}${r.data.withheld.length ? `; rules not evaluated: ${r.data.withheld.map((w) => w.reason).join(' | ')}` : ''}`); toast('Alerts evaluated'); }, onError: (e) => toast(errMsg(e), true) })}>{run.isPending ? 'Evaluating…' : 'Evaluate now'}</button>}
     >
       <p className="small muted">In-app only. These alerts are never sent to Telegram or anywhere else, and none is raised from stale or conflicting data. Each repeats at most once per six hours.</p>
       {last && <div className="small" role="status">{last}</div>}
@@ -25,7 +26,7 @@ function Alerts() {
             {d.alerts.slice(0, 20).map((a) => (
               <li key={a.key}>
                 <Badge kind={a.kindClass === 'DATA_HEALTH' ? 'warn' : 'info'}>{a.kind.replace(/_/g, ' ').toLowerCase()}</Badge> <strong>{a.message}</strong>
-                <div className="muted">Data time {a.sourceAsOf ? `${fmtIst(a.sourceAsOf)} IST` : 'unknown'}{a.tf ? ` · ${a.tf}` : ''}{a.contractId ? ` · ${a.contractId}` : ''} · raised {fmtIst(a.createdAt)} IST</div>
+                <div className="muted">Data time {a.sourceAsOf ? `${fmtIst(a.sourceAsOf)}` : 'unknown'}{a.tf ? ` · ${a.tf}` : ''}{a.contractId ? ` · ${a.contractId}` : ''} · raised {fmtIst(a.createdAt)}</div>
                 {a.evidence.length > 0 && <div className="muted">Evidence: {a.evidence.slice(0, 3).join(' | ')}</div>}
                 {a.invalidation && <div className="muted">Invalidation: {a.invalidation}</div>}
               </li>
@@ -54,8 +55,8 @@ export function DataHealth() {
                       <tr key={p.id}>
                         <td>{p.label}</td>
                         <td>{!p.configured ? <Badge>not configured</Badge> : p.lastOkAt === null && p.lastErrorAt === null ? <Badge>not used yet</Badge> : p.lastErrorAt && (!p.lastOkAt || p.lastErrorAt > p.lastOkAt) ? <Badge kind="neg">failing</Badge> : <Badge kind="pos">ok</Badge>}</td>
-                        <td className="small">{p.lastOkAt ? `${fmtIst(p.lastOkAt)} IST` : '-'}</td>
-                        <td className="small">{p.lastErrorAt ? `${fmtIst(p.lastErrorAt)} IST: ${p.lastError}` : '-'}</td>
+                        <td className="small">{p.lastOkAt ? `${fmtIst(p.lastOkAt)}` : '-'}</td>
+                        <td className="small">{p.lastErrorAt ? `${fmtIst(p.lastErrorAt)}: ${p.lastError}` : '-'}</td>
                         <td className="num">{p.ok} / {p.failed}</td>
                         <td className="num">{p.lastLatencyMs !== null ? `${p.lastLatencyMs} ms` : '-'}</td>
                       </tr>
@@ -92,6 +93,7 @@ export function DataHealth() {
               <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{h.limitations.map((e) => <li key={e}>{e}</li>)}</ul>
             </Card>
             <Alerts />
+            <Card title="Your alert rules"><RulesManager label="All contract rules" /></Card>
           </>
         )}
       </Async>

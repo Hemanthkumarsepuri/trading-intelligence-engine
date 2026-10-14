@@ -1,6 +1,7 @@
 import { Card, Icon, PageHead } from '../ui';
 
 const ITEMS = [
+  { to: '/compare', label: 'Compare contracts', icon: 'chain', text: 'Up to four exact contracts side by side with source, freshness and quality per column.' },
   { to: '/explorer', label: 'Contract Explorer', icon: 'chain', text: 'Every strike for an underlying and expiry, with the quality of each quote.' },
   { to: '/events', label: 'News and Events', icon: 'news', text: 'Exchange filings, results dates and public headlines with publisher and original time.' },
   { to: '/data-health', label: 'Data Health', icon: 'pulse', text: 'Provider status, freshness limits, entitlements and workbench alerts.' },

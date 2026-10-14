@@ -48,7 +48,7 @@ export function Events() {
             <Card title="Sources">
               <ul className="stack small" style={{ listStyle: 'none', margin: 0, padding: 0 }} data-testid="event-sources">
                 {d.sources.map((s) => (
-                  <li key={s.id}><Badge kind={SRC_BADGE[s.state]}>{s.state}</Badge> <strong>{s.label}</strong> <span className="muted">{s.detail}{s.retrievedAt ? ` Retrieved ${fmtIst(s.retrievedAt)} IST.` : ''}</span></li>
+                  <li key={s.id}><Badge kind={SRC_BADGE[s.state]}>{s.state}</Badge> <strong>{s.label}</strong> <span className="muted">{s.detail}{s.retrievedAt ? ` Retrieved ${fmtIst(s.retrievedAt)}.` : ''}</span></li>
                 ))}
               </ul>
             </Card>
@@ -72,7 +72,7 @@ export function Events() {
                             {e.link ? <a href={e.link} target="_blank" rel="noreferrer noopener">{e.headline}</a> : e.headline}
                             <Disclosure summary={<span className="small muted">details</span>}>
                               <div className="small">
-                                <div>Type {e.type.replace('_', ' ').toLowerCase()} · retrieved {fmtIst(e.retrievedAt)} IST · source zone {e.sourceZone}{e.timestampReliable ? '' : ' · time not reliable enough to place on a chart'}</div>
+                                <div>Type {e.type.replace('_', ' ').toLowerCase()} · retrieved {fmtIst(e.retrievedAt)} · source zone {e.sourceZone}{e.timestampReliable ? '' : ' · time not reliable enough to place on a chart'}</div>
                                 {e.limitation && <div className="muted">{e.limitation}</div>}
                               </div>
                             </Disclosure>

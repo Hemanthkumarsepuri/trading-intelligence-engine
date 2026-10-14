@@ -45,8 +45,8 @@ export function StateBadge({ state, label }: { state: DataState; label?: string 
 
 export function provText(p: Provenance | null | undefined): string {
   if (!p) return 'No source';
-  const when = p.asOf ? `provider time ${fmtIst(p.asOf)} IST` : 'provider gave no timestamp';
-  return `${p.source} · ${when} · fetched ${fmtIst(p.fetchedAt)} IST · ${p.latency.toLowerCase()}${p.note ? ` · ${p.note}` : ''}`;
+  const when = p.asOf ? `provider time ${fmtIst(p.asOf)}` : 'provider gave no timestamp';
+  return `${p.source} · ${when} · fetched ${fmtIst(p.fetchedAt)} · ${p.latency.toLowerCase()}${p.note ? ` · ${p.note}` : ''}`;
 }
 
 /** A provider value with its state; unknown values show a dash and the reason on hover, never 0. */

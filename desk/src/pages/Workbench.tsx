@@ -1,4 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { GroupView } from '../../server/services/wb/groupview';
+import { computeLevels } from '../../shared/levels';
 import type { UnderlyingView, MtfRow } from '../../server/services/wb/analysis';
 import type { ContractView, ContractChart, ExplorerView, SearchResult } from '../../server/services/wb/contracts';
 import type { ContextView } from '../../server/services/wb/misc';
@@ -11,6 +13,9 @@ import { useGet, useSend, ApiError } from '../api';
 import { setQuery, useLoc } from '../nav';
 import { Async, Badge, Card, Empty, errMsg, Icon, PageHead, Segmented, Skeleton, Spinner, useToast } from '../ui';
 import { Disclosure, Evidence, Lifecycle, NOT_ADVICE, Prov, StateBadge, Sv, openWorkbench, useDebounced } from '../wb/common';
+import { AddContractDialog } from '../wb/AddContract';
+import { useWb } from '../wb/Groups';
+import { RulesManager } from '../wb/Rules';
 import { LEVEL_GROUP_LABEL, ObservedChart, WbChart, type LevelGroup, type Overlays, type Panes } from '../wb/WbChart';
 
 // ---- persisted chart preferences (per browser; never needed for correctness) ---------------------------------------------------------------
@@ -301,7 +306,7 @@ function BreakoutCard({ v }: { v: UnderlyingView }) {
             <Row k="Distance to level">{s.distance !== null ? `${fmtNum(Math.abs(s.distance))} (${fmtNum(Math.abs(s.distanceAtr ?? 0))}×ATR)` : '-'}</Row>
             <Row k="ATR (14)">{s.atr !== null ? fmtNum(s.atr) : '-'}</Row>
             <Row k="Completed closes beyond">{s.closesBeyond}</Row>
-            <Row k="Observed through">{s.observedThrough ? `${fmtIst(new Date(s.observedThrough * 1000).toISOString())} IST` : '-'}</Row>
+            <Row k="Observed through">{s.observedThrough ? `${fmtIst(new Date(s.observedThrough * 1000).toISOString())}` : '-'}</Row>
           </dl>
           <div className="small"><strong>Confirmation:</strong> {s.confirmation}</div>
           <div className="small"><strong>Invalidation:</strong> {s.invalidation}</div>
@@ -444,7 +449,7 @@ function ContractBuilder({ u, selected, onSelect, isFno }: { u: string; selected
         {chain.isPending && chosenExpiry && <Skeleton h={80} />}
         {chain.data && (
           <>
-            <div className="small muted">Spot {chain.data.data.spot.value !== null ? fmtNum(chain.data.data.spot.value) : 'unknown'} · lot size {chain.data.data.lotSize.value ?? 'unknown'} · {rows.length} of {chain.data.data.totalStrikes} strikes around the money · {chain.data.data.provenance.source}, {chain.data.data.provenance.asOf ? `${fmtIst(chain.data.data.provenance.asOf)} IST` : 'no provider time'}</div>
+            <div className="small muted">Spot {chain.data.data.spot.value !== null ? fmtNum(chain.data.data.spot.value) : 'unknown'} · lot size {chain.data.data.lotSize.value ?? 'unknown'} · {rows.length} of {chain.data.data.totalStrikes} strikes around the money · {chain.data.data.provenance.source}, {chain.data.data.provenance.asOf ? `${fmtIst(chain.data.data.provenance.asOf)}` : 'no provider time'}</div>
             <div className="row">
               <label className="small muted" htmlFor="wb-strike">Strike</label>
               <select id="wb-strike" style={{ width: 'auto', minWidth: 220 }} value={selRef[3] && selRef[2] === type && selRef[1] === chosenExpiry ? selRef[3] : ''} onChange={(e) => onSelect(e.target.value ? idFor(Number(e.target.value)) : null)}>
@@ -530,24 +535,24 @@ function ContractPanel({ id, underlying }: { id: string; underlying: UnderlyingV
   );
 }
 
-function OptionChartPanel({ id, tf, syncKey }: { id: string; tf: Timeframe; syncKey: string }) {
+function OptionChartPanel({ id, tf, syncKey, prefs }: { id: string; tf: Timeframe; syncKey: string; prefs: Prefs }) {
   const q = useGet<ContractChart>(`/api/workbench/contract/chart?id=${encodeURIComponent(id)}&tf=${tf}`, { poll: 45_000 });
   return (
     <Async q={q} skeleton={<Skeleton h={220} />}>
       {(c) => (
         <div data-testid="option-chart-panel">
           <div className="row between" style={{ marginBottom: 6 }}>
-            <strong className="small">Option premium · {TF_LABEL[tf]}</strong>
+            <strong className="small">Option premium behaviour · {TF_LABEL[tf]}</strong>
             <StateBadge state={c.state} label={c.kind === 'CANDLES' ? 'CANDLES' : c.kind === 'OBSERVED' ? 'SNAPSHOTS' : undefined} />
           </div>
           {c.kind === 'CANDLES' && c.candles.length > 0 ? (
-            <WbChart candles={c.candles} tf={tf} overlays={{ vwap: false, ema20: false, ema50: false, bb: false }} panes={{ rsi: false, macd: false, atr: false }} levels={[]} levelGroups={{ swing: false, session: false, opening: false, rolling: false }} setup={null} showSetup={false} events={[]} showEvents={false} atr={null} syncKey={syncKey} height={220} label={`Option candlestick chart, ${tf}`} />
+            <WbChart candles={c.candles} tf={tf} overlays={prefs.overlays} panes={prefs.panes} levels={computeLevels(c.candles, tf)} levelGroups={prefs.levelGroups} setup={null} showSetup={false} events={[]} showEvents={false} atr={null} syncKey={syncKey} height={220} label={`Option candlestick chart with volume, ${tf}`} />
           ) : c.kind === 'OBSERVED' ? (
             <ObservedChart points={c.points} syncKey={syncKey} />
           ) : (
             <Empty>{c.note}</Empty>
           )}
-          <div className="small muted" style={{ marginTop: 6 }}>{c.note}</div>
+          <div className="small muted" style={{ marginTop: 6 }}>{c.note} Levels on this chart come from the option's own candles; breakout levels above belong to the underlying.</div>
         </div>
       )}
     </Async>
@@ -564,6 +569,24 @@ export function Workbench() {
   const tf = (TIMEFRAMES as readonly string[]).includes(tfRaw) ? (tfRaw as Timeframe) : '15m';
   const contractId = loc.query.get('c');
   const [prefs, setPrefs] = usePrefs();
+  const [adding, setAdding] = useState(false);
+  const call = useWb();
+  const gParam = loc.query.get('g');
+  const groups = useGet<{ groups: GroupView[] }>(gParam ? '/api/workbench/groups' : null);
+  const savedGroup = groups.data?.data.groups.find((x) => x.id === gParam) ?? null;
+  const savedItem = savedGroup?.items.find((x) => x.item.id === contractId)?.item ?? null;
+  const appliedFor = useRef('');
+  useEffect(() => {
+    // saved group/contract settings are applied once per opened contract; the user can still change them freely
+    if (!savedGroup) return;
+    const key = `${gParam}|${contractId}`;
+    if (appliedFor.current === key) return;
+    appliedFor.current = key;
+    const sp = { ...savedGroup.prefs, ...savedItem?.prefs };
+    if (Object.keys(sp).length === 0) return;
+    setPrefs({ ...prefs, ...(sp.overlays ? { overlays: sp.overlays } : {}), ...(sp.panes ? { panes: sp.panes } : {}), ...(sp.levelGroups ? { levelGroups: sp.levelGroups } : {}), ...(sp.showSetup !== undefined ? { showSetup: sp.showSetup } : {}), ...(sp.showEvents !== undefined ? { showEvents: sp.showEvents } : {}), ...(sp.view ? { view: sp.view } : {}) });
+    if (sp.tf && !loc.query.get('tf')) setQuery('tf', sp.tf);
+  });
 
   const pick = (sym: string, cid?: string) => openWorkbench(sym, cid, tf);
   const watchUnderlying = useSend<{ symbol: string }>('POST', '/api/watchlist', ['/api/watchlist']);
@@ -578,7 +601,8 @@ export function Workbench() {
 
   return (
     <div className="page">
-      <PageHead title="Options Workbench" sub="Underlying, option chain and contract validation in one place. Read-only research: no orders can be placed here." />
+      <PageHead title="Options Workbench" sub="Underlying, option chain and contract validation in one place. Read-only research: no orders can be placed here." right={<button type="button" className="btn primary" onClick={() => setAdding(true)} data-testid="add-contract-button"><Icon name="plus" />Add contract</button>} />
+      {adding && <AddContractDialog groupId={gParam} onClose={() => setAdding(false)} onAdded={(id, sym) => openWorkbench(sym, id, tf)} />}
       <ContextStrip />
       <SearchBox onPick={pick} />
 
@@ -608,7 +632,7 @@ export function Workbench() {
                 <span className="mono" style={{ fontSize: 20 }}>{v.price.value !== null ? fmtNum(v.price.value) : '-'}</span>
                 <span className={v.changePct.value === null ? 'muted' : v.changePct.value >= 0 ? 'pos' : 'neg'}>{v.change.value !== null ? `${fmtSigned(v.change.value)} (${fmtPct(v.changePct.value)})` : ''}</span>
                 <StateBadge state={v.freshness} />
-                <span className="small muted">{v.price.prov ? `${v.price.prov.source} · ${v.price.prov.latency.toLowerCase()}${v.price.prov.asOf ? ` · ${fmtIst(v.price.prov.asOf)} IST` : ''}` : 'no quote'}</span>
+                <span className="small muted">{v.price.prov ? `${v.price.prov.source} · ${v.price.prov.latency.toLowerCase()}${v.price.prov.asOf ? ` · ${fmtIst(v.price.prov.asOf)}` : ''}` : 'no quote'}</span>
               </div>
             </div>
             <div className="row">
@@ -629,6 +653,7 @@ export function Workbench() {
                   {(prefs.view !== 'option' || !contractId) && (
                     v.availability.available || v.candles.length > 0 ? (
                       <>
+                        <div className="small"><strong>Underlying breakout evidence</strong> <span className="muted">· {v.instrument.id} stock/index candles; levels and breakout lines belong to the underlying only.</span></div>
                         {!v.availability.available && <div className="banner warn small" role="note">{v.availability.reason} The chart is shown for reference only; no indicators or breakout state are computed.</div>}
                         <WbChart candles={v.candles} tf={tf} overlays={prefs.overlays} panes={prefs.panes} levels={v.levels} levelGroups={prefs.levelGroups} setup={v.structure.primary} showSetup={prefs.showSetup} events={markers} showEvents={prefs.showEvents} atr={v.atr.value} syncKey={syncKey} label={`${v.instrument.id} ${TF_LABEL[tf]} candlestick chart with volume`} />
                         {prefs.showEvents && markers.length > 0 && (
@@ -641,12 +666,26 @@ export function Workbench() {
                       <Empty>{v.availability.reason ?? 'No candles for this timeframe.'}</Empty>
                     )
                   )}
-                  {contractId && prefs.view !== 'underlying' && <OptionChartPanel id={contractId} tf={tf} syncKey={syncKey} />}
+                  {contractId && prefs.view !== 'underlying' && <OptionChartPanel id={contractId} tf={tf} syncKey={syncKey} prefs={prefs} />}
                   {!contractId && prefs.view === 'option' && <Empty>Choose a contract below to see its chart.</Empty>}
                 </div>
               </Card>
               <ContractBuilder u={v.instrument.id} selected={contractId} onSelect={(id) => setQuery('c', id)} isFno={v.instrument.fno} />
               {contractId && <ContractPanel id={contractId} underlying={v} />}
+              {contractId && (
+                <Card title="Alerts for this contract">
+                  <RulesManager contractId={contractId} label="Your rules" />
+                </Card>
+              )}
+              {savedGroup && (
+                <Card title={`Saved chart settings · ${savedGroup.name}`}>
+                  <div className="row" data-testid="save-prefs">
+                    {contractId && savedItem && <button type="button" className="btn sm" onClick={() => void call('PUT', `/api/workbench/groups/${savedGroup.id}/item?contract=${encodeURIComponent(contractId)}`, { prefs: { tf, ...prefs } }, 'Saved for this contract')}>Save for this contract</button>}
+                    <button type="button" className="btn sm" onClick={() => void call('PUT', `/api/workbench/groups/${savedGroup.id}`, { prefs: { tf, ...prefs } }, 'Saved for the group')}>Save for the whole group</button>
+                    <span className="small muted">Timeframe, indicators, panes and level families.</span>
+                  </div>
+                </Card>
+              )}
               <LevelsCard v={v} />
             </div>
             <div className="stack">
@@ -657,7 +696,7 @@ export function Workbench() {
                 <Card title="Latest events" right={<a href={`#/events?symbols=${v.instrument.id}`} className="small">All events</a>}>
                   {events.data.data.events.length === 0 ? <p className="small muted">No recent items found. This does not mean none exist.</p> : (
                     <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-                      {events.data.data.events.slice(0, 5).map((e) => <li key={e.id}>{e.headline.slice(0, 110)} <span className="muted">· {e.publisher}{e.publishedAt ? `, ${fmtIst(e.publishedAt)} IST` : e.scheduledFor ? `, scheduled ${e.scheduledFor}` : ''}</span></li>)}
+                      {events.data.data.events.slice(0, 5).map((e) => <li key={e.id}>{e.headline.slice(0, 110)} <span className="muted">· {e.publisher}{e.publishedAt ? `, ${fmtIst(e.publishedAt)}` : e.scheduledFor ? `, scheduled ${e.scheduledFor}` : ''}</span></li>)}
                     </ul>
                   )}
                 </Card>

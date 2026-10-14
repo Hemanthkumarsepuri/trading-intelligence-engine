@@ -22,6 +22,7 @@ import { Explorer } from './pages/Explorer';
 import { Events } from './pages/Events';
 import { DataHealth } from './pages/DataHealth';
 import { More } from './pages/More';
+import { Compare } from './pages/Compare';
 
 const NAV = [
   { to: '/', label: 'Today', icon: 'home' },
@@ -30,6 +31,7 @@ const NAV = [
   { to: '/scanner', label: 'Scanner', icon: 'scan' },
   { to: '/watchlist', label: 'Watchlist', icon: 'watch' },
   { to: '/explorer', label: 'Contracts', icon: 'chain' },
+  { to: '/compare', label: 'Compare', icon: 'chain' },
   { to: '/events', label: 'Events', icon: 'news' },
   { to: '/data-health', label: 'Data health', icon: 'pulse' },
   { to: '/options', label: 'Index chain', icon: 'options' },
@@ -51,7 +53,7 @@ const MOBILE_NAV = [
   { to: '/more', label: 'More', icon: 'gear' },
 ] as const;
 
-const MORE_PATHS = ['/more', '/explorer', '/events', '/data-health', '/options', '/portfolio', '/settings'];
+const MORE_PATHS = ['/more', '/compare', '/explorer', '/events', '/data-health', '/options', '/portfolio', '/settings'];
 
 function Clock() {
   const [now, setNow] = useState(() => new Date());
@@ -106,6 +108,7 @@ function Shell({ demo }: { demo: boolean }) {
   else if (loc.path === '/events') page = <Events />;
   else if (loc.path === '/data-health') page = <DataHealth />;
   else if (loc.path === '/more') page = <More />;
+  else if (loc.path === '/compare') page = <Compare />;
   else if (loc.path === '/watchlist') page = <Watchlist />;
   else if (loc.path.startsWith('/symbol/')) page = <SymbolPage symbol={decodeURIComponent(loc.path.slice('/symbol/'.length))} />;
   else if (loc.path === '/alerts') page = <Alerts />;

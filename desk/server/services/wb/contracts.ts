@@ -293,13 +293,14 @@ export interface TrackedRow {
   validation: ContractValidation | null;
   spot: number | null;
   problem: string | null;
+  /** the chain snapshot the validation and spot come from (same instant) */
+  chain: { source: string; asOf: string | null; fetchedAt: string; stale: boolean } | null;
 }
 
-export async function trackedView(ctx: Ctx): Promise<{ rows: TrackedRow[]; notes: string[] }> {
-  const items = await listContracts(ctx);
+/** Validate contracts against live chains, fetching each underlying/expiry chain once. */
+export async function validateItems(ctx: Ctx, items: ContractWatch[]): Promise<Map<string, TrackedRow>> {
   const session = await getSession(ctx);
   const marketOpen = session.phase === 'OPEN' || session.phase === 'SPECIAL';
-  const notes: string[] = [];
   const groups = new Map<string, ContractWatch[]>();
   for (const it of items) groups.set(`${it.ref.underlying}|${it.ref.expiry}`, [...(groups.get(`${it.ref.underlying}|${it.ref.expiry}`) ?? []), it]);
   const out = new Map<string, TrackedRow>();
@@ -308,27 +309,33 @@ export async function trackedView(ctx: Ctx): Promise<{ rows: TrackedRow[]; notes
     const first = list[0]!;
     const label = (i: ContractWatch) => labelOf(i.ref);
     if (first.ref.expiry < today) {
-      for (const it of list) out.set(it.id, { item: it, label: label(it), validation: null, spot: null, problem: 'This contract has expired.' });
+      for (const it of list) out.set(it.id, { item: it, label: label(it), validation: null, spot: null, problem: 'This contract has expired.', chain: null });
       return;
     }
     try {
       const inst = await resolveInstrument(ctx, first.ref.underlying);
       if (!inst) throw new Error('unknown underlying');
       const [ex, set] = await Promise.all([loadExpiries(ctx, inst), loadChain(ctx, inst, first.ref.expiry)]);
+      const meta = { source: set.chain.source, asOf: set.chain.asOf ?? null, fetchedAt: set.chain.fetchedAt, stale: set.stale };
       for (const it of list) {
         const row = set.chain.rows.find((r) => Math.abs(r.strike - it.ref.strike) < 0.001);
-        if (!row) { out.set(it.id, { item: it, label: label(it), validation: null, spot: set.chain.spot, problem: `Strike ${it.ref.strike} is no longer listed.` }); continue; }
+        if (!row) { out.set(it.id, { item: it, label: label(it), validation: null, spot: set.chain.spot, problem: `Strike ${it.ref.strike} is no longer listed.`, chain: meta }); continue; }
         const v = validateContract({ ref: it.ref, leg: it.ref.type === 'CE' ? row.ce : row.pe, lotSize: ex.lotSize ?? inst.lotSize, spot: set.chain.spot, asOf: set.chain.asOf ?? null, fetchedAt: set.chain.fetchedAt, source: set.chain.source, latency: latencyOf(set.chain.source), marketOpen, now: ctx.now() });
-        out.set(it.id, { item: it, label: label(it), validation: v, spot: set.chain.spot, problem: null });
+        out.set(it.id, { item: it, label: label(it), validation: v, spot: set.chain.spot, problem: null, chain: meta });
         await observe(ctx, it.id, v.ltp.value, set.chain.spot, v.state === 'VALID');
       }
     } catch (e) {
-      for (const it of list) out.set(it.id, { item: it, label: label(it), validation: null, spot: null, problem: `Live data unavailable: ${e instanceof Error ? e.message : 'error'}` });
+      for (const it of list) out.set(it.id, { item: it, label: label(it), validation: null, spot: null, problem: `Live data unavailable: ${e instanceof Error ? e.message : 'error'}`, chain: null });
     }
   });
-  const rows = items.map((it) => out.get(it.id) ?? { item: it, label: labelOf(it.ref), validation: null, spot: null, problem: 'Not evaluated.' });
-  if (items.length === 0) notes.push('No contracts tracked yet.');
-  return { rows, notes };
+  for (const it of items) if (!out.has(it.id)) out.set(it.id, { item: it, label: labelOf(it.ref), validation: null, spot: null, problem: 'Not evaluated.', chain: null });
+  return out;
+}
+
+export async function trackedView(ctx: Ctx): Promise<{ rows: TrackedRow[]; notes: string[] }> {
+  const items = await listContracts(ctx);
+  const out = await validateItems(ctx, items);
+  return { rows: items.map((it) => out.get(it.id)!), notes: items.length === 0 ? ['No contracts tracked yet.'] : [] };
 }
 
 /** Verify a contract exists in the live chain before it is stored (never track a contract that is not listed). */

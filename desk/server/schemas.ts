@@ -3,6 +3,7 @@
 
 import { z } from 'zod';
 import { parseContractId } from '../shared/contract';
+import { validateRuleParams } from '../shared/wbrules';
 import { cleanSymbol, isValidSymbol } from '../shared/universe';
 
 const symbol = z
@@ -123,6 +124,53 @@ export const backupInput = z.object({
   settings: z.record(z.unknown()).default({}),
   /** absent in files made before the Options Workbench: then tracked contracts are left untouched on import */
   contracts: z.array(z.record(z.unknown())).max(200).optional(),
+  /** named contract groups and alert rules (absent in older files: then the current ones are left untouched) */
+  contractGroups: z.array(z.record(z.unknown())).max(50).optional(),
+  contractRules: z.array(z.record(z.unknown())).max(300).optional(),
 });
 
 export const loginInput = z.object({ password: z.string().min(1).max(256) });
+
+// ---- Exact-contract watchlists and rules --------------------------------------------------------------------------
+
+const flag = z.boolean();
+export const chartPrefsInput = z
+  .object({
+    tf: z.enum(['1m', '3m', '5m', '15m', '30m', '1h', '1d']).optional(),
+    overlays: z.object({ vwap: flag, ema20: flag, ema50: flag, bb: flag }).strict().optional(),
+    panes: z.object({ rsi: flag, macd: flag, atr: flag }).strict().optional(),
+    levelGroups: z.object({ swing: flag, session: flag, opening: flag, rolling: flag }).strict().optional(),
+    showSetup: flag.optional(),
+    showEvents: flag.optional(),
+    view: z.enum(['both', 'underlying', 'option']).optional(),
+  })
+  .strict();
+
+const groupName = z.string().transform((s) => s.replace(/\s+/g, ' ').trim()).refine((s) => s.length >= 1 && s.length <= 60, 'Group name must be 1-60 characters');
+export const groupInput = z.object({ name: groupName, note: z.string().max(500).default('') });
+export const groupPatch = z.object({ name: groupName.optional(), note: z.string().max(500).optional(), prefs: chartPrefsInput.nullable().optional() });
+export const itemInput = z.object({ id: contractWatchInput.shape.id, note: z.string().max(300).default('') });
+export const itemPatch = z.object({ note: z.string().max(300).optional(), prefs: chartPrefsInput.nullable().optional() });
+export const orderInput = z.object({ order: z.array(z.string().max(80)).max(100) });
+
+export const RULE_KINDS = ['PREMIUM_CROSS', 'UNDERLYING_LEVEL', 'CLOSE_BEYOND_LEVEL', 'RETEST', 'OPTION_VOLUME_ABOVE', 'SPREAD_ABOVE', 'DATA_STALE', 'EXPIRY_WITHIN'] as const;
+export const ruleInput = z
+  .object({
+    contractId: contractWatchInput.shape.id,
+    kind: z.enum(RULE_KINDS),
+    params: z.object({
+      price: z.number().finite().optional(),
+      level: z.number().finite().optional(),
+      direction: z.enum(['ABOVE', 'BELOW']).optional(),
+      tf: z.enum(['1m', '3m', '5m', '15m', '30m', '1h', '1d']).optional(),
+      volume: z.number().finite().optional(),
+      spreadPct: z.number().finite().optional(),
+      days: z.number().finite().optional(),
+    }).strict(),
+    enabled: z.boolean().default(true),
+    note: z.string().max(200).default(''),
+  })
+  .superRefine((r, ctx) => {
+    const problem = validateRuleParams(r.kind, r.params);
+    if (problem) ctx.addIssue({ code: 'custom', path: ['params'], message: problem });
+  });

@@ -9,7 +9,10 @@ import { DEFAULT_SETTINGS, type Alert, type Holding, type Settings, type Trade, 
 import type { Ctx } from '../config';
 import { read, update } from '../kv';
 import { contractId, parseContractId, type ContractWatch } from '../../shared/contract';
-import { alertInput, backupInput, contractWatchInput, holdingInput, settingsInput, tradeInput, watchInput } from '../schemas';
+import type { ContractGroup } from '../../shared/groups';
+import type { ContractRule } from '../../shared/wbrules';
+import { alertInput, backupInput, chartPrefsInput, contractWatchInput, groupInput, holdingInput, ruleInput, settingsInput, tradeInput, watchInput } from '../schemas';
+import { listGroups, listRules } from './wb/groups';
 import { KEYS, getSettings, listAlerts, listContracts, listHoldings, listTrades, listWatchlist } from './userdata';
 
 export interface BackupFile {
@@ -23,11 +26,14 @@ export interface BackupFile {
   settings: Settings;
   /** tracked option contracts (added with the Options Workbench; older backups omit it) */
   contracts?: ContractWatch[];
+  /** named contract groups and user alert rules */
+  contractGroups?: ContractGroup[];
+  contractRules?: ContractRule[];
 }
 
 export async function exportAll(ctx: Ctx): Promise<BackupFile> {
-  const [trades, holdings, watchlist, alerts, settings, contracts] = await Promise.all([listTrades(ctx), listHoldings(ctx), listWatchlist(ctx), listAlerts(ctx), getSettings(ctx), listContracts(ctx)]);
-  return { version: 1, app: 'tire-desk', exportedAt: ctx.now().toISOString(), trades, holdings, watchlist, alerts, settings, contracts };
+  const [trades, holdings, watchlist, alerts, settings, contracts, contractGroups, contractRules] = await Promise.all([listTrades(ctx), listHoldings(ctx), listWatchlist(ctx), listAlerts(ctx), getSettings(ctx), listContracts(ctx), listGroups(ctx), listRules(ctx)]);
+  return { version: 1, app: 'tire-desk', exportedAt: ctx.now().toISOString(), trades, holdings, watchlist, alerts, settings, contracts, contractGroups, contractRules };
 }
 
 export class ImportError extends Error {
@@ -48,6 +54,8 @@ interface Validated {
   settings: Partial<Settings> | null;
   /** null = the file predates tracked contracts; leave the current ones alone */
   contracts: ContractWatch[] | null;
+  contractGroups: ContractGroup[] | null;
+  contractRules: ContractRule[] | null;
 }
 
 /** Validate a backup file completely without writing anything. Throws ImportError listing problems. */
@@ -93,6 +101,36 @@ export function validateBackup(raw: unknown, nowIso: string): Validated {
     });
     if (new Set(contracts.map((c) => c.id)).size !== contracts.length) problems.push('contracts: duplicate ids');
   }
+  let contractGroups: ContractGroup[] | null = null;
+  if (b.contractGroups) {
+    contractGroups = [];
+    b.contractGroups.forEach((row, i) => {
+      const g = groupInput.safeParse(row);
+      if (!g.success) return void problems.push(`contractGroups[${i}]: ${g.error.issues[0]?.message}`);
+      const prefs = row.prefs === undefined ? undefined : chartPrefsInput.safeParse(row.prefs);
+      if (prefs && !prefs.success) return void problems.push(`contractGroups[${i}]: invalid chart preferences`);
+      const items: ContractGroup['items'] = [];
+      const rawItems = Array.isArray(row.items) ? (row.items as Record<string, unknown>[]) : [];
+      for (const [j, it] of rawItems.entries()) {
+        const c = contractWatchInput.safeParse(it);
+        if (!c.success) { problems.push(`contractGroups[${i}].items[${j}]: ${c.error.issues[0]?.message}`); continue; }
+        const ref = parseContractId(c.data.id)!;
+        items.push({ id: contractId(ref), note: c.data.note, addedAt: strOf(it, 'addedAt', now), ...(it.identity && typeof it.identity === 'object' ? { identity: it.identity as ContractGroup['items'][number]['identity'] } : {}) });
+      }
+      if (new Set(items.map((x) => x.id)).size !== items.length) problems.push(`contractGroups[${i}]: duplicate contracts`);
+      contractGroups!.push({ id: idOf(row), name: g.data.name, note: g.data.note, items, createdAt: strOf(row, 'createdAt', now), ...(prefs?.success && prefs.data ? { prefs: prefs.data } : {}) });
+    });
+    if (new Set(contractGroups.map((g) => g.name.toLowerCase())).size !== contractGroups.length) problems.push('contractGroups: duplicate names');
+  }
+  let contractRules: ContractRule[] | null = null;
+  if (b.contractRules) {
+    contractRules = [];
+    b.contractRules.forEach((row, i) => {
+      const r = ruleInput.safeParse(row);
+      if (!r.success) return void problems.push(`contractRules[${i}]: ${r.error.issues[0]?.message}`);
+      contractRules!.push({ id: idOf(row), contractId: contractId(parseContractId(r.data.contractId)!), kind: r.data.kind, params: r.data.params, enabled: r.data.enabled, note: r.data.note, createdAt: strOf(row, 'createdAt', now), lastTriggeredAt: typeof row.lastTriggeredAt === 'string' ? row.lastTriggeredAt : null });
+    });
+  }
   const s = settingsInput.safeParse(b.settings);
   if (!s.success) problems.push(`settings: ${s.error.issues[0]?.path.join('.')} ${s.error.issues[0]?.message}`);
 
@@ -104,12 +142,12 @@ export function validateBackup(raw: unknown, nowIso: string): Validated {
   dup(alerts.map((a) => a.id), 'alerts');
   if (new Set(watchlist.map((w) => w.symbol)).size !== watchlist.length) problems.push('watchlist: duplicate symbols');
   if (problems.length > 0) throw new ImportError(problems.slice(0, 12));
-  return { trades, holdings, watchlist, alerts, settings: s.success ? s.data : null, contracts };
+  return { trades, holdings, watchlist, alerts, settings: s.success ? s.data : null, contracts, contractGroups, contractRules };
 }
 
 export async function importAll(ctx: Ctx, raw: unknown): Promise<{ trades: number; holdings: number; watchlist: number; alerts: number; backupKey: string }> {
   const now = ctx.now().toISOString();
-  const { trades, holdings, watchlist, alerts, settings, contracts } = validateBackup(raw, now);
+  const { trades, holdings, watchlist, alerts, settings, contracts, contractGroups, contractRules } = validateBackup(raw, now);
   const backupKey = await snapshot(ctx, `pre-import-${now.replace(/[:.]/g, '-')}`);
 
   await update<Trade[]>(ctx.kv, KEYS.trades, [], () => trades);
@@ -117,6 +155,8 @@ export async function importAll(ctx: Ctx, raw: unknown): Promise<{ trades: numbe
   await update<WatchItem[]>(ctx.kv, KEYS.watchlist, [], () => watchlist);
   await update<Alert[]>(ctx.kv, KEYS.alerts, [], () => alerts);
   if (contracts) await update<ContractWatch[]>(ctx.kv, KEYS.contracts, [], () => contracts);
+  if (contractGroups) await update<ContractGroup[]>(ctx.kv, KEYS.groups, [], () => contractGroups);
+  if (contractRules) await update<ContractRule[]>(ctx.kv, KEYS.rules, [], () => contractRules);
   if (settings) await update<Partial<Settings>>(ctx.kv, KEYS.settings, {}, () => ({ ...DEFAULT_SETTINGS, ...settings }));
   return { trades: trades.length, holdings: holdings.length, watchlist: watchlist.length, alerts: alerts.length, backupKey };
 }

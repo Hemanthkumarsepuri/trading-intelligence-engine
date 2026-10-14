@@ -56,7 +56,7 @@ function CandidateCard({ c }: { c: Candidate }) {
         <div className="row" style={{ gap: 14 }}>
           <span className="mono" style={{ fontSize: 18 }}>{c.price !== null ? fmtNum(c.price) : '-'}</span>
           <span className={c.changePct === null ? 'muted' : c.changePct >= 0 ? 'pos' : 'neg'}>{c.changePct !== null ? `${fmtSigned(c.changePct, 2)}%` : ''}</span>
-          <span className="small muted">{c.priceAsOf ? `price time ${fmtIst(c.priceAsOf)} IST` : 'no price timestamp'}</span>
+          <span className="small muted">{c.priceAsOf ? `price time ${fmtIst(c.priceAsOf)}` : 'no price timestamp'}</span>
         </div>
         <div className="small">
           <strong>{s.direction === 'UP' ? 'Resistance' : 'Support'} {fmtNum(s.level.price)}</strong> on the {s.tf} chart · {s.level.method.replace(/_/g, ' ').toLowerCase()} · {fmtNum(Math.abs(s.distanceAtr ?? 0))}×ATR from price
@@ -149,7 +149,7 @@ export function Scanner() {
             <div style={{ flex: 1 }}>
               <strong>{d.summary.stockCandidates} underlying{d.summary.stockCandidates === 1 ? '' : 's'} · {d.summary.contractCount} contract{d.summary.contractCount === 1 ? '' : 's'} to inspect</strong>
               <div className="small">{d.summary.message}</div>
-              <div className="small muted">Scanned {d.limits.evaluated} of {d.limits.universe} symbols · {d.session.label} · as of {fmtIst(d.asOf)} IST</div>
+              <div className="small muted">Scanned {d.limits.evaluated} of {d.limits.universe} symbols · {d.session.label} · as of {fmtIst(d.asOf)}</div>
             </div>
           </div>
           {d.notes.length > 0 && <div className="small muted">{d.notes.join(' ')}</div>}

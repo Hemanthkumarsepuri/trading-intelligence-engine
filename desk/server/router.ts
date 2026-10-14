@@ -11,7 +11,10 @@ import { authenticate, checkPassword, clearCookie, clearFailures, clientKey, coo
 import { configProblems, type Ctx } from './config';
 import { ProviderError } from './http';
 import { ConflictError } from './kv';
-import { alertInput, contractWatchInput, holdingInput, loginInput, settingsInput, tradeInput, watchInput } from './schemas';
+import { alertInput, contractWatchInput, groupInput, groupPatch, holdingInput, itemInput, itemPatch, loginInput, orderInput, ruleInput, settingsInput, tradeInput, watchInput } from './schemas';
+import * as G from './services/wb/groups';
+import { compareView, groupsView } from './services/wb/groupview';
+import { resolveContract } from './services/wb/resolve';
 import { parseContractId } from '../shared/contract';
 import { istDateStr } from '../shared/india';
 import type { ScanFilters } from '../shared/scanner';
@@ -503,6 +506,79 @@ route('GET', '/api/workbench/events', async ({ ctx, url }) => {
 route('GET', '/api/workbench/alerts', async ({ ctx }) => plain({ alerts: await listWbAlerts(ctx) }));
 route('POST', '/api/workbench/alerts/evaluate', async ({ ctx }) => plain(await evaluateWbAlerts(ctx)), { maxBytes: 1024 });
 
+// ---- Exact contracts, custom groups, comparison and user alert rules ------------------------------------------------------
+
+const resolveQuery = z.object({
+  q: z.string().max(80).optional(),
+  u: z.string().max(20).optional(),
+  expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  type: z.enum(['CE', 'PE']).optional(),
+  strike: z.coerce.number().positive().max(1e7).optional(),
+});
+route('GET', '/api/workbench/resolve', async ({ ctx, url }) => {
+  const q = resolveQuery.parse(Object.fromEntries(url.searchParams));
+  if (q.q === undefined && q.u === undefined) throw new HttpError(400, 'VALIDATION', 'Provide q (a typed contract) or u (an underlying).');
+  return plain(await resolveContract(ctx, q));
+});
+
+route('GET', '/api/workbench/groups', async ({ ctx }) => {
+  const v = await groupsView(ctx);
+  return { data: v, meta: { notes: v.notes } };
+});
+route('POST', '/api/workbench/groups', async ({ ctx, body }) => plain(await G.createGroup(ctx, groupInput.parse(await body())), 201), { maxBytes: 2048 });
+route('PUT', '/api/workbench/groups', async ({ ctx, body }) => plain({ groups: await G.reorderGroups(ctx, orderInput.parse(await body()).order) }), { maxBytes: 4096 });
+route('PUT', '/api/workbench/groups/:id', async ({ ctx, params, body }) => plain(await G.updateGroup(ctx, params.id!, groupPatch.parse(await body()))), { maxBytes: 4096 });
+route('DELETE', '/api/workbench/groups/:id', async ({ ctx, params }) => {
+  await G.deleteGroup(ctx, params.id!);
+  return plain({ deleted: true });
+});
+route(
+  'POST',
+  '/api/workbench/groups/:id/items',
+  async ({ ctx, params, body }) => {
+    const input = itemInput.parse(await body());
+    const ref = parseContractId(input.id)!;
+    // the identity is read from the provider's chain; a contract that is not listed is refused
+    const r = await resolveContract(ctx, { u: ref.underlying, expiry: ref.expiry, type: ref.type, strike: ref.strike });
+    if (r.status !== 'RESOLVED' || !r.contract) throw new HttpError(422, 'UNSUPPORTED_CONTRACT', r.reason ?? 'The contract could not be verified.');
+    const res = await G.addGroupItem(ctx, params.id!, input, r.contract.identity);
+    return { data: { ...res, contract: r.contract }, status: res.duplicate ? 200 : 201, meta: { notes: res.duplicate ? ['Already in this group; nothing was changed.'] : r.notes } };
+  },
+  { maxBytes: 2048 },
+);
+route('PUT', '/api/workbench/groups/:id/items', async ({ ctx, params, body }) => plain(await G.reorderGroupItems(ctx, params.id!, orderInput.parse(await body()).order)), { maxBytes: 4096 });
+route('PUT', '/api/workbench/groups/:id/item', async ({ ctx, params, url, body }) => {
+  const id = idParam.parse(url.searchParams.get('contract') ?? '');
+  if (!parseContractId(id)) throw new HttpError(400, 'BAD_CONTRACT', 'Not a valid contract id.');
+  return plain(await G.updateGroupItem(ctx, params.id!, id, itemPatch.parse(await body())));
+}, { maxBytes: 4096 });
+route('DELETE', '/api/workbench/groups/:id/item', async ({ ctx, params, url }) => {
+  const id = idParam.parse(url.searchParams.get('contract') ?? '');
+  if (!parseContractId(id)) throw new HttpError(400, 'BAD_CONTRACT', 'Not a valid contract id.');
+  await G.removeGroupItem(ctx, params.id!, id);
+  return plain({ deleted: true });
+});
+
+route('GET', '/api/workbench/compare', async ({ ctx, url }) => {
+  const ids = (url.searchParams.get('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 12);
+  if (ids.length === 0) throw new HttpError(400, 'VALIDATION', 'ids: choose at least one contract.');
+  const v = await compareView(ctx, ids);
+  return { data: v, meta: { notes: v.notes } };
+});
+
+route('GET', '/api/workbench/rules', async ({ ctx }) => plain({ rules: await G.listRules(ctx) }));
+route('POST', '/api/workbench/rules', async ({ ctx, body }) => {
+  const input = ruleInput.parse(await body());
+  const r = await G.createRule(ctx, input);
+  return { data: r, status: r.duplicate ? 200 : 201, meta: { notes: r.duplicate ? ['An identical rule already exists.'] : [] } };
+}, { maxBytes: 2048 });
+route('PUT', '/api/workbench/rules/:id', async ({ ctx, params, body }) => plain(await G.updateRule(ctx, params.id!, ruleInput.parse(await body()))), { maxBytes: 2048 });
+route('POST', '/api/workbench/rules/:id/enabled', async ({ ctx, params, body }) => plain(await G.setRuleEnabled(ctx, params.id!, z.object({ enabled: z.boolean() }).parse(await body()).enabled)), { maxBytes: 256 });
+route('DELETE', '/api/workbench/rules/:id', async ({ ctx, params }) => {
+  await G.deleteRule(ctx, params.id!);
+  return plain({ deleted: true });
+});
+
 // ---- Dispatcher ---------------------------------------------------------------------------------------------
 
 const BASE_HEADERS = {
@@ -602,6 +678,7 @@ function mapError(e: unknown, url: URL): Response {
   if (e instanceof ImportError) return fail(422, 'IMPORT_REJECTED', `${e.message} ${e.problems.join('; ')}`);
   if (e instanceof U.NotFound) return fail(404, 'NOT_FOUND', e.message);
   if (e instanceof U.LimitError) return fail(422, 'LIMIT', e.message);
+  if (e instanceof G.DuplicateError) return fail(409, 'DUPLICATE', e.message);
   if (e instanceof ConflictError) return fail(409, 'CONFLICT', 'Another change happened at the same time. Please retry.');
   if (e instanceof ProviderError) return fail(502, 'UPSTREAM', e.message);
   // Unexpected: log in full server-side, never leak internals to the client.

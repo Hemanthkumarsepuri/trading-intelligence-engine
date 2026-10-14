@@ -12,7 +12,7 @@ test('watchlist: add a symbol, see a quote, open its page, then remove it', asyn
   await page.goto('/#/watchlist');
   await settled(page);
   await page.getByLabel('NSE symbol').fill('SBIN');
-  await page.getByRole('button', { name: 'Add' }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
   const row = page.locator('tr', { has: page.getByText('SBIN', { exact: true }) });
   await expect(row).toBeVisible();
   await expect(row.locator('td.num').first()).not.toHaveText('-');
@@ -37,7 +37,7 @@ test('watchlist: a symbol the server cannot verify is added only with a visible 
   await settled(page);
   const added = page.waitForResponse((r) => r.url().endsWith('/api/watchlist') && r.request().method() === 'POST');
   await page.getByLabel('NSE symbol').fill('NOTAREALSYMBOLX');
-  await page.getByRole('button', { name: 'Add' }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
   const res = await added;
   expect(res.status()).toBe(201);
   expect((await res.json()).meta.notes.join(' ')).toMatch(/could not be verified/);
@@ -59,7 +59,7 @@ test('watchlist: a symbol the server rejects is not added and the reason is show
   await settled(page);
   const done = page.waitForResponse((r) => r.url().endsWith('/api/watchlist') && r.request().method() === 'POST');
   await page.getByLabel('NSE symbol').fill('ZZZZ');
-  await page.getByRole('button', { name: 'Add' }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
   await done;
   await expect(page.getByText('ZZZZ is not a listed NSE symbol.')).toBeVisible();
   await expect(page.locator('tr', { has: page.getByText('ZZZZ', { exact: true }) })).toHaveCount(0);

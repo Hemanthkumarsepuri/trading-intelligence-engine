@@ -69,8 +69,24 @@ describe('workbench routes are private and read-only', () => {
     const wb = listRoutes().filter((r) => r.path.includes('/workbench'));
     expect(wb.length).toBeGreaterThan(10);
     for (const r of listRoutes()) expect(r.path, `${r.method} ${r.path}`).not.toMatch(/(^|\/)(orders?|place|cancel|modify|execute)(\/|$)/i);
-    // every workbench write is a tracked-contract or an alert-evaluation write: nothing else mutates
-    expect(wb.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`).sort()).toEqual(['DELETE /api/workbench/contracts', 'POST /api/workbench/alerts/evaluate', 'POST /api/workbench/contracts']);
+    // every workbench write changes the user's own contracts, groups, rules or alert log: nothing else mutates
+    expect(wb.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`).sort()).toEqual([
+      'DELETE /api/workbench/contracts',
+      'DELETE /api/workbench/groups/:id',
+      'DELETE /api/workbench/groups/:id/item',
+      'DELETE /api/workbench/rules/:id',
+      'POST /api/workbench/alerts/evaluate',
+      'POST /api/workbench/contracts',
+      'POST /api/workbench/groups',
+      'POST /api/workbench/groups/:id/items',
+      'POST /api/workbench/rules',
+      'POST /api/workbench/rules/:id/enabled',
+      'PUT /api/workbench/groups',
+      'PUT /api/workbench/groups/:id',
+      'PUT /api/workbench/groups/:id/item',
+      'PUT /api/workbench/groups/:id/items',
+      'PUT /api/workbench/rules/:id',
+    ]);
   });
 
   it('cross-origin writes are refused', async () => {

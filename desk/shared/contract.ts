@@ -314,3 +314,11 @@ export function validateContract(i: ValidationInput): ContractValidation {
     oneLotPremium, intrinsic, timeValue, leverage, liquidity: { cls, reasons, rules: LIQUIDITY_RULES }, notes,
   };
 }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "ANGELONE 27 Oct 2026 300 CE" */
+export function labelFor(r: ContractRef): string {
+  const [y, m, d] = r.expiry.split('-');
+  return `${r.underlying} ${d} ${MONTHS[Number(m) - 1]} ${y} ${r.strike} ${r.type}`;
+}

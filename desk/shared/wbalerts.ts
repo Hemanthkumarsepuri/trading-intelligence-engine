@@ -18,12 +18,15 @@ export type WbAlertKind =
   | 'LIQUIDITY_DETERIORATION'
   | 'SPREAD_WIDENING'
   | 'CONTRACT_DATA_STALE'
-  | 'EVENT_PROXIMITY';
+  | 'EVENT_PROXIMITY'
+  | 'USER_RULE';
 
 export interface WbAlert {
   /** dedupe key: the same condition on the same bar/level yields the same key */
   key: string;
   kind: WbAlertKind;
+  /** set when the alert came from a rule the user created */
+  ruleId?: string;
   symbol: string;
   contractId: string | null;
   tf: Timeframe | null;

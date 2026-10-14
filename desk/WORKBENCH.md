@@ -136,3 +136,42 @@ Then `node scripts/live-acceptance.mjs` (unauthenticated checks) and, with the p
 * Alerts are not scheduled and have no external delivery.
 * Scanner covers a capped, liquidity-ordered subset per run.
 * The authenticated live path (real NSE chain through the deployed app) was not exercised because no staging password is available to the assistant.
+
+## Exact contracts, custom groups, comparison and alert rules
+
+**Add Contract** (button on the Workbench, and on the Watchlist page) opens a dialog that accepts quick entry
+(`ANGELONE 300 CE OCT`, `ANGELONE 300 PE`, `NIFTY 25000 CE`) or a step-by-step flow. It always shows the parsed
+underlying, expiry, type and strike first. `GET /api/workbench/resolve` resolves the request against the provider's
+LISTED expiries and live chain (`server/services/wb/resolve.ts`, pure rules in `shared/groups.ts`):
+
+* A missing expiry, type or strike is never guessed: the dialog asks, offering only listed values.
+* A month that matches exactly one listed expiry resolves (the dialog says the year/day was inferred from the listing);
+  several matches (weekly series, two years) must be chosen.
+* Unknown symbol, non-F&O stock, expired date, unlisted expiry, unlisted strike (nearest listed strikes are shown) and a provider
+  identifier that disagrees with the requested contract are rejected with a reason.
+* The identity stored with a contract (exchange symbol, instrument token when the provider has one, lot size, source, verification time)
+  comes from the provider's chain. It is never built from the user's text; fields the provider omits are shown as not supplied.
+* Adding needs no scanner run.
+
+**Groups** (`data/contract-groups`): named, unique (case/space-insensitive), up to 20 groups of 40 contracts; rename, reorder
+(groups and contracts), group and contract notes, saved chart preferences (default timeframe, overlays, panes, level families)
+at group and contract level, duplicate detection, expired contracts kept visible and flagged until removed. Opening a contract from
+a group applies its saved settings once; the Workbench can save the current settings back. The older flat tracked list remains as
+"ungrouped". Groups, notes, preferences, identities and rules are part of `GET /api/export`, the nightly local snapshot and the
+encrypted off-site backup; older backup files without them leave the current ones untouched on import, an explicit empty list clears them.
+
+**Comparison** (`#/compare`, also inline on the Watchlist): up to four contracts, each column from one chain snapshot, with the
+underlying price and time, premium and time, exact expiry, bid/ask/spread/depth, volume, OI and change, IV, Greeks (labelled calculated
+when not provider-supplied), lot size, one-lot outlay, source, latency, freshness and quality state. Unknown stays a dash.
+
+**Charts per contract**: the Workbench shows the underlying candles with breakout levels ("Underlying breakout evidence") and,
+separately, the option premium ("Option premium behaviour") on the same synchronised time axis, using the same indicator settings.
+Real option candles (volume, VWAP, EMAs, RSI, MACD, ATR and the option's own levels) need an Upstox token and are NOT verified live;
+without it the option panel shows only premium snapshots this app observed, labelled as such. No option candles are ever generated.
+
+**Alert rules** (`data/contract-rules`, `/api/workbench/rules`, evaluated by "Evaluate now" on Data Health): premium crosses a price;
+underlying reaches a level; completed candle closes beyond a level; breakout retest confirms or fails; option volume threshold; spread
+threshold; contract data becomes stale; approach to expiry. Enable, disable, edit, delete. Premium/volume/spread/underlying-level rules
+need VALID data; candle rules use completed candles only and need VALID underlying data (closed-market and stale data are withheld with
+the reason shown); the stale rule fires only on STALE; the expiry rule is calendar based. Alerts are deduplicated by rule and bar/day/hour.
+In-app only, no Telegram.

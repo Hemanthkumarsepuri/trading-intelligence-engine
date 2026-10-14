@@ -18,6 +18,8 @@ export const KEYS = {
   events: 'data/alert-events',
   settings: 'data/settings',
   contracts: 'data/contracts',
+  groups: 'data/contract-groups',
+  rules: 'data/contract-rules',
   wbAlerts: 'data/wb-alerts',
   wbSeen: 'data/wb-alert-seen',
   riskNotified: 'data/risk-notified',

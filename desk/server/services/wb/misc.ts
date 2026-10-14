@@ -14,7 +14,9 @@ import { KEYS, listWatchlist } from '../userdata';
 import { analyzeSeries } from './analysis';
 import { fnoStocks, loadTf, provOf, providerStats, resolveInstrument, stateFor, type ProviderStat } from './data';
 import { upcomingFor } from './events';
-import { trackedView } from './contracts';
+import { validateItems } from './contracts';
+import { allTracked, evaluateRules } from './groupview';
+import { markRulesTriggered } from './groups';
 
 // ---- market context ------------------------------------------------------------------------------------------------------------
 
@@ -132,12 +134,14 @@ export async function listWbAlerts(ctx: Ctx): Promise<WbAlert[]> {
   return read<WbAlert[]>(ctx.kv, KEYS.wbAlerts, []);
 }
 
-export async function evaluateWbAlerts(ctx: Ctx): Promise<{ created: WbAlert[]; evaluated: { underlyings: number; contracts: number }; skipped: string[] }> {
+export async function evaluateWbAlerts(ctx: Ctx): Promise<{ created: WbAlert[]; evaluated: { underlyings: number; contracts: number; rules: number }; skipped: string[]; withheld: { ruleId: string; contractId: string; reason: string }[] }> {
   const now = ctx.now();
   const session = await getSession(ctx);
   const marketOpen = session.phase === 'OPEN' || session.phase === 'SPECIAL';
   const skipped: string[] = [];
-  const tracked = await trackedView(ctx);
+  const trackedItems = await allTracked(ctx);
+  const trackedMap = await validateItems(ctx, trackedItems);
+  const tracked = { rows: trackedItems.map((it) => trackedMap.get(it.id)!) };
   const fno = await fnoStocks(ctx);
   const watch = (await listWatchlist(ctx)).map((w) => w.symbol).filter((s) => s in fno);
   const syms = [...new Set([...tracked.rows.map((r) => r.item.ref.underlying), ...watch])].slice(0, 10);
@@ -166,6 +170,8 @@ export async function evaluateWbAlerts(ctx: Ctx): Promise<{ created: WbAlert[]; 
     }
   });
 
+  const rules = await evaluateRules(ctx);
+  candidates.push(...rules.alerts);
   const seen = await read<Record<string, string>>(ctx.kv, KEYS.wbSeen, {});
   const fresh = dedupeAlerts(candidates, seen, now);
   if (fresh.length > 0) {
@@ -178,5 +184,6 @@ export async function evaluateWbAlerts(ctx: Ctx): Promise<{ created: WbAlert[]; 
     });
     await update<WbAlert[]>(ctx.kv, KEYS.wbAlerts, [], (cur) => [...fresh, ...cur].slice(0, 100));
   }
-  return { created: fresh, evaluated: { underlyings: syms.length, contracts: contractsN }, skipped };
+  await markRulesTriggered(ctx, fresh.flatMap((a) => (a.ruleId ? [a.ruleId] : [])));
+  return { created: fresh, evaluated: { underlyings: syms.length, contracts: contractsN, rules: rules.evaluated }, skipped, withheld: rules.withheld };
 }

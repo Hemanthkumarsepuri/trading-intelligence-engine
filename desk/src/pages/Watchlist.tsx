@@ -5,6 +5,7 @@ import { fmtNum } from '../../shared/format';
 import { useGet, useSend, usePollMs } from '../api';
 import { go } from '../nav';
 import { TrackedContracts } from '../wb/Tracked';
+import { ContractGroups } from '../wb/Groups';
 import { Async, Badge, Card, Empty, errMsg, Field, Icon, Modal, NumInput, PageHead, Pct, Segmented, Skeleton, useConfirm, useToast } from '../ui';
 
 type Sort = 'symbol' | 'changePct' | 'volume';
@@ -135,6 +136,7 @@ export function Watchlist() {
           );
         }}
       </Async>
+      <ContractGroups />
       <TrackedContracts />
       {edit && <EditModal row={edit} onClose={() => setEdit(null)} />}
     </div>
